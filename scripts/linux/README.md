@@ -36,6 +36,25 @@ If you plan to distribute through GitHub Releases and want later `update` comman
 ./scripts/linux/publish-linux.sh --github-repo owner/repo
 ```
 
+## GitHub Release
+
+The repository release flow is version-driven from:
+
+- `Directory.Build.props` -> `NodePanelVersionPrefix`
+
+Release steps:
+
+1. Update `NodePanelVersionPrefix`
+2. Commit and push `main`
+3. GitHub Actions creates `vX.Y.Z`, builds Linux packages and publishes the release
+
+If the same release tag already exists, pushes to `main` skip the publish step automatically.
+
+You can still trigger the workflow manually from GitHub Actions:
+
+- leave `version` empty: publish using `Directory.Build.props`
+- fill `version`: publish that explicit version without editing the file first
+
 ## 1-Click Install
 
 Download one bootstrap script first:

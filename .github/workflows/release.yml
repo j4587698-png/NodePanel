@@ -2,14 +2,18 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag, for example v0.1.0'
-        required: true
+      version:
+        description: 'Optional release version override, for example 0.1.0'
+        required: false
         type: string
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -24,33 +28,70 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
+      - name: Fetch Tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
 
       - name: Resolve Release Metadata
         id: meta
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ github.event.inputs.tag }}"
-          else
-            tag="${GITHUB_REF_NAME}"
+          version="${INPUT_VERSION:-}"
+          if [[ -z "${version}" ]]; then
+            version="$(sed -nE 's:.*<NodePanelVersionPrefix>([^<]+)</NodePanelVersionPrefix>.*:\1:p' Directory.Build.props | head -n 1)"
           fi
 
-          if [[ -z "${tag}" ]]; then
-            echo "Release tag is required." >&2
+          version="${version#v}"
+          if [[ -z "${version}" ]]; then
+            echo "Release version is required." >&2
             exit 1
           fi
 
-          version="${tag#v}"
+          tag="v${version}"
+          tag_exists="false"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            tag_exists="true"
+          fi
+
+          should_create_tag="false"
+          should_publish="false"
+          if [[ "${tag_exists}" == "false" ]]; then
+            should_create_tag="true"
+            should_publish="true"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            should_publish="true"
+          fi
+
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=${tag_exists}" >> "$GITHUB_OUTPUT"
+          echo "should_create_tag=${should_create_tag}" >> "$GITHUB_OUTPUT"
+          echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        if: steps.meta.outputs.should_publish == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Create Release Tag
+        if: steps.meta.outputs.should_create_tag == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.meta.outputs.tag }}"
+          git push origin "${{ steps.meta.outputs.tag }}"
 
       - name: Build Linux Packages
+        if: steps.meta.outputs.should_publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -62,13 +103,25 @@ jobs:
             --rid linux-arm64
 
       - name: Publish GitHub Release
+        if: steps.meta.outputs.should_publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
+          overwrite_files: true
+          prerelease: ${{ contains(steps.meta.outputs.version, '-') }}
           files: |
             artifacts/linux/*.tar.gz
             scripts/linux/install.sh
             scripts/linux/nodepanel-panel.sh
             scripts/linux/nodepanel-service.sh
             scripts/linux/lib/nodepanel-common.sh
+
+      - name: Skip Release
+        if: steps.meta.outputs.should_publish != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Release ${RELEASE_TAG} already exists on origin. Skipping automatic publish."
