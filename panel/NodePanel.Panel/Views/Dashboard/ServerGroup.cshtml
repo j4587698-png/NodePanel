@@ -1,0 +1,37 @@
+@model NodePanel.Panel.Models.ServerGroupEditorViewModel
+@{
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    ViewData["Title"] = Model.IsEditMode ? "编辑权限组" : "创建权限组";
+}
+
+<div class="admin-header">
+    <div class="admin-header__title">@(Model.IsEditMode ? "编辑权限组" : "创建权限组")</div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="error-box" style="margin-bottom: 24px;">@Model.StatusMessage</div>
+}
+
+<div class="admin-card">
+    <form action="/admin/groups/save" method="post">
+        @Html.AntiForgeryToken()
+        
+        @if (Model.IsEditMode)
+        {
+            <input type="hidden" asp-for="Form.GroupId" />
+        }
+
+        <div class="form-group">
+            <label asp-for="Form.Name">权限组名称</label>
+            <input type="text" asp-for="Form.Name" class="form-control" placeholder="例如：VIP1 亚洲节点" required />
+            <span class="text-danger" asp-validation-for="Form.Name"></span>
+            <div class="muted" style="margin-top:8px;">这个名称将展示在套餐表单、用户编排以及节点映射的多选框里。清晰的命名能防呆解患。</div>
+        </div>
+
+        <div style="margin-top: 32px; display: flex; gap: 16px;">
+            <button type="submit" class="button button--primary">保存权限组</button>
+            <a href="/admin/groups" class="button">返回列表</a>
+        </div>
+    </form>
+</div>

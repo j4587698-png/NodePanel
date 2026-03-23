@@ -1,0 +1,33 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vs/
+*.user
+*.suo
+
+# Build outputs
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+
+# Local runtime / temp
+.codex-build/
+.dotnet/
+.tmp/
+.certs/
+*.db
+*.log
+*.err
+*.out
+build_*.txt
+*.pid
+*.pfx
+panel-state.json
+node-runtime-config.json
+
+# Coverage / reports
+coverage/
+coverage.*
+*.trx

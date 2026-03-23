@@ -1,0 +1,141 @@
+@model NodePanel.Panel.Models.UserEditorViewModel
+@{
+    ViewData["Title"] = Model.IsEditMode ? "编辑用户" : "新建用户";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">User Editor</p>
+        <h2>@ViewData["Title"]</h2>
+        <p class="muted">管理 Trojan 凭据、订阅令牌、用户门户地址，以及面向套餐系统的商业信息。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button" asp-action="Index">返回总览</a>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Portal</p>
+            <h3>订阅入口</h3>
+        </div>
+    </div>
+    <div class="stats">
+        <div>
+            <dt>用户门户 URL</dt>
+            <dd class="mono">@(string.IsNullOrWhiteSpace(Model.PortalUrl) ? "-" : Model.PortalUrl)</dd>
+        </div>
+        <div>
+            <dt>标准订阅 URL</dt>
+            <dd class="mono">@(string.IsNullOrWhiteSpace(Model.SubscriptionUrl) ? "-" : Model.SubscriptionUrl)</dd>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Save</p>
+            <h3>保存用户</h3>
+        </div>
+    </div>
+    <form asp-action="SaveUser" method="post" class="form">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="ModelOnly" class="error-box"></div>
+
+        <div class="form-grid">
+            <label><span>用户 ID</span><input asp-for="Form.UserId" /></label>
+            <label><span>显示名</span><input asp-for="Form.DisplayName" /></label>
+            <label>
+                <span>权限组 (Group ID)</span>
+                <select asp-for="Form.GroupId">
+                    @if(Model.AvailableGroups.Count == 0)
+                    {
+                        <option value="0">暂无配置，请前往权限组管理添加</option>
+                    }
+                    else
+                    {
+                        @foreach (var g in Model.AvailableGroups)
+                        {
+                            <option value="@g.GroupId">@g.Name (@g.GroupId)</option>
+                        }
+                    }
+                </select>
+            </label>
+            <label><span>订阅令牌</span><input asp-for="Form.SubscriptionToken" /></label>
+            <label><span>Trojan 密码</span><input asp-for="Form.TrojanPassword" /></label>
+            <label><span>上级推介人 User ID</span><input asp-for="Form.InviteUserId" /></label>
+            <label><span>返利余额 (Commission)</span><input asp-for="Form.CommissionBalance" type="number" step="0.01" /></label>
+            <label><span>返利比例 (Commission Rate %)</span><input asp-for="Form.CommissionRate" type="number" /></label>
+            <label><span>限速 (B/s)</span><input asp-for="Form.BytesPerSecond" /></label>
+            <label><span>设备 / 在线 IP 限制 (0=不限)</span><input asp-for="Form.DeviceLimit" type="number" /></label>
+            <label><span>节点范围 (硬性追加, 留空忽略)</span><input asp-for="Form.NodeIds" /></label>
+            <label><span>套餐名称</span><input asp-for="Form.PlanName" /></label>
+            <label><span>套餐总流量 (Bytes)</span><input asp-for="Form.TransferEnableBytes" /></label>
+            <label><span>到期时间</span><input asp-for="Form.ExpiresAt" type="datetime-local" /></label>
+            <label><span>续费/升级地址</span><input asp-for="Form.PurchaseUrl" /></label>
+            <label class="form-grid__span-2">
+                <span>门户公告</span>
+                <textarea asp-for="Form.PortalNotice" rows="3"></textarea>
+            </label>
+        </div>
+
+        <div class="checkbox-row">
+            <label><input asp-for="Form.Enabled" /> 用户启用</label>
+        </div>
+
+        <div class="page-actions">
+            <button type="submit" class="button button--primary">保存用户</button>
+        </div>
+    </form>
+</section>
+
+@if (Model.IsEditMode)
+{
+    <section class="card" style="margin-top: 24px;">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Quick Actions</p>
+                <h3>快捷操作 (需先保存基本信息)</h3>
+            </div>
+        </div>
+        
+        <div class="form-grid" style="align-items: flex-end;">
+            <form asp-action="ApplyPlanToUser" asp-route-userId="@Model.Form.UserId" method="post" style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;" onsubmit="return confirm('确定要此套餐吗？这会重置原有的流量上限、修改到期时间并启用该用户。');">
+                @Html.AntiForgeryToken()
+                <label style="flex: 1; margin: 0; min-width: 150px;">
+                    <span style="display: block; margin-bottom: 4px; font-weight: 500;">分配基础套餐</span>
+                    <select name="planId" required style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="">-- 选择套餐 --</option>
+                        @foreach (var plan in Model.Plans)
+                        {
+                            <option value="@plan.PlanId">@plan.Name (@(plan.TransferEnableBytes / 1073741824.0)GB)</option>
+                        }
+                    </select>
+                </label>
+                <label style="flex: 1; margin: 0; min-width: 100px;">
+                    <span style="display: block; margin-bottom: 4px; font-weight: 500;">周期</span>
+                    <select name="cycle" required style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="month">月付 (31天)</option>
+                        <option value="quarter">季付 (90天)</option>
+                        <option value="half_year">半年付 (180天)</option>
+                        <option value="year">年付 (365天)</option>
+                        <option value="one_time">一次性 (不限时)</option>
+                    </select>
+                </label>
+                <button type="submit" class="button button--primary" style="height: 38px;">应用</button>
+            </form>
+
+            <form asp-action="ResetUserTraffic" asp-route-userId="@Model.Form.UserId" method="post" onsubmit="return confirm('确定要清零该用户的当月流量记录吗？');">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="button" style="color: var(--admin-warn); height: 38px;">重置已用流量</button>
+            </form>
+        </div>
+    </section>
+}

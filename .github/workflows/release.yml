@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve Release Metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ -z "${tag}" ]]; then
+            echo "Release tag is required." >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Linux Packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/linux/publish-linux.sh
+          ./scripts/linux/publish-linux.sh \
+            --github-repo "${{ github.repository }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --rid linux-x64 \
+            --rid linux-arm64
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/linux/*.tar.gz
+            scripts/linux/install.sh
+            scripts/linux/nodepanel-panel.sh
+            scripts/linux/nodepanel-service.sh
+            scripts/linux/lib/nodepanel-common.sh

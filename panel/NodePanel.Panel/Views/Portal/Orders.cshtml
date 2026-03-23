@@ -1,0 +1,113 @@
+@model NodePanel.Panel.Models.PortalOrdersViewModel
+@{
+    Layout = "~/Views/Shared/_PortalLayout.cshtml";
+    ViewData["Title"] = "我的订单";
+}
+
+<style>
+    .order-list {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        margin-top: 24px;
+    }
+    .order-item {
+        background: var(--admin-bg);
+        border: 1px solid var(--admin-border);
+        border-radius: 8px;
+        padding: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 20px;
+    }
+    .order-item__main {
+        flex: 1;
+        min-width: 250px;
+    }
+    .order-item__title {
+        font-weight: 600;
+        font-size: 16px;
+        color: #fff;
+        margin: 0 0 8px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .order-item__details {
+        color: var(--admin-muted);
+        font-size: 14px;
+        display: flex;
+        gap: 24px;
+        margin: 0;
+    }
+    .order-item__actions {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+    .order-item__price {
+        font-size: 20px;
+        font-weight: bold;
+        color: #fff;
+    }
+</style>
+
+<div class="portal-card">
+    <div style="margin-bottom: 2rem;">
+        <h2 style="margin: 0 0 8px; color: #fff;">我的订单</h2>
+        <p class="muted" style="margin: 0;">查看历史购买记录或支付未结金额。</p>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+    {
+        <div class="error-box" style="margin-bottom: 24px; background: rgba(255,255,255,0.05); color: #fff; border-color: var(--admin-border);">
+            @Model.StatusMessage
+        </div>
+    }
+
+    <div class="order-list">
+        @if (Model.Orders.Count == 0)
+        {
+            <div style="text-align: center; padding: 48px; color: var(--admin-muted);">
+                您还没有任何订单记录。
+            </div>
+        }
+
+        @foreach (var order in Model.Orders.OrderByDescending(o => o.CreatedAt))
+        {
+            var plan = Model.Plans.FirstOrDefault(p => p.PlanId == order.PlanId);
+            
+            <div class="order-item">
+                <div class="order-item__main">
+                    <p class="order-item__title">
+                        <span>@(plan?.Name ?? order.PlanId)</span>
+                        @switch (order.Status)
+                        {
+                            case 0: <span class="badge badge--warn">待支付</span>; break;
+                            case 1: <span class="badge badge--ok">已支付</span>; break;
+                            case 2: <span class="badge badge--error">已取消</span>; break;
+                        }
+                    </p>
+                    <p class="order-item__details">
+                        <span>流水号：<span class="mono">@order.TradeNo</span></span>
+                        <span>创建于：@order.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                    </p>
+                </div>
+                
+                <div class="order-item__actions">
+                    <div class="order-item__price">@Model.CurrencySymbol@order.TotalAmount.ToString("0.00")</div>
+                    
+                    @if (order.Status == 0)
+                    {
+                        <form action="/user/pay/@order.OrderId" method="post" style="margin:0;">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="button button--primary" style="background-color: var(--admin-success); border-color: var(--admin-success);">立即安全支付 (Epay)</button>
+                        </form>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</div>

@@ -1,0 +1,99 @@
+@using NodePanel.ControlPlane.Configuration
+@using NodePanel.Core.Runtime
+@using NodePanel.Panel.Models
+@model DashboardPageViewModel
+@{
+    ViewData["Title"] = "节点管理";
+    var indexReturnUrl = Url.Action("Nodes", "Dashboard") ?? "/admin/nodes";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Nodes</p>
+        <h2>节点管理</h2>
+        <p class="muted">管理运行 Xray-core 的边缘节点及其配置状态。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button button--primary" asp-action="NewNode">新建节点</a>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Nodes</p>
+            <h3>所有节点</h3>
+        </div>
+        <span class="metric">@Model.State.Nodes.Count</span>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>节点</th>
+                    <th>连通</th>
+                    <th>监听</th>
+                    <th>证书</th>
+                    <th>订阅主机</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var node in Model.State.Nodes)
+            {
+                var certificate = node.Runtime.LastStatus?.Certificate;
+                var tcpTls = NodeServiceConfigInbounds.GetTrojanTransportInbound(node.Definition.Config, InboundTransports.Tls);
+                var wss = NodeServiceConfigInbounds.GetTrojanTransportInbound(node.Definition.Config, InboundTransports.Wss);
+                <tr>
+                    <td>
+                        <strong>@node.Definition.DisplayName</strong>
+                        <div class="muted mono">@node.Definition.NodeId</div>
+                    </td>
+                    <td>
+                        <span class="badge @(node.Runtime.Connected ? "badge--ok" : "badge--idle")">
+                            @(node.Runtime.Connected ? "已连接" : "离线")
+                        </span>
+                        <div class="muted">修订 @node.Runtime.AppliedRevision / @node.Definition.DesiredRevision</div>
+                        <div class="muted">@((node.Runtime.LastSeenAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</div>
+                    </td>
+                    <td>
+                        <div>TCP/TLS: @(tcpTls.Enabled ? $"{tcpTls.ListenAddress}:{tcpTls.Port}" : "关闭")</div>
+                        <div>WSS: @(wss.Enabled ? $"{wss.ListenAddress}:{wss.Port}{wss.Path}" : "关闭")</div>
+                    </td>
+                    <td>
+                        <div>@node.Definition.Config.Certificate.Mode</div>
+                        <div class="muted">@(certificate?.Available == true ? "可用" : "未就绪")</div>
+                        <div class="muted">@((certificate?.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")) ?? "-")</div>
+                        @if (node.CertificateAlert.IsActive)
+                        {
+                            <div class="inline-alert @(node.CertificateAlert.Severity == CertificateAlertSeverities.Error ? "inline-alert--error" : "inline-alert--warn")">
+                                @node.CertificateAlert.Message
+                            </div>
+                        }
+                    </td>
+                    <td>
+                        <div>@(string.IsNullOrWhiteSpace(node.Definition.SubscriptionHost) ? "-" : node.Definition.SubscriptionHost)</div>
+                        <div class="muted">@node.Definition.SubscriptionSni</div>
+                    </td>
+                    <td class="table-actions">
+                        @if (node.CanRequestCertificateRenewal)
+                        {
+                            <form asp-action="RenewNodeCertificate" asp-route-nodeId="@node.Definition.NodeId" method="post" class="inline-form">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="returnUrl" value="@indexReturnUrl" />
+                                <button type="submit" class="button button--small">续签</button>
+                            </form>
+                        }
+                        <a class="button button--small" asp-action="Node" asp-route-nodeId="@node.Definition.NodeId">编辑</a>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>

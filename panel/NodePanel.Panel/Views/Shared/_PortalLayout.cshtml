@@ -1,0 +1,35 @@
+@inject NodePanel.Panel.Services.PanelQueryService QueryService
+@{
+    var state = await QueryService.BuildStateViewAsync(Context.RequestAborted);
+    var siteName = state.Settings.GetValueOrDefault("site_name", "NodePanel");
+    if (string.IsNullOrWhiteSpace(siteName)) siteName = "NodePanel";
+}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - @siteName Portal</title>
+    <link rel="stylesheet" href="~/site.css" asp-append-version="true" />
+</head>
+<body class="portal-body">
+    <div class="portal-shell">
+        <header class="portal-shell__topbar" style="margin-bottom: 20px;">
+            <div>
+                <p class="eyebrow portal-eyebrow">Subscription Portal</p>
+                <h1>@siteName</h1>
+            </div>
+            <div style="display: flex; gap: 16px;">
+                <a href="/user" class="button" style="border:none; background:rgba(255,255,255,0.05);">仪表盘</a>
+                <a href="/user/store" class="button" style="border:none; background:rgba(255,255,255,0.05);">购买订阅</a>
+                <a href="/user/orders" class="button" style="border:none; background:rgba(255,255,255,0.05);">我的订单</a>
+                <a href="/auth/logout" class="button" style="border:none; background:rgba(255,51,102,0.15); color:#ff3366;">退出登录</a>
+            </div>
+        </header>
+        <main class="portal-shell__content">
+            @RenderBody()
+        </main>
+    </div>
+    @RenderSection("Scripts", required: false)
+</body>
+</html>

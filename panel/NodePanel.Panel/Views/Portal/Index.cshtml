@@ -1,0 +1,236 @@
+@model NodePanel.Panel.Models.PortalPageViewModel
+@{
+    Layout = "_PortalLayout";
+    ViewData["Title"] = Model.IsResolved ? "用户订阅" : "订阅入口";
+}
+
+<section class="portal-hero">
+    <div>
+        <p class="eyebrow portal-eyebrow">User Portal</p>
+        <h2>@(Model.IsResolved ? Model.DisplayName : "输入订阅令牌")</h2>
+        <p class="portal-subtitle">
+            @(Model.IsResolved
+                ? "在这里复制订阅地址、选择客户端一键导入，并查看当前套餐与节点出口。"
+                : "管理端可以把门户地址发给用户，用户只需要打开链接即可获取自己的订阅与导入入口。")
+        </p>
+    </div>
+    @if (Model.IsResolved)
+    {
+        <div class="portal-hero__summary">
+            <span class="portal-chip">@Model.PlanName</span>
+            <span class="portal-chip">@Model.Nodes.Count 个可用入口</span>
+        </div>
+    }
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+{
+    <div class="portal-alert portal-alert--error">@Model.ErrorMessage</div>
+}
+
+@if (!Model.IsResolved)
+{
+    <section class="portal-card portal-card--compact">
+        <form method="get" asp-controller="Portal" asp-action="Index" class="portal-form">
+            <label>
+                <span>订阅令牌</span>
+                <input type="text" name="token" value="@Model.LookupToken" placeholder="输入用户的 subscription token" />
+            </label>
+            <div class="page-actions">
+                <button type="submit" class="button button--primary">打开门户</button>
+            </div>
+        </form>
+    </section>
+}
+else
+{
+    <section class="portal-grid">
+        <article class="portal-card">
+            <div class="card__header">
+                <div>
+                    <p class="eyebrow portal-eyebrow">Subscription</p>
+                    <h3>订阅地址</h3>
+                </div>
+            </div>
+            <div class="portal-copy-stack">
+                <label class="copy-field">
+                    <span>标准订阅 URL</span>
+                    <div class="copy-field__group">
+                        <input id="portal-subscribe-url" value="@Model.SubscriptionUrl" readonly />
+                        <button type="button" class="button" data-copy-target="portal-subscribe-url">复制</button>
+                    </div>
+                </label>
+                <label class="copy-field">
+                    <span>Trojan 原始订阅 URL</span>
+                    <div class="copy-field__group">
+                        <input id="portal-raw-url" value="@Model.RawSubscriptionUrl" readonly />
+                        <button type="button" class="button" data-copy-target="portal-raw-url">复制</button>
+                    </div>
+                </label>
+                <label class="copy-field">
+                    <span>用户门户 URL</span>
+                    <div class="copy-field__group">
+                        <input id="portal-url" value="@Model.PortalUrl" readonly />
+                        <button type="button" class="button" data-copy-target="portal-url">复制</button>
+                    </div>
+                </label>
+            </div>
+        </article>
+
+        <article class="portal-card">
+            <div class="card__header">
+                <div>
+                    <p class="eyebrow portal-eyebrow">Plan</p>
+                    <h3>套餐状态</h3>
+                </div>
+            </div>
+            <div class="portal-stats">
+                <div>
+                    <dt>当前套餐</dt>
+                    <dd>@Model.PlanName</dd>
+                </div>
+                <div>
+                    <dt>已用流量</dt>
+                    <dd>@Model.UsedTrafficText</dd>
+                </div>
+                <div>
+                    <dt>剩余流量</dt>
+                    <dd>@Model.RemainingTrafficText</dd>
+                </div>
+                <div>
+                    <dt>总量</dt>
+                    <dd>@Model.TotalTrafficText</dd>
+                </div>
+                <div>
+                    <dt>到期时间</dt>
+                    <dd>@Model.ExpiresAtText</dd>
+                </div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(Model.Notice))
+            {
+                <div class="portal-alert">@Model.Notice</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.PurchaseUrl))
+            {
+                <div class="page-actions">
+                    <a class="button button--primary" href="@Model.PurchaseUrl" target="_blank" rel="noreferrer">续费 / 升级</a>
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="portal-card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow portal-eyebrow">One Click</p>
+                <h3>一键导入</h3>
+            </div>
+        </div>
+        <div class="portal-imports">
+            @foreach (var item in Model.ImportLinks)
+            {
+                <a class="portal-import" href="@item.Url">
+                    <strong>@item.Title</strong>
+                    <span>@item.Description</span>
+                </a>
+            }
+        </div>
+    </section>
+
+    <section class="portal-card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow portal-eyebrow">Nodes</p>
+                <h3>可用出口</h3>
+            </div>
+        </div>
+        @if (Model.Nodes.Count == 0)
+        {
+            <div class="portal-alert">当前没有可分发的可用节点，请联系管理员检查节点启用状态或订阅绑定关系。</div>
+        }
+        else
+        {
+            <div class="portal-node-grid">
+                @foreach (var node in Model.Nodes)
+                {
+                    <article class="portal-node">
+                        <div class="portal-node__head">
+                            <strong>@node.Name</strong>
+                            <span class="portal-chip">@node.TransportLabel</span>
+                        </div>
+                        <dl class="portal-node__meta">
+                            <div>
+                                <dt>地址</dt>
+                                <dd>@node.Address</dd>
+                            </div>
+                            <div>
+                                <dt>SNI</dt>
+                                <dd>@(string.IsNullOrWhiteSpace(node.Sni) ? "-" : node.Sni)</dd>
+                            </div>
+                            <div>
+                                <dt>路径</dt>
+                                <dd>@(string.IsNullOrWhiteSpace(node.Path) ? "-" : node.Path)</dd>
+                            </div>
+                        </dl>
+                        <label class="copy-field">
+                            <span>手动导入 URI</span>
+                            <div class="copy-field__group">
+                                <input id="manual-@node.CopyId" value="@node.ManualUri" readonly />
+                                <button type="button" class="button" data-copy-target="manual-@node.CopyId">复制</button>
+                            </div>
+                        </label>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="portal-card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow portal-eyebrow">Manual</p>
+                <h3>原始订阅内容</h3>
+            </div>
+        </div>
+        <label class="copy-field">
+            <span>适合 v2rayN / v2rayNG / SagerNet 手动导入</span>
+            <div class="copy-field__textarea">
+                <textarea id="portal-raw-content" rows="8" readonly>@Model.RawSubscriptionContent</textarea>
+                <button type="button" class="button" data-copy-target="portal-raw-content">复制全部</button>
+            </div>
+        </label>
+    </section>
+}
+
+@section Scripts {
+    <script>
+        document.querySelectorAll("[data-copy-target]").forEach(function (button) {
+            var originalText = button.textContent;
+            button.addEventListener("click", async function () {
+                var target = document.getElementById(button.getAttribute("data-copy-target"));
+                if (!target) {
+                    return;
+                }
+
+                var value = "value" in target ? target.value : target.textContent;
+                try {
+                    await navigator.clipboard.writeText(value || "");
+                    button.textContent = "已复制";
+                    window.setTimeout(function () {
+                        button.textContent = originalText;
+                    }, 1200);
+                } catch (error) {
+                    if (target.select) {
+                        target.select();
+                    }
+
+                    document.execCommand("copy");
+                    button.textContent = "已复制";
+                    window.setTimeout(function () {
+                        button.textContent = originalText;
+                    }, 1200);
+                }
+            });
+        });
+    </script>
+}

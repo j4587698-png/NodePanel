@@ -1,0 +1,157 @@
+@model NodePanel.Panel.Models.InstallRequest
+@{
+    Layout = null; // No admin layout for the installer
+}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>安装向导 - NodePanel</title>
+    <link rel="stylesheet" href="~/site.css" asp-append-version="true" />
+    <style>
+        .install-container {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 20px;
+        }
+        .install-card {
+            width: 100%;
+            max-width: 540px;
+            padding: 40px;
+        }
+        .install-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .install-header h1 {
+            margin: 0 0 8px;
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(to right, #fff, var(--admin-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .install-header p {
+            margin: 0;
+            color: var(--admin-muted);
+            font-size: 15px;
+        }
+        hr {
+            border: 0;
+            border-top: 1px solid var(--admin-border);
+            margin: 24px 0;
+        }
+        .install-error {
+            margin-bottom: 24px;
+        }
+    </style>
+</head>
+<body class="admin-body">
+    <div class="install-container">
+        <div class="card install-card">
+            <div class="install-header">
+                <h1>NodePanel 安装向导</h1>
+                <p>配置您的数据库并创建管理员账户</p>
+            </div>
+
+            @if (!ViewData.ModelState.IsValid)
+            {
+                <div class="error-box install-error">
+                    @Html.ValidationSummary(false, "")
+                </div>
+            }
+
+            <form asp-action="Index" method="post" class="form">
+                <div>
+                    <label for="DbType">数据库类型</label>
+                    <select id="DbType" asp-for="DbType">
+                        <option value="sqlite">SQLite</option>
+                        <option value="mysql">MySQL</option>
+                        <option value="postgresql">PostgreSQL</option>
+                    </select>
+                </div>
+                
+                <div id="advanced-db-settings" class="form" style="display: none; margin-top: -4px;">
+                    <div class="form-grid">
+                        <div>
+                            <label for="DbHost">数据库地址</label>
+                            <input id="DbHost" asp-for="DbHost" placeholder="127.0.0.1" />
+                        </div>
+                        <div>
+                            <label for="DbPort">数据库端口</label>
+                            <input id="DbPort" asp-for="DbPort" placeholder="3306" />
+                        </div>
+                    </div>
+                    <div class="form-grid">
+                        <div>
+                            <label for="DbUser">数据库用户名</label>
+                            <input id="DbUser" asp-for="DbUser" placeholder="root" />
+                        </div>
+                        <div>
+                            <label for="DbPassword">数据库密码</label>
+                            <input id="DbPassword" asp-for="DbPassword" type="password" />
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label id="DbNameLabel" for="DbName">数据库文件路径</label>
+                    <input id="DbName" asp-for="DbName" placeholder="server.db" />
+                </div>
+
+                <hr />
+
+                <div>
+                    <label for="AdminEmail">管理员邮箱</label>
+                    <input id="AdminEmail" asp-for="AdminEmail" type="email" placeholder="admin@example.com" required />
+                </div>
+
+                <div>
+                    <label for="AdminPassword">管理员密码</label>
+                    <input id="AdminPassword" asp-for="AdminPassword" type="password" required />
+                </div>
+
+                <button type="submit" class="button button--primary" style="width: 100%; margin-top: 16px;">确认安装</button>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        function updateDbFields() {
+            var type = document.getElementById('DbType').value;
+            var advanced = document.getElementById('advanced-db-settings');
+            var dbNameLabel = document.getElementById('DbNameLabel');
+            var dbNameInput = document.getElementById('DbName');
+            var dbPortInput = document.getElementById('DbPort');
+            
+            if (type === 'sqlite') {
+                advanced.style.display = 'none';
+                dbNameLabel.innerText = '数据库文件路径';
+                if (!dbNameInput.value || dbNameInput.value === 'server') {
+                    dbNameInput.value = 'server.db';
+                }
+            } else {
+                advanced.style.display = 'grid';
+                dbNameLabel.innerText = '数据库名';
+                if (!dbNameInput.value || dbNameInput.value === 'server.db') {
+                    dbNameInput.value = 'server';
+                }
+                
+                if (type === 'mysql') {
+                    dbPortInput.placeholder = '3306';
+                    if (!dbPortInput.value || dbPortInput.value === '5432') dbPortInput.value = '3306';
+                } else if (type === 'postgresql') {
+                    dbPortInput.placeholder = '5432';
+                    if (!dbPortInput.value || dbPortInput.value === '3306') dbPortInput.value = '5432';
+                }
+            }
+        }
+        
+        document.getElementById('DbType').addEventListener('change', updateDbFields);
+        updateDbFields();
+    </script>
+</body>
+</html>

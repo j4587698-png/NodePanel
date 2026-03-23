@@ -1,0 +1,53 @@
+@model NodePanel.Panel.Models.ServerGroupsPageViewModel
+@{
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    ViewData["Title"] = "权限组管理";
+}
+
+<div class="admin-header">
+    <div class="admin-header__title">权限组管理</div>
+    <div class="admin-header__actions">
+        <a href="/admin/groups/new" class="button button--primary">创建权限组</a>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="error-box" style="margin-bottom: 24px;">@Model.StatusMessage</div>
+}
+
+<div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>权限组名称</th>
+                <th>创建时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Model.Groups.Count == 0)
+            {
+                <tr>
+                    <td colspan="4" style="text-align: center; color: var(--admin-muted);">暂无记录</td>
+                </tr>
+            }
+            @foreach (var group in Model.Groups)
+            {
+                <tr>
+                    <td class="mono">@group.GroupId</td>
+                    <td><span class="badge" style="background: rgba(255,255,255,0.1); font-size: 13px;">@group.Name</span></td>
+                    <td>@group.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>
+                        <a href="/admin/groups/@group.GroupId" class="button">编辑</a>
+                        <form action="/admin/groups/@group.GroupId/delete" method="post" style="display:inline; margin-left: 8px;" onsubmit="return confirm('确认删除该权限组吗？如果有用户或套餐正在使用，将无法删除。');">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="button button--danger">删除</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>

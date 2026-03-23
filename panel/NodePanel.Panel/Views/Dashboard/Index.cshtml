@@ -1,0 +1,120 @@
+@using NodePanel.ControlPlane.Configuration
+@using NodePanel.Core.Runtime
+@using NodePanel.Panel.Models
+@model DashboardPageViewModel
+@{
+    ViewData["Title"] = "总览";
+    var certificateAlerts = Model.State.Nodes.Where(node => node.CertificateAlert.IsActive).ToArray();
+    var indexReturnUrl = Url.Action("Index", "Dashboard") ?? "/admin";
+}
+
+@functions {
+    private static string GetAlertBadgeClass(string severity)
+        => severity switch
+        {
+            CertificateAlertSeverities.Error => "badge badge--error",
+            CertificateAlertSeverities.Warning => "badge badge--warn",
+            _ => "badge badge--idle"
+        };
+
+    private static string GetAlertCardClass(string severity)
+        => severity switch
+        {
+            CertificateAlertSeverities.Error => "alert-row alert-row--error",
+            CertificateAlertSeverities.Warning => "alert-row alert-row--warn",
+            _ => "alert-row"
+        };
+
+    private static string GetAlertLabel(string severity)
+        => severity switch
+        {
+            CertificateAlertSeverities.Error => "严重",
+            CertificateAlertSeverities.Warning => "提醒",
+            _ => "状态"
+        };
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Dashboard</p>
+        <h2>仪表盘</h2>
+        <p class="muted">查看您的节点、用户与业务运营状态的整体概览。</p>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<div class="metrics-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card__body" style="padding: 1.5rem; text-align: center;">
+            <p class="eyebrow">Users</p>
+            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@Model.State.Users.Count</h2>
+            <a asp-action="Users" class="muted" style="text-decoration: none;">管理用户 &rarr;</a>
+        </div>
+    </div>
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card__body" style="padding: 1.5rem; text-align: center;">
+            <p class="eyebrow">Nodes</p>
+            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@Model.State.Nodes.Count</h2>
+            <a asp-action="Nodes" class="muted" style="text-decoration: none;">管理节点 &rarr;</a>
+        </div>
+    </div>
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card__body" style="padding: 1.5rem; text-align: center;">
+            <p class="eyebrow">Plans</p>
+            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@Model.State.Plans.Count</h2>
+            <a asp-action="Plans" class="muted" style="text-decoration: none;">管理套餐 &rarr;</a>
+        </div>
+    </div>
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card__body" style="padding: 1.5rem; text-align: center;">
+            <p class="eyebrow">Alerts</p>
+            <h2 style="margin: 0.5rem 0; font-size: 2.5rem; color: @(certificateAlerts.Length > 0 ? "#ef4444" : "inherit");">@certificateAlerts.Length</h2>
+            <span class="muted">证书告警</span>
+        </div>
+    </div>
+</div>
+
+@if (certificateAlerts.Length > 0)
+{
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Certificate Alerts</p>
+                <h3>证书告警</h3>
+            </div>
+            <span class="metric">@certificateAlerts.Length</span>
+        </div>
+        <div class="alert-list">
+            @foreach (var node in certificateAlerts)
+            {
+                <div class="@GetAlertCardClass(node.CertificateAlert.Severity)">
+                    <div class="alert-row__body">
+                        <div class="@GetAlertBadgeClass(node.CertificateAlert.Severity)">
+                            @GetAlertLabel(node.CertificateAlert.Severity)
+                        </div>
+                        <div>
+                            <strong>@node.Definition.DisplayName</strong>
+                            <div class="muted mono">@node.Definition.NodeId</div>
+                            <div class="alert-message">@node.CertificateAlert.Message</div>
+                        </div>
+                    </div>
+                    <div class="table-actions">
+                        @if (node.CanRequestCertificateRenewal)
+                        {
+                            <form asp-action="RenewNodeCertificate" asp-route-nodeId="@node.Definition.NodeId" method="post" class="inline-form">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="returnUrl" value="@indexReturnUrl" />
+                                <button type="submit" class="button button--small">立即续签</button>
+                            </form>
+                        }
+                        <a class="button button--small" asp-action="Node" asp-route-nodeId="@node.Definition.NodeId">查看节点</a>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+}

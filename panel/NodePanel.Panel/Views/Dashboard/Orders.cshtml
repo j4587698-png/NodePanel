@@ -1,0 +1,93 @@
+@using NodePanel.Panel.Models
+@model DashboardPageViewModel
+@{
+    ViewData["Title"] = "订单管理";
+    var currency = Model.State.Settings.GetValueOrDefault("currency_symbol", "¥");
+    if (string.IsNullOrWhiteSpace(currency)) currency = "¥";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Orders</p>
+        <h2>订单管理</h2>
+        <p class="muted">管理用户的购买订单、续费记录与支付状态。</p>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Orders</p>
+            <h3>所有订单</h3>
+        </div>
+        <span class="metric">@Model.State.Orders.Count</span>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>订单 ID</th>
+                    <th>用户</th>
+                    <th>套餐</th>
+                    <th>周期</th>
+                    <th>金额</th>
+                    <th>状态</th>
+                    <th>创建时间</th>
+                    <th>付款时间</th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (Model.State.Orders.Count == 0)
+            {
+                <tr>
+                    <td colspan="8" style="text-align: center; color: #6b7280; padding: 2rem 0;">
+                        暂无订单数据
+                    </td>
+                </tr>
+            }
+            @foreach (var order in Model.State.Orders)
+            {
+                var user = Model.State.Users.FirstOrDefault(u => u.UserId == order.UserId);
+                var plan = Model.State.Plans.FirstOrDefault(p => p.PlanId == order.PlanId);
+                <tr>
+                    <td class="mono">@order.OrderId</td>
+                    <td>
+                        <strong>@(user?.DisplayName ?? "未知")</strong>
+                        <div class="muted mono">@order.UserId</div>
+                    </td>
+                    <td>@(plan?.Name ?? "未知") (@order.PlanId)</td>
+                    <td>
+                        @switch (order.Cycle)
+                        {
+                            case "month": <text>月付</text>; break;
+                            case "quarter": <text>季付</text>; break;
+                            case "half_year": <text>半年付</text>; break;
+                            case "year": <text>年付</text>; break;
+                            case "one_time": <text>一次性</text>; break;
+                            case "reset_price": <text>流量重置包</text>; break;
+                            default: @order.Cycle; break;
+                        }
+                    </td>
+                    <td>@currency@order.TotalAmount.ToString("0.00")</td>
+                    <td>
+                        @switch (order.Status)
+                        {
+                            case 0: <span class="badge badge--warn">待支付</span>; break;
+                            case 1: <span class="badge badge--ok">已支付</span>; break;
+                            case 2: <span class="badge badge--error">已取消</span>; break;
+                            default: <span class="badge badge--idle">未知</span>; break;
+                        }
+                    </td>
+                    <td>@order.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@(order.PaidAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>

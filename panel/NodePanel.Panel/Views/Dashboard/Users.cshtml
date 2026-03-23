@@ -1,0 +1,89 @@
+@using NodePanel.Panel.Models
+@model DashboardPageViewModel
+@{
+    ViewData["Title"] = "用户管理";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Users</p>
+        <h2>用户管理</h2>
+        <p class="muted">管理用户的订阅信息、流量用量与套餐分配。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button button--primary" asp-action="NewUser">新建用户</a>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Users</p>
+            <h3>所有用户</h3>
+        </div>
+        <span class="metric">@Model.State.Users.Count</span>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>用户</th>
+                    <th>状态</th>
+                    <th>限速</th>
+                    <th>设备限制</th>
+                    <th>套餐</th>
+                    <th>流量用量</th>
+                    <th>节点范围</th>
+                    <th>订阅令牌</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var user in Model.State.Users)
+            {
+                <tr>
+                    <td>
+                        <strong>@user.DisplayName</strong>
+                        <div class="muted mono">@user.UserId</div>
+                    </td>
+                    <td>
+                        <span class="badge @(user.Enabled ? "badge--ok" : "badge--idle")">
+                            @(user.Enabled ? "启用" : "禁用")
+                        </span>
+                    </td>
+                    <td>@user.BytesPerSecond B/s</td>
+                    <td>@(user.DeviceLimit > 0 ? user.DeviceLimit.ToString() : "不限")</td>
+                    <td>
+                        <div>@(string.IsNullOrWhiteSpace(user.Subscription.PlanName) ? "-" : user.Subscription.PlanName)</div>
+                        <div class="muted">
+                            @(user.Subscription.ExpiresAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "长期有效")
+                        </div>
+                    </td>
+                    <td>
+                        @{
+                            var summary = Model.State.TrafficSummaries.GetValueOrDefault(user.UserId);
+                            var usedGb = (summary?.TotalBytes ?? 0) / (1024.0 * 1024.0 * 1024.0);
+                            var totalGb = user.Subscription.TransferEnableBytes / (1024.0 * 1024.0 * 1024.0);
+                            <div>@usedGb.ToString("0.00") GB @(totalGb > 0 ? $" / {totalGb.ToString("0.00")} GB" : "")</div>
+                            @if (totalGb > 0 && usedGb >= totalGb) {
+                                <div class="inline-alert inline-alert--error" style="margin-top:4px;">流量耗尽</div>
+                            }
+                        }
+                    </td>
+                    <td>@(user.NodeIds.Count == 0 ? "全部节点" : string.Join(", ", user.NodeIds))</td>
+                    <td class="mono">@user.SubscriptionToken</td>
+                    <td class="table-actions">
+                        <a class="button button--small" asp-action="UserEditor" asp-route-userId="@user.UserId">编辑</a>
+                        <a class="button button--small" asp-controller="Portal" asp-action="Index" asp-route-token="@user.SubscriptionToken" target="_blank" rel="noreferrer">门户</a>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>

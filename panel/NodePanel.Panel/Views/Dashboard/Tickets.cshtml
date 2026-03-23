@@ -1,0 +1,50 @@
+@model IReadOnlyList<NodePanel.Panel.Models.TicketViewModel>
+@{
+    ViewData["Title"] = "工单管理";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Tickets</p>
+        <h2>工单管理</h2>
+        <p class="muted">查看用户提交的支持工单。</p>
+    </div>
+</section>
+
+<section class="card">
+    <table class="table" style="width: 100%;">
+        <thead>
+            <tr>
+                <th style="width: 120px; font-weight: 500; text-align: center;">Status</th>
+                <th style="font-weight: 500; text-align: left;">Subject</th>
+                <th style="width: 320px; font-weight: 500; text-align: left;">User ID</th>
+                <th style="width: 80px; font-weight: 500; text-align: center;">Level</th>
+                <th style="width: 160px; font-weight: 500; text-align: right;">Created At</th>
+                <th style="width: 100px; text-align: right;">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Model.Count == 0)
+            {
+                <tr><td colspan="6" class="muted" style="text-align: center; padding: 24px;">暂无工单记录</td></tr>
+            }
+            @foreach (var ticket in Model)
+            {
+                <tr>
+                    <td style="text-align: center;">
+                        <span class="badge @(ticket.Status == 0 ? "badge--info" : "badge--success")">
+                            @(ticket.Status == 0 ? "Open" : "Closed")
+                        </span>
+                    </td>
+                    <td style="text-align: left;"><span class="mono">@ticket.Subject</span></td>
+                    <td style="text-align: left;"><span class="mono muted">@ticket.UserId</span></td>
+                    <td style="text-align: center;">@ticket.Level</td>
+                    <td class="mono" style="text-align: right; color: var(--admin-fg-muted);">@ticket.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td style="text-align: right;">
+                        <span class="muted">N/A</span>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>

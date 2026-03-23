@@ -1,0 +1,231 @@
+@using NodePanel.ControlPlane.Configuration
+@using NodePanel.Panel.Models
+@model CertificateEditorViewModel
+@{
+    ViewData["Title"] = Model.IsEditMode ? "编辑证书" : "新建证书";
+    var returnUrl = Url.Action("Certificate", "Dashboard", new { certificateId = Model.Form.CertificateId }) ?? "/admin/certificates";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Certificate Editor</p>
+        <h2>@ViewData["Title"]</h2>
+        <p class="muted">面板统一签发、续签、存储并下发证书。`dns-01` 直接调用 DNS 服务商 API，节点和 Panel HTTPS 共用同一份资产。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button" asp-action="Certificates">返回证书列表</a>
+        @if (Model.IsEditMode)
+        {
+            <form asp-action="RenewCertificate" asp-route-certificateId="@Model.Form.CertificateId" method="post" class="inline-form">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="returnUrl" value="@returnUrl" />
+                <button type="submit" class="button button--primary">立即签发 / 续签</button>
+            </form>
+        }
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Config</p>
+            <h3>证书配置</h3>
+        </div>
+    </div>
+    <form asp-action="SaveCertificate" method="post" class="form">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="ModelOnly" class="error-box"></div>
+
+        <div class="form-grid">
+            <label>
+                <span>证书 ID</span>
+                <input asp-for="Form.CertificateId" />
+            </label>
+            <label>
+                <span>显示名称</span>
+                <input asp-for="Form.DisplayName" />
+            </label>
+            <div class="checkbox-field">
+                <span>启用自动续签</span>
+                <label class="switch">
+                    <input asp-for="Form.Enabled" type="checkbox" />
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+            <label>
+                <span>主域名</span>
+                <input asp-for="Form.Domain" placeholder="example.com 或 *.example.com" />
+            </label>
+            <label class="form-grid__span-2">
+                <span>备用域名 / SAN (CSV)</span>
+                <input asp-for="Form.AltNames" placeholder="www.example.com, api.example.com" />
+            </label>
+            <label>
+                <span>邮箱</span>
+                <input asp-for="Form.Email" placeholder="admin@example.com" />
+            </label>
+            <label>
+                <span>Challenge</span>
+                <select asp-for="Form.ChallengeType" id="challengeTypeInput">
+                    <option value="@CertificateChallengeTypes.Http01">http-01</option>
+                    <option value="@CertificateChallengeTypes.Dns01">dns-01</option>
+                </select>
+            </label>
+            <label>
+                <span>PFX 密码</span>
+                <input asp-for="Form.PfxPassword" />
+                <small class="muted">下发到节点和 Panel HTTPS 时都会使用这份密码，可留空。</small>
+            </label>
+        </div>
+
+        <details style="margin-top: 1rem;">
+            <summary style="cursor: pointer; font-weight: 600;">高级续签参数</summary>
+            <div class="form-grid" style="margin-top: 1rem;">
+                <label>
+                    <span>续签提前天数</span>
+                    <input asp-for="Form.RenewBeforeDays" />
+                </label>
+                <label>
+                    <span>检查间隔 (分钟)</span>
+                    <input asp-for="Form.CheckIntervalMinutes" />
+                </label>
+                <label class="form-grid__span-2">
+                    <span>ACME Directory URL</span>
+                    <input asp-for="Form.AcmeDirectoryUrl" placeholder="留空即 Let's Encrypt；需要切换时可填写私有 ACME 地址" />
+                </label>
+                <div class="checkbox-field">
+                    <span>使用 Staging</span>
+                    <label class="switch">
+                        <input asp-for="Form.UseStaging" type="checkbox" />
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </details>
+
+        <div id="dnsProviderPanel" class="config-block">
+            <div class="config-block__header">
+                <div>
+                    <h4>DNS-01 服务商 API</h4>
+                    <p class="muted">泛域名证书和需要统一下发的证书，直接在这里选择服务商并填写 API 凭据。</p>
+                </div>
+            </div>
+            <div class="form-grid">
+                <label>
+                    <span>DNS 服务商</span>
+                    <select asp-for="Form.DnsProvider" id="dnsProviderInput">
+                        <option value="">兼容模式 / 暂不选择</option>
+                        <option value="@PanelDnsProviderTypes.Cloudflare">Cloudflare</option>
+                        <option value="@PanelDnsProviderTypes.AliDns">阿里云 DNS</option>
+                        <option value="@PanelDnsProviderTypes.DnsPod">腾讯云 DNSPod</option>
+                    </select>
+                    <small class="muted">常规新证书直接选服务商。只有历史 hook 记录才需要留空进入兼容模式。</small>
+                </label>
+                <label class="form-grid__span-2 dns-zone-field">
+                    <span>根域名 / Zone</span>
+                    <input asp-for="Form.DnsZone" placeholder="example.com" />
+                    <small class="muted">填写托管在 DNS 服务商里的根域名，不要带 `_acme-challenge` 前缀。</small>
+                </label>
+                <label class="form-grid__span-2 dns-cloudflare-field">
+                    <span>API Token</span>
+                    <input asp-for="Form.DnsApiToken" />
+                    <small class="muted">Cloudflare 建议使用最小权限 Token，仅授予目标 Zone 的 DNS 编辑权限。</small>
+                </label>
+                <label class="dns-access-key-field">
+                    <span>AccessKey ID / SecretId</span>
+                    <input asp-for="Form.DnsAccessKeyId" />
+                </label>
+                <label class="dns-access-key-field">
+                    <span>AccessKey Secret / SecretKey</span>
+                    <input asp-for="Form.DnsAccessKeySecret" />
+                </label>
+            </div>
+
+            <details id="dnsCompatPanel" style="margin-top: 1rem;">
+                <summary style="cursor: pointer; font-weight: 600;">兼容模式：外部 Hook</summary>
+                <div class="form-grid" style="margin-top: 1rem;">
+                    <label class="form-grid__span-2">
+                        <span>添加 TXT 记录命令</span>
+                        <input asp-for="Form.DnsHookPresentCommand" placeholder="powershell / bash / 自定义脚本入口" />
+                    </label>
+                    <label class="form-grid__span-2">
+                        <span>添加 TXT 记录参数</span>
+                        <textarea asp-for="Form.DnsHookPresentArguments" rows="3" placeholder="-File ./dns.ps1 -Action present -Name {{record_name}} -Value {{record_value}}"></textarea>
+                    </label>
+                    <label class="form-grid__span-2">
+                        <span>清理 TXT 记录命令</span>
+                        <input asp-for="Form.DnsHookCleanupCommand" placeholder="可留空" />
+                    </label>
+                    <label class="form-grid__span-2">
+                        <span>清理 TXT 记录参数</span>
+                        <textarea asp-for="Form.DnsHookCleanupArguments" rows="3" placeholder="-File ./dns.ps1 -Action cleanup -Name {{record_name}} -Value {{record_value}}"></textarea>
+                    </label>
+                    <label class="form-grid__span-2">
+                        <span>环境变量</span>
+                        <textarea asp-for="Form.EnvironmentVariables" rows="6" placeholder="每行一个 KEY=VALUE，可用于旧脚本模式的云厂商密钥。"></textarea>
+                        <small class="muted mono">自动注入: NP_ACME_CERTIFICATE_ID / NP_ACME_DOMAIN / NP_ACME_RECORD_NAME / NP_ACME_RECORD_VALUE / NP_ACME_CHALLENGE_TOKEN</small>
+                    </label>
+                </div>
+            </details>
+        </div>
+
+        <div class="page-actions">
+            <button type="submit" class="button button--primary">保存证书配置</button>
+        </div>
+    </form>
+</section>
+
+@section Scripts {
+<script>
+    function updateDnsProviderVisibility() {
+        const challengeTypeInput = document.getElementById('challengeTypeInput');
+        const dnsProviderInput = document.getElementById('dnsProviderInput');
+        const dnsProviderPanel = document.getElementById('dnsProviderPanel');
+        const dnsCompatPanel = document.getElementById('dnsCompatPanel');
+        if (!challengeTypeInput || !dnsProviderInput || !dnsProviderPanel || !dnsCompatPanel) {
+            return;
+        }
+
+        const isDnsMode = challengeTypeInput.value === 'dns-01';
+        const provider = (dnsProviderInput.value || '').trim().toLowerCase();
+        const useCloudflare = provider === 'cloudflare';
+        const useAccessKeys = provider === 'alidns' || provider === 'dnspod';
+        const useCompatMode = provider === '';
+
+        dnsProviderPanel.style.display = isDnsMode ? 'grid' : 'none';
+
+        document.querySelectorAll('.dns-zone-field').forEach((element) => {
+            element.style.display = isDnsMode ? 'block' : 'none';
+        });
+
+        document.querySelectorAll('.dns-cloudflare-field').forEach((element) => {
+            element.style.display = isDnsMode && useCloudflare ? 'block' : 'none';
+        });
+
+        document.querySelectorAll('.dns-access-key-field').forEach((element) => {
+            element.style.display = isDnsMode && useAccessKeys ? 'block' : 'none';
+        });
+
+        dnsCompatPanel.style.display = isDnsMode && useCompatMode ? 'block' : 'none';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const challengeTypeInput = document.getElementById('challengeTypeInput');
+        const dnsProviderInput = document.getElementById('dnsProviderInput');
+        if (challengeTypeInput) {
+            challengeTypeInput.addEventListener('change', updateDnsProviderVisibility);
+        }
+
+        if (dnsProviderInput) {
+            dnsProviderInput.addEventListener('change', updateDnsProviderVisibility);
+        }
+
+        updateDnsProviderVisibility();
+    });
+</script>
+}

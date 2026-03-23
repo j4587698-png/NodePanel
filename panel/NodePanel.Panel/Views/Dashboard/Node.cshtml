@@ -1,0 +1,1435 @@
+@using NodePanel.ControlPlane.Configuration
+@using NodePanel.Core.Runtime
+@model NodeEditorViewModel
+@{
+    ViewData["Title"] = Model.IsEditMode ? "编辑节点" : "新建节点";
+    var certificate = Model.Runtime.LastStatus?.Certificate;
+    var certificateMode = CertificateModes.Normalize(Model.Form.CertificateMode);
+    Model.Form.PrepareForEditView();
+    var tlsIndex = 0;
+    var wssIndex = 1;
+    var canRequestRenewal = Model.IsEditMode &&
+        !string.IsNullOrWhiteSpace(Model.Form.NodeId) &&
+        (certificateMode == CertificateModes.AcmeManaged || certificateMode == CertificateModes.AcmeExternal);
+    var dnsModeOptions = new[] { DnsModes.System, DnsModes.Http };
+    var outboundProtocolOptions = new[] { OutboundProtocols.Freedom, OutboundProtocols.Trojan };
+    var outboundTransportOptions = new[]
+    {
+        TrojanOutboundTransports.Tls,
+        TrojanOutboundTransports.Tcp,
+        TrojanOutboundTransports.Ws,
+        TrojanOutboundTransports.Wss
+    };
+    var outboundTargetStrategyOptions = new[]
+    {
+        OutboundTargetStrategies.AsIs,
+        OutboundTargetStrategies.UseIp,
+        OutboundTargetStrategies.UseIpv4,
+        OutboundTargetStrategies.UseIpv6,
+        OutboundTargetStrategies.UseIpv4v6,
+        OutboundTargetStrategies.UseIpv6v4,
+        OutboundTargetStrategies.ForceIp,
+        OutboundTargetStrategies.ForceIpv4,
+        OutboundTargetStrategies.ForceIpv6,
+        OutboundTargetStrategies.ForceIpv4v6,
+        OutboundTargetStrategies.ForceIpv6v4
+    };
+    var xudpProxyModes = new[]
+    {
+        OutboundXudpProxyModes.Reject,
+        OutboundXudpProxyModes.Allow,
+        OutboundXudpProxyModes.Skip
+    };
+    var fallbackTypeOptions = new[] { "tcp", "tcp4", "tcp6", "unix", "serve" };
+
+    bool IsOptionSelected(string? currentValue, string option)
+        => string.Equals(currentValue?.Trim(), option, StringComparison.OrdinalIgnoreCase);
+}
+
+<style>
+    .stack {
+        display: grid;
+        gap: 24px;
+    }
+
+    .config-block {
+        display: grid;
+        gap: 18px;
+        padding: 20px;
+        border: 1px solid var(--admin-border);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.02);
+    }
+
+    .config-block__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+    }
+
+    .config-block__header h4,
+    .config-block__header h5 {
+        margin: 0;
+    }
+
+    .config-subgrid {
+        display: grid;
+        gap: 16px;
+    }
+
+    .config-collection {
+        display: grid;
+        gap: 16px;
+    }
+
+    .config-collection__item {
+        display: grid;
+        gap: 16px;
+        padding: 18px;
+        border: 1px solid var(--admin-border);
+        border-radius: 16px;
+        background: rgba(11, 13, 23, 0.35);
+    }
+
+    .config-collection__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+    }
+
+    .config-collection__header strong {
+        font-size: 15px;
+    }
+
+    .toggle-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+    }
+
+    .toggle-grid .checkbox-field {
+        align-self: auto;
+    }
+
+    .section-divider {
+        height: 1px;
+        background: var(--admin-border);
+    }
+
+    .simple-block {
+        margin-top: 20px;
+    }
+
+    .simple-block .form-grid {
+        align-items: end;
+    }
+
+    .transport-panel.is-hidden,
+    .advanced-panel {
+        display: none;
+    }
+
+    .compact-grid {
+        display: grid;
+        gap: 16px;
+    }
+
+    .compact-note {
+        margin: 0;
+    }
+
+    .mode-switch {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+    }
+
+    .mode-option {
+        display: grid;
+        gap: 6px;
+        padding: 16px;
+        border: 1px solid var(--admin-border);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.02);
+        cursor: pointer;
+        transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .mode-option input {
+        margin: 0;
+    }
+
+    .mode-option.is-active {
+        border-color: rgba(90, 170, 255, 0.85);
+        background: rgba(90, 170, 255, 0.08);
+    }
+
+    .compat-details {
+        margin-top: 12px;
+    }
+
+    .advanced-toggle {
+        margin-top: 24px;
+        border: 1px solid var(--admin-border);
+        border-radius: 16px;
+        padding: 16px 18px;
+        background: rgba(255, 255, 255, 0.02);
+    }
+
+    .advanced-toggle summary {
+        cursor: pointer;
+        font-weight: 600;
+    }
+
+    .advanced-toggle__body {
+        margin-top: 16px;
+        display: grid;
+        gap: 16px;
+    }
+
+    @@media (max-width: 980px) {
+        .config-block__header,
+        .config-collection__header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Node Editor</p>
+        <h2>@ViewData["Title"]</h2>
+        <p class="muted">只保留协议、传输、伪装和证书这些节点核心配置，复杂参数交给后台默认模板。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button" asp-action="Index">返回总览</a>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<div class="grid grid--two">
+    <div class="stack">
+        <section class="card">
+            <div class="card__header">
+                <div>
+                    <p class="eyebrow">Runtime</p>
+                    <h3>运行状态</h3>
+                </div>
+                <span class="badge @(Model.Runtime.Connected ? "badge--ok" : "badge--idle")">
+                    @(Model.Runtime.Connected ? "已连接" : "离线")
+                </span>
+            </div>
+            <dl class="stats">
+                <div><dt>当前修订</dt><dd>@Model.Runtime.AppliedRevision</dd></div>
+                <div><dt>最近心跳</dt><dd>@((Model.Runtime.LastSeenAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+                <div><dt>证书可用</dt><dd>@(certificate?.Available == true ? "是" : "否")</dd></div>
+                <div><dt>证书模式</dt><dd>@(certificate?.Mode ?? certificateMode)</dd></div>
+                <div><dt>证书过期</dt><dd>@((certificate?.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+                <div><dt>最近尝试</dt><dd>@((certificate?.LastAttemptAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+                <div><dt>最近成功</dt><dd>@((certificate?.LastSuccessAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            </dl>
+            @if (!string.IsNullOrWhiteSpace(certificate?.Domain))
+            {
+                <div class="muted">证书域名: @certificate.Domain</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(certificate?.Thumbprint))
+            {
+                <div class="muted mono">Thumbprint: @certificate.Thumbprint</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.Runtime.LastApplyError))
+            {
+                <div class="error-box">@Model.Runtime.LastApplyError</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(certificate?.Error))
+            {
+                <div class="error-box">@certificate.Error</div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header">
+                <div>
+                    <p class="eyebrow">Certificate</p>
+                    <h3>续签控制</h3>
+                </div>
+            </div>
+            @if (canRequestRenewal)
+            {
+                <div class="form">
+                    <p class="muted">ACME 模式固定使用生产证书。节点会按本地检查周期自动续签，断线或重启后也会从缓存配置恢复并继续续签。</p>
+                    <div class="muted">
+                        @(Model.Runtime.Connected
+                            ? "节点当前在线，可以立即下发一次续签请求。"
+                            : "节点当前离线，无法立即下发请求，但本地自动续签仍然有效。")
+                    </div>
+                    <form asp-action="RenewNodeCertificate" asp-route-nodeId="@Model.Form.NodeId" method="post">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="returnUrl" value="@(Url.Action("Node", "Dashboard", new { nodeId = Model.Form.NodeId }) ?? "/")" />
+                        <button type="submit" class="button button--primary">立即续签</button>
+                    </form>
+                </div>
+            }
+            else if (certificateMode == CertificateModes.ManualPfx)
+            {
+                <p class="muted">当前使用 `manual-pfx`。面板不会触发续签，请直接替换 PFX 文件。</p>
+            }
+            else if (certificateMode == CertificateModes.PanelDistributed)
+            {
+                <p class="muted">当前使用 `panel-distributed`。证书由面板统一签发、续签并重新下发到节点，请到证书管理页操作。</p>
+            }
+            else if (certificateMode == CertificateModes.Disabled)
+            {
+                <p class="muted">当前未启用证书，无法触发续签。</p>
+            }
+            else
+            {
+                <p class="muted">保存节点后即可在这里查看证书状态并触发续签。</p>
+            }
+        </section>
+    </div>
+
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Save</p>
+                <h3>保存配置</h3>
+            </div>
+        </div>
+        <form asp-action="SaveNode" method="post" class="form">
+            @Html.AntiForgeryToken()
+            <div asp-validation-summary="ModelOnly" class="error-box"></div>
+
+            <div class="form-grid">
+                <label>
+                    <span>节点 ID</span>
+                    <input asp-for="Form.NodeId" />
+                </label>
+                <label>
+                    <span>显示名</span>
+                    <input asp-for="Form.DisplayName" />
+                </label>
+                <label>
+                    <span>协议类型</span>
+                    <select asp-for="Form.Protocol">
+                        <option value="trojan">Trojan</option>
+                        <option value="vmess">VMess</option>
+                        <option value="vless">VLESS</option>
+                    </select>
+                    <small class="muted">当前面板支持 Trojan / VMess / VLESS，三者共用 TLS / WSS / 证书配置。</small>
+                </label>
+                <label style="position: relative; overflow: visible;">
+                    <span>权限组分配 (多选)</span>
+                    @if(Model.AvailableGroups.Count == 0)
+                    {
+                        <div class="muted" style="height:40px; line-height:40px; padding:0 12px; border:1px solid var(--admin-border); border-radius:6px;">暂无权限组，请前往创建</div>
+                        <input type="hidden" asp-for="Form.GroupIds" />
+                    }
+                    else
+                    {
+                        var currentGroupIds = string.IsNullOrWhiteSpace(Model.Form.GroupIds) ? new string[0] : Model.Form.GroupIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
+                        <div class="custom-select-wrapper" style="position: relative; width: 100%;">
+                            <div class="custom-select-trigger" onclick="toggleNodeGroupDropdown(event)" style="border: 1px solid var(--admin-border); padding: 0 12px; border-radius: 6px; cursor: pointer; background: var(--admin-input-bg); color: var(--admin-fg); height: 40px; display: flex; align-items: center; justify-content: space-between;">
+                                <span id="nodeGroupSelectedText" style="flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--admin-fg); font-weight: normal;">点击选择权限组...</span>
+                                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="margin-left: 8px; color: var(--admin-muted); flex-shrink: 0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                            </div>
+                            
+                            <div id="nodeGroupDropdown" style="display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--admin-bg); border: 1px solid var(--admin-border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 999; max-height: 250px; overflow-y: auto; padding: 6px;">
+                                @foreach (var g in Model.AvailableGroups)
+                                {
+                                    var gIdStr = g.GroupId.ToString();
+                                    var isSelected = currentGroupIds.Contains(gIdStr);
+                                    <label class="custom-dropdown-item" style="display:flex; align-items:center; gap:8px; padding: 8px 10px; margin: 0; cursor:pointer; border-radius: 4px; transition: background 0.2s; font-weight: normal; color: var(--admin-fg);" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+                                        <input type="checkbox" class="node-group-checkbox" value="@gIdStr" data-name="@g.Name" @(isSelected ? "checked" : "") onchange="updateNodeGroupIds()" style="margin:0; width:16px; height:16px; min-width:16px;" />
+                                        <span style="font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@g.Name</span>
+                                    </label>
+                                }
+                            </div>
+                        </div>
+                        <input type="hidden" asp-for="Form.GroupIds" id="nodeGroupIdsHidden" />
+                    }
+                </label>
+                <label>
+                    <span>订阅域名</span>
+                    <input asp-for="Form.SubscriptionHost" />
+                </label>
+                <label class="advanced-panel">
+                    <span>订阅 SNI</span>
+                    <input asp-for="Form.SubscriptionSni" />
+                </label>
+                <div class="checkbox-field advanced-panel">
+                    <span>客户端跳过证书校验</span>
+                    <label class="switch">
+                        <input asp-for="Form.SubscriptionAllowInsecure" type="checkbox" />
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="config-block simple-block">
+                <div class="config-block__header">
+                    <div>
+                        <h4>接入设置</h4>
+                        <p class="muted compact-note">主界面只配置协议、接入方式、域名和证书。Trojan / VMess / VLESS 共用这套接入模型；TLS 直连对应无伪装，WSS 对应 WebSocket 伪装。</p>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <div class="checkbox-field">
+                        <span>节点启用</span>
+                        <label class="switch">
+                            <input asp-for="Form.Enabled" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                    <label>
+                        <span>接入方式</span>
+                        <select id="transportMode">
+                            <option value="tls">TLS 直连</option>
+                            <option value="wss">WSS / WebSocket</option>
+                            <option value="both">同时启用 TLS + WSS</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>接入域名</span>
+                        <input asp-for="Form.CertificateDomain" id="primaryDomainInput" placeholder="node.example.com" />
+                        <small class="muted">同时用于证书域名和 WSS Host；选择面板证书后会自动回填对应域名。</small>
+                    </label>
+                </div>
+                <input asp-for="Form.Inbounds[tlsIndex].Enabled" id="tlsEnabledInput" type="hidden" />
+                <input asp-for="Form.Inbounds[wssIndex].Enabled" id="wssEnabledInput" type="hidden" />
+            </div>
+
+            <div id="tls-panel" class="transport-panel">
+                <h4>TLS 直连</h4>
+                <input asp-for="Form.Inbounds[tlsIndex].Tag" type="hidden" />
+                <input asp-for="Form.Inbounds[tlsIndex].Protocol" type="hidden" />
+                <input asp-for="Form.Inbounds[tlsIndex].Transport" type="hidden" />
+                <div class="form-grid">
+                    <label><span>监听地址</span><input asp-for="Form.Inbounds[tlsIndex].ListenAddress" /></label>
+                    <label><span>监听端口</span><input asp-for="Form.Inbounds[tlsIndex].Port" /></label>
+                </div>
+            </div>
+
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>TCP/TLS 高级配置</h5>
+                        <p class="muted">补齐 applicationProtocols、sniffing 和 fallbacks。</p>
+                    </div>
+                    <button type="button" class="button button--small" data-add-collection="tls-fallback-list" data-template-id="tls-fallback-template">新增 Fallback</button>
+                </div>
+                <div class="form-grid">
+                    <label><span>应用层协议 (CSV)</span><input asp-for="Form.Inbounds[tlsIndex].ApplicationProtocols" placeholder="h2, http/1.1" /></label>
+                </div>
+                <div class="toggle-grid">
+                    <div class="checkbox-field">
+                        <span>启用 Sniffing</span>
+                        <label class="switch">
+                            <input asp-for="Form.Inbounds[tlsIndex].Sniffing.Enabled" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                    <div class="checkbox-field">
+                        <span>仅元数据</span>
+                        <label class="switch">
+                            <input asp-for="Form.Inbounds[tlsIndex].Sniffing.MetadataOnly" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                    <div class="checkbox-field">
+                        <span>仅路由</span>
+                        <label class="switch">
+                            <input asp-for="Form.Inbounds[tlsIndex].Sniffing.RouteOnly" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label><span>Destination Override (CSV)</span><input asp-for="Form.Inbounds[tlsIndex].Sniffing.DestinationOverride" placeholder="tls, http, quic" /></label>
+                    <label><span>Domains Excluded (CSV)</span><input asp-for="Form.Inbounds[tlsIndex].Sniffing.DomainsExcluded" placeholder="example.org, internal.local" /></label>
+                </div>
+                <div id="tls-fallback-list" class="config-collection" data-collection>
+                    @for (var index = 0; index < Model.Form.Inbounds[tlsIndex].Fallbacks.Count; index++)
+                    {
+                        var fallback = Model.Form.Inbounds[tlsIndex].Fallbacks[index];
+                        <div class="config-collection__item" data-collection-item>
+                            <div class="config-collection__header">
+                                <strong>Fallback <span data-item-number>@(index + 1)</span></strong>
+                                <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+                            </div>
+                            <div class="form-grid">
+                                <label><span>Name</span><input name="Form.Inbounds[0].Fallbacks[@index].Name" data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Name" value="@fallback.Name" /></label>
+                                <label><span>ALPN</span><input name="Form.Inbounds[0].Fallbacks[@index].Alpn" data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Alpn" value="@fallback.Alpn" /></label>
+                                <label><span>Path</span><input name="Form.Inbounds[0].Fallbacks[@index].Path" data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Path" value="@fallback.Path" /></label>
+                                <label>
+                                    <span>Type</span>
+                                    <select name="Form.Inbounds[0].Fallbacks[@index].Type" data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Type">
+                                        <option value="tcp" selected="@(string.Equals(fallback.Type, "tcp", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">tcp</option>
+                                        <option value="tcp4" selected="@(string.Equals(fallback.Type, "tcp4", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">tcp4</option>
+                                        <option value="tcp6" selected="@(string.Equals(fallback.Type, "tcp6", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">tcp6</option>
+                                        <option value="unix" selected="@(string.Equals(fallback.Type, "unix", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">unix</option>
+                                        <option value="serve" selected="@(string.Equals(fallback.Type, "serve", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">serve</option>
+                                    </select>
+                                </label>
+                                <label><span>Destination</span><input name="Form.Inbounds[0].Fallbacks[@index].Dest" data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Dest" value="@fallback.Dest" placeholder="127.0.0.1:9000 / /run/app.sock / serve-ws-none" /></label>
+                                <label>
+                                    <span>Proxy Protocol 版本</span>
+                                    <select name="Form.Inbounds[0].Fallbacks[@index].ProxyProtocolVersion" data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].ProxyProtocolVersion">
+                                        <option value="0" selected="@(fallback.ProxyProtocolVersion == 0 ? "selected" : null)">0</option>
+                                        <option value="1" selected="@(fallback.ProxyProtocolVersion == 1 ? "selected" : null)">1</option>
+                                        <option value="2" selected="@(fallback.ProxyProtocolVersion == 2 ? "selected" : null)">2</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div id="wss-panel" class="transport-panel">
+                <h4>WSS / WebSocket</h4>
+                <input asp-for="Form.Inbounds[wssIndex].Tag" type="hidden" />
+                <input asp-for="Form.Inbounds[wssIndex].Protocol" type="hidden" />
+                <input asp-for="Form.Inbounds[wssIndex].Transport" type="hidden" />
+                <input asp-for="Form.Inbounds[wssIndex].Host" id="wssHostInput" type="hidden" />
+                <div class="form-grid">
+                    <label><span>监听地址</span><input asp-for="Form.Inbounds[wssIndex].ListenAddress" /></label>
+                    <label><span>监听端口</span><input asp-for="Form.Inbounds[wssIndex].Port" /></label>
+                    <label><span>WebSocket 路径</span><input asp-for="Form.Inbounds[wssIndex].Path" placeholder="/ws" /></label>
+                </div>
+            </div>
+
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>WSS 高级配置</h5>
+                        <p class="muted">补齐 applicationProtocols、sniffing 和 fallbacks。</p>
+                    </div>
+                    <button type="button" class="button button--small" data-add-collection="wss-fallback-list" data-template-id="wss-fallback-template">新增 Fallback</button>
+                </div>
+                <div class="form-grid">
+                    <label><span>应用层协议 (CSV)</span><input asp-for="Form.Inbounds[wssIndex].ApplicationProtocols" placeholder="http/1.1" /></label>
+                </div>
+                <div class="toggle-grid">
+                    <div class="checkbox-field">
+                        <span>启用 Sniffing</span>
+                        <label class="switch">
+                            <input asp-for="Form.Inbounds[wssIndex].Sniffing.Enabled" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                    <div class="checkbox-field">
+                        <span>仅元数据</span>
+                        <label class="switch">
+                            <input asp-for="Form.Inbounds[wssIndex].Sniffing.MetadataOnly" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                    <div class="checkbox-field">
+                        <span>仅路由</span>
+                        <label class="switch">
+                            <input asp-for="Form.Inbounds[wssIndex].Sniffing.RouteOnly" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label><span>Destination Override (CSV)</span><input asp-for="Form.Inbounds[wssIndex].Sniffing.DestinationOverride" placeholder="tls, http, quic" /></label>
+                    <label><span>Domains Excluded (CSV)</span><input asp-for="Form.Inbounds[wssIndex].Sniffing.DomainsExcluded" placeholder="example.org, internal.local" /></label>
+                </div>
+                <div id="wss-fallback-list" class="config-collection" data-collection>
+                    @for (var index = 0; index < Model.Form.Inbounds[wssIndex].Fallbacks.Count; index++)
+                    {
+                        var fallback = Model.Form.Inbounds[wssIndex].Fallbacks[index];
+                        <div class="config-collection__item" data-collection-item>
+                            <div class="config-collection__header">
+                                <strong>Fallback <span data-item-number>@(index + 1)</span></strong>
+                                <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+                            </div>
+                            <div class="form-grid">
+                                <label><span>Name</span><input name="Form.Inbounds[1].Fallbacks[@index].Name" data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Name" value="@fallback.Name" /></label>
+                                <label><span>ALPN</span><input name="Form.Inbounds[1].Fallbacks[@index].Alpn" data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Alpn" value="@fallback.Alpn" /></label>
+                                <label><span>Path</span><input name="Form.Inbounds[1].Fallbacks[@index].Path" data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Path" value="@fallback.Path" /></label>
+                                <label>
+                                    <span>Type</span>
+                                    <select name="Form.Inbounds[1].Fallbacks[@index].Type" data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Type">
+                                        <option value="tcp" selected="@(string.Equals(fallback.Type, "tcp", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">tcp</option>
+                                        <option value="tcp4" selected="@(string.Equals(fallback.Type, "tcp4", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">tcp4</option>
+                                        <option value="tcp6" selected="@(string.Equals(fallback.Type, "tcp6", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">tcp6</option>
+                                        <option value="unix" selected="@(string.Equals(fallback.Type, "unix", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">unix</option>
+                                        <option value="serve" selected="@(string.Equals(fallback.Type, "serve", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">serve</option>
+                                    </select>
+                                </label>
+                                <label><span>Destination</span><input name="Form.Inbounds[1].Fallbacks[@index].Dest" data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Dest" value="@fallback.Dest" placeholder="127.0.0.1:9000 / /run/app.sock / serve-ws-none" /></label>
+                                <label>
+                                    <span>Proxy Protocol 版本</span>
+                                    <select name="Form.Inbounds[1].Fallbacks[@index].ProxyProtocolVersion" data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].ProxyProtocolVersion">
+                                        <option value="0" selected="@(fallback.ProxyProtocolVersion == 0 ? "selected" : null)">0</option>
+                                        <option value="1" selected="@(fallback.ProxyProtocolVersion == 1 ? "selected" : null)">1</option>
+                                        <option value="2" selected="@(fallback.ProxyProtocolVersion == 2 ? "selected" : null)">2</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <h4 class="advanced-panel">限速与遥测</h4>
+            <div class="form-grid advanced-panel">
+                <label><span>全局限速(B/s)</span><input asp-for="Form.GlobalBytesPerSecond" /></label>
+                <label><span>流量倍率 (1.0 = 正常)</span><input asp-for="Form.TrafficMultiplier" type="number" step="0.01" min="0.01" /></label>
+                <label><span>连接超时(秒)</span><input asp-for="Form.ConnectTimeoutSeconds" /></label>
+                <label><span>连接空闲超时(秒)</span><input asp-for="Form.ConnectionIdleSeconds" /></label>
+                <label><span>上行仅存活(秒)</span><input asp-for="Form.UplinkOnlySeconds" /></label>
+                <label><span>下行仅存活(秒)</span><input asp-for="Form.DownlinkOnlySeconds" /></label>
+                <label><span>遥测刷新(秒)</span><input asp-for="Form.TelemetryFlushIntervalSeconds" /></label>
+            </div>
+
+            <h4>证书来源</h4>
+            <input asp-for="Form.CertificateMode" id="certificateModeInput" type="hidden" />
+            <div class="config-block simple-block">
+                <div class="config-block__header">
+                    <div>
+                        <h4>推荐模式</h4>
+                        <p class="muted compact-note">日常节点只需要在“面板统一下发”和“节点自管 http-01”之间二选一。</p>
+                    </div>
+                </div>
+                <div class="mode-switch">
+                    <label class="mode-option" data-certificate-mode-option="@CertificateModes.PanelDistributed">
+                        <input type="radio" name="certificateModePreset" value="@CertificateModes.PanelDistributed" />
+                        <strong>面板统一下发</strong>
+                        <span class="muted">由 Panel 统一签发、续签并自动下发到节点。</span>
+                    </label>
+                    <label class="mode-option" data-certificate-mode-option="@CertificateModes.AcmeManaged">
+                        <input type="radio" name="certificateModePreset" value="@CertificateModes.AcmeManaged" />
+                        <strong>节点自管 http-01</strong>
+                        <span class="muted">节点本机自己申请和续签，适合单节点独立域名。</span>
+                    </label>
+                </div>
+                <details class="compat-details">
+                    <summary>兼容模式</summary>
+                    <div class="form-grid" style="margin-top: 12px;">
+                        <label>
+                            <span>兼容模式</span>
+                            <select id="certificateCompatMode">
+                                <option value="">不使用</option>
+                                <option value="@CertificateModes.ManualPfx" selected="@(certificateMode == CertificateModes.ManualPfx ? "selected" : null)">手动下发 PFX</option>
+                                <option value="@CertificateModes.Disabled" selected="@(certificateMode == CertificateModes.Disabled ? "selected" : null)">不在节点处理证书</option>
+                                @if (certificateMode == CertificateModes.AcmeExternal)
+                                {
+                                    <option value="@CertificateModes.AcmeExternal" selected="selected">旧版外部工具模式</option>
+                                }
+                            </select>
+                            <small class="muted">只给历史节点或特殊场景使用，常规新节点不建议选这里。</small>
+                        </label>
+                    </div>
+                </details>
+            </div>
+
+            <div class="form-grid">
+                <label class="cert-manual-field"><span>PFX 路径</span><input asp-for="Form.CertificatePfxPath" /></label>
+                <label class="cert-manual-field"><span>PFX 密码</span><input asp-for="Form.CertificatePfxPassword" /></label>
+                <label class="cert-panel-field">
+                    <span>面板证书</span>
+                    <select asp-for="Form.PanelCertificateId">
+                        <option value="">请选择</option>
+                        @foreach (var certificateOption in Model.AvailableCertificates)
+                        {
+                            <option value="@certificateOption.CertificateId" data-domain="@certificateOption.Domain">
+                                @certificateOption.DisplayName (@certificateOption.Domain)
+                            </option>
+                        }
+                    </select>
+                    <small class="muted">面板续签成功后，会把最新证书重新下发到所有绑定节点。</small>
+                </label>
+                <input asp-for="Form.CertificateChallengeType" type="hidden" />
+                <label class="cert-acme-field">
+                    <span>申请邮箱</span>
+                    <input asp-for="Form.CertificateEmail" />
+                    <small class="muted">节点自管模式固定走 http-01，本机自动续签。</small>
+                </label>
+                <label class="advanced-panel"><span>ACME Directory URL</span><input asp-for="Form.CertificateAcmeDirectoryUrl" /></label>
+                <label class="advanced-panel"><span>续签提前天数</span><input asp-for="Form.CertificateRenewBeforeDays" /></label>
+                <label class="advanced-panel"><span>检查周期(分钟)</span><input asp-for="Form.CertificateCheckIntervalMinutes" /></label>
+                <label class="advanced-panel"><span>HTTP-01 监听地址</span><input asp-for="Form.CertificateHttpChallengeListenAddress" /></label>
+                <label class="advanced-panel"><span>HTTP-01 端口</span><input asp-for="Form.CertificateHttpChallengePort" /></label>
+                <label class="advanced-panel cert-external-field"><span>ACME/外部处理超时(秒)</span><input asp-for="Form.CertificateExternalTimeoutSeconds" /></label>
+                <label class="advanced-panel cert-external-field"><span>外部工具路径</span><input asp-for="Form.CertificateExternalToolPath" /></label>
+                <label class="advanced-panel cert-external-field"><span>工作目录</span><input asp-for="Form.CertificateWorkingDirectory" /></label>
+                <div class="checkbox-field advanced-panel">
+                    <span>拒绝未知 SNI</span>
+                    <label class="switch">
+                        <input asp-for="Form.CertificateRejectUnknownSni" type="checkbox" />
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <label class="advanced-panel cert-external-field">
+                <span>外部工具参数模板</span>
+                <textarea asp-for="Form.CertificateExternalArguments" rows="4"></textarea>
+                <small class="muted mono">可用占位符: {{domain}}, {{domains_csv}}, {{email}}, {{pfx_path}}, {{pfx_password}}, {{challenge_type}}, {{directory_url}}, {{use_staging}}</small>
+            </label>
+
+            <label class="advanced-panel cert-external-field">
+                <span>环境变量</span>
+                <textarea asp-for="Form.CertificateEnvironmentVariables" rows="5"></textarea>
+                <small class="muted mono">每行一个 KEY=VALUE，支持同样的占位符替换。</small>
+            </label>
+
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>ClientHello 策略</h5>
+                        <p class="muted">补齐后台 TLS ClientHello 过滤所需配置。</p>
+                    </div>
+                </div>
+                <div class="toggle-grid">
+                    <div class="checkbox-field">
+                        <span>启用策略</span>
+                        <label class="switch">
+                            <input asp-for="Form.CertificateClientHelloPolicy.Enabled" type="checkbox" />
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label><span>允许的 ServerNames (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.AllowedServerNames" /></label>
+                    <label><span>阻止的 ServerNames (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.BlockedServerNames" /></label>
+                    <label><span>允许的 ALPN (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.AllowedApplicationProtocols" /></label>
+                    <label><span>阻止的 ALPN (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.BlockedApplicationProtocols" /></label>
+                    <label><span>允许的 JA3 (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.AllowedJa3" /></label>
+                    <label><span>阻止的 JA3 (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.BlockedJa3" /></label>
+                </div>
+            </div>
+
+            <h4 class="advanced-panel">DNS</h4>
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>解析设置</h5>
+                        <p class="muted">补齐后台 DNS 模式、超时、缓存和 HTTP DNS 服务器列表。</p>
+                    </div>
+                    <button type="button" class="button button--small" data-add-collection="dns-server-list" data-template-id="dns-server-template">新增 DNS 服务器</button>
+                </div>
+                <div class="form-grid">
+                    <label>
+                        <span>模式</span>
+                        <select asp-for="Form.Dns.Mode">
+                            @foreach (var option in dnsModeOptions)
+                            {
+                                <option value="@option">@option</option>
+                            }
+                        </select>
+                    </label>
+                    <label><span>超时(秒)</span><input asp-for="Form.Dns.TimeoutSeconds" /></label>
+                    <label><span>缓存 TTL(秒)</span><input asp-for="Form.Dns.CacheTtlSeconds" /></label>
+                </div>
+                <div id="dns-server-list" class="config-collection" data-collection>
+                    @for (var index = 0; index < Model.Form.Dns.Servers.Count; index++)
+                    {
+                        var server = Model.Form.Dns.Servers[index];
+                        <div class="config-collection__item" data-collection-item>
+                            <div class="config-collection__header">
+                                <strong>DNS 服务器 <span data-item-number>@(index + 1)</span></strong>
+                                <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+                            </div>
+                            <div class="form-grid">
+                                <label><span>URL</span><input name="Form.Dns.Servers[@index].Url" data-name-template="Form.Dns.Servers[__INDEX__].Url" value="@server.Url" placeholder="https://dns.example/dns-query" /></label>
+                            </div>
+                            <label>
+                                <span>请求头</span>
+                                <textarea name="Form.Dns.Servers[@index].HeadersText" data-name-template="Form.Dns.Servers[__INDEX__].HeadersText" rows="5" placeholder="Authorization=Bearer demo-token&#10;X-Node=panel">@server.HeadersText</textarea>
+                                <small class="muted mono">每行一个 KEY=VALUE。</small>
+                            </label>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <h4 class="advanced-panel">出站</h4>
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>出站列表</h5>
+                        <p class="muted">补齐后台出站所需字段。`freedom` 一般只需要 tag 和路由引用，`trojan` 才需要远端连接参数。</p>
+                    </div>
+                    <button type="button" class="button button--small" data-add-collection="outbound-list" data-template-id="outbound-template">新增出站</button>
+                </div>
+                <div id="outbound-list" class="config-collection" data-collection>
+                    @for (var index = 0; index < Model.Form.Outbounds.Count; index++)
+                    {
+                        var outbound = Model.Form.Outbounds[index];
+                        <div class="config-collection__item" data-collection-item>
+                            <div class="config-collection__header">
+                                <strong>出站 <span data-item-number>@(index + 1)</span></strong>
+                                <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+                            </div>
+                            <div class="toggle-grid">
+                                <div class="checkbox-field">
+                                    <span>启用</span>
+                                    <label class="switch">
+                                        <input type="checkbox" name="Form.Outbounds[@index].Enabled" data-name-template="Form.Outbounds[__INDEX__].Enabled" value="true" checked="@outbound.Enabled" />
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="checkbox-field">
+                                    <span>启用多路复用</span>
+                                    <label class="switch">
+                                        <input type="checkbox" name="Form.Outbounds[@index].MultiplexEnabled" data-name-template="Form.Outbounds[__INDEX__].MultiplexEnabled" value="true" checked="@outbound.MultiplexEnabled" />
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="checkbox-field">
+                                    <span>跳过证书校验</span>
+                                    <label class="switch">
+                                        <input type="checkbox" name="Form.Outbounds[@index].SkipCertificateValidation" data-name-template="Form.Outbounds[__INDEX__].SkipCertificateValidation" value="true" checked="@outbound.SkipCertificateValidation" />
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="config-subgrid">
+                                <div class="form-grid">
+                                    <label><span>Tag</span><input name="Form.Outbounds[@index].Tag" data-name-template="Form.Outbounds[__INDEX__].Tag" value="@outbound.Tag" placeholder="proxy" /></label>
+                                    <label>
+                                        <span>协议</span>
+                                        <select name="Form.Outbounds[@index].Protocol" data-name-template="Form.Outbounds[__INDEX__].Protocol">
+                                            @foreach (var option in outboundProtocolOptions)
+                                            {
+                                                <option value="@option" selected="@IsOptionSelected(outbound.Protocol, option)">@option</option>
+                                            }
+                                        </select>
+                                    </label>
+                                    <label><span>Via</span><input name="Form.Outbounds[@index].Via" data-name-template="Form.Outbounds[__INDEX__].Via" value="@outbound.Via" placeholder="eth0 / 192.0.2.10" /></label>
+                                    <label><span>Via CIDR</span><input name="Form.Outbounds[@index].ViaCidr" data-name-template="Form.Outbounds[__INDEX__].ViaCidr" value="@outbound.ViaCidr" placeholder="192.0.2.0/24" /></label>
+                                    <label>
+                                        <span>Target Strategy</span>
+                                        <select name="Form.Outbounds[@index].TargetStrategy" data-name-template="Form.Outbounds[__INDEX__].TargetStrategy">
+                                            @foreach (var option in outboundTargetStrategyOptions)
+                                            {
+                                                <option value="@option" selected="@IsOptionSelected(outbound.TargetStrategy, option)">@option</option>
+                                            }
+                                        </select>
+                                    </label>
+                                    <label><span>代理出站 Tag</span><input name="Form.Outbounds[@index].ProxyOutboundTag" data-name-template="Form.Outbounds[__INDEX__].ProxyOutboundTag" value="@outbound.ProxyOutboundTag" placeholder="upstream-proxy" /></label>
+                                </div>
+                                <div class="section-divider"></div>
+                                <div class="form-grid">
+                                    <label>
+                                        <span>传输</span>
+                                        <select name="Form.Outbounds[@index].Transport" data-name-template="Form.Outbounds[__INDEX__].Transport">
+                                            @foreach (var option in outboundTransportOptions)
+                                            {
+                                                <option value="@option" selected="@IsOptionSelected(outbound.Transport, option)">@option</option>
+                                            }
+                                        </select>
+                                    </label>
+                                    <label><span>远端主机</span><input name="Form.Outbounds[@index].ServerHost" data-name-template="Form.Outbounds[__INDEX__].ServerHost" value="@outbound.ServerHost" placeholder="edge.example.com" /></label>
+                                    <label><span>远端端口</span><input name="Form.Outbounds[@index].ServerPort" data-name-template="Form.Outbounds[__INDEX__].ServerPort" value="@outbound.ServerPort" /></label>
+                                    <label><span>SNI / ServerName</span><input name="Form.Outbounds[@index].ServerName" data-name-template="Form.Outbounds[__INDEX__].ServerName" value="@outbound.ServerName" placeholder="edge.example.com" /></label>
+                                    <label><span>应用层协议 (CSV)</span><input name="Form.Outbounds[@index].ApplicationProtocols" data-name-template="Form.Outbounds[__INDEX__].ApplicationProtocols" value="@outbound.ApplicationProtocols" placeholder="h2, http/1.1" /></label>
+                                    <label><span>密码</span><input name="Form.Outbounds[@index].Password" data-name-template="Form.Outbounds[__INDEX__].Password" value="@outbound.Password" /></label>
+                                    <label><span>连接超时(秒)</span><input name="Form.Outbounds[@index].ConnectTimeoutSeconds" data-name-template="Form.Outbounds[__INDEX__].ConnectTimeoutSeconds" value="@outbound.ConnectTimeoutSeconds" /></label>
+                                    <label><span>握手超时(秒)</span><input name="Form.Outbounds[@index].HandshakeTimeoutSeconds" data-name-template="Form.Outbounds[__INDEX__].HandshakeTimeoutSeconds" value="@outbound.HandshakeTimeoutSeconds" /></label>
+                                </div>
+                                <div class="section-divider"></div>
+                                <div class="form-grid">
+                                    <label><span>WS 路径</span><input name="Form.Outbounds[@index].WebSocketPath" data-name-template="Form.Outbounds[__INDEX__].WebSocketPath" value="@outbound.WebSocketPath" placeholder="/ws" /></label>
+                                    <label><span>WS Early Data 字节数</span><input name="Form.Outbounds[@index].WebSocketEarlyDataBytes" data-name-template="Form.Outbounds[__INDEX__].WebSocketEarlyDataBytes" value="@outbound.WebSocketEarlyDataBytes" /></label>
+                                    <label><span>WS 心跳周期(秒)</span><input name="Form.Outbounds[@index].WebSocketHeartbeatPeriodSeconds" data-name-template="Form.Outbounds[__INDEX__].WebSocketHeartbeatPeriodSeconds" value="@outbound.WebSocketHeartbeatPeriodSeconds" /></label>
+                                    <label><span>多路复用并发</span><input name="Form.Outbounds[@index].MultiplexConcurrency" data-name-template="Form.Outbounds[__INDEX__].MultiplexConcurrency" value="@outbound.MultiplexConcurrency" /></label>
+                                    <label><span>XUDP 并发</span><input name="Form.Outbounds[@index].MultiplexXudpConcurrency" data-name-template="Form.Outbounds[__INDEX__].MultiplexXudpConcurrency" value="@outbound.MultiplexXudpConcurrency" /></label>
+                                    <label>
+                                        <span>XUDP UDP/443</span>
+                                        <select name="Form.Outbounds[@index].MultiplexXudpProxyUdp443" data-name-template="Form.Outbounds[__INDEX__].MultiplexXudpProxyUdp443">
+                                            @foreach (var option in xudpProxyModes)
+                                            {
+                                                <option value="@option" selected="@IsOptionSelected(outbound.MultiplexXudpProxyUdp443, option)">@option</option>
+                                            }
+                                        </select>
+                                    </label>
+                                </div>
+                                <label>
+                                    <span>WS 请求头</span>
+                                    <textarea name="Form.Outbounds[@index].WebSocketHeadersText" data-name-template="Form.Outbounds[__INDEX__].WebSocketHeadersText" rows="5" placeholder="Host=edge.example.com&#10;X-Node=panel">@outbound.WebSocketHeadersText</textarea>
+                                    <small class="muted mono">每行一个 KEY=VALUE。</small>
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <h4 class="advanced-panel">路由规则</h4>
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>Routing Rules</h5>
+                        <p class="muted">补齐后台路由匹配条件和目标出站。</p>
+                    </div>
+                    <button type="button" class="button button--small" data-add-collection="routing-rule-list" data-template-id="routing-rule-template">新增规则</button>
+                </div>
+                <div id="routing-rule-list" class="config-collection" data-collection>
+                    @for (var index = 0; index < Model.Form.RoutingRules.Count; index++)
+                    {
+                        var rule = Model.Form.RoutingRules[index];
+                        <div class="config-collection__item" data-collection-item>
+                            <div class="config-collection__header">
+                                <strong>规则 <span data-item-number>@(index + 1)</span></strong>
+                                <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+                            </div>
+                            <div class="toggle-grid">
+                                <div class="checkbox-field">
+                                    <span>启用</span>
+                                    <label class="switch">
+                                        <input type="checkbox" name="Form.RoutingRules[@index].Enabled" data-name-template="Form.RoutingRules[__INDEX__].Enabled" value="true" checked="@rule.Enabled" />
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-grid">
+                                <label><span>入站 Tags (CSV)</span><input name="Form.RoutingRules[@index].InboundTags" data-name-template="Form.RoutingRules[__INDEX__].InboundTags" value="@rule.InboundTags" placeholder="trojan-tcp-tls, trojan-wss" /></label>
+                                <label><span>协议 (CSV)</span><input name="Form.RoutingRules[@index].Protocols" data-name-template="Form.RoutingRules[__INDEX__].Protocols" value="@rule.Protocols" placeholder="http, tls, bittorrent" /></label>
+                                <label><span>网络 (CSV)</span><input name="Form.RoutingRules[@index].Networks" data-name-template="Form.RoutingRules[__INDEX__].Networks" value="@rule.Networks" placeholder="tcp, udp" /></label>
+                                <label><span>用户 ID (CSV)</span><input name="Form.RoutingRules[@index].UserIds" data-name-template="Form.RoutingRules[__INDEX__].UserIds" value="@rule.UserIds" placeholder="user-a, user-b" /></label>
+                                <label><span>域名 (CSV)</span><input name="Form.RoutingRules[@index].Domains" data-name-template="Form.RoutingRules[__INDEX__].Domains" value="@rule.Domains" placeholder="example.com, geosite:cn" /></label>
+                                <label><span>源 CIDR (CSV)</span><input name="Form.RoutingRules[@index].SourceCidrs" data-name-template="Form.RoutingRules[__INDEX__].SourceCidrs" value="@rule.SourceCidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" /></label>
+                                <label><span>目标端口 (CSV)</span><input name="Form.RoutingRules[@index].DestinationPorts" data-name-template="Form.RoutingRules[__INDEX__].DestinationPorts" value="@rule.DestinationPorts" placeholder="80,443,10000-20000" /></label>
+                                <label><span>目标出站 Tag</span><input name="Form.RoutingRules[@index].OutboundTag" data-name-template="Form.RoutingRules[__INDEX__].OutboundTag" value="@rule.OutboundTag" placeholder="proxy" /></label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <details class="advanced-toggle">
+                <summary>高级兼容设置</summary>
+                <div class="advanced-toggle__body">
+                    <p class="muted compact-note">这里保留给历史配置或特殊节点使用。日常节点只需要上面的协议、接入方式、域名和证书配置。</p>
+                    <label>
+                        <span>高级 JSON</span>
+                        <textarea asp-for="Form.AdvancedConfigJson" rows="12" placeholder="{ }"></textarea>
+                        <small class="muted mono">仅用于兼容历史配置或临时补充尚未拆分的新字段。表单中已拆分的同名字段优先。</small>
+                        <span asp-validation-for="Form.AdvancedConfigJson" class="text-danger"></span>
+                    </label>
+                </div>
+            </details>
+
+            <div class="page-actions">
+                <button type="submit" class="button button--primary">保存节点</button>
+            </div>
+        </form>
+    </section>
+</div>
+
+<template id="tls-fallback-template">
+    <div class="config-collection__item" data-collection-item>
+        <div class="config-collection__header">
+            <strong>Fallback <span data-item-number></span></strong>
+            <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+        </div>
+        <div class="form-grid">
+            <label><span>Name</span><input data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Name" /></label>
+            <label><span>ALPN</span><input data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Alpn" /></label>
+            <label><span>Path</span><input data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Path" /></label>
+            <label>
+                <span>Type</span>
+                <select data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Type">
+                    @foreach (var option in fallbackTypeOptions)
+                    {
+                        <option value="@option" selected="@(option == "tcp")">@option</option>
+                    }
+                </select>
+            </label>
+            <label><span>Destination</span><input data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].Dest" placeholder="127.0.0.1:9000 / /run/app.sock / serve-ws-none" /></label>
+            <label>
+                <span>Proxy Protocol 版本</span>
+                <select data-name-template="Form.Inbounds[0].Fallbacks[__INDEX__].ProxyProtocolVersion">
+                    <option value="0" selected="true">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                </select>
+            </label>
+        </div>
+    </div>
+</template>
+
+<template id="wss-fallback-template">
+    <div class="config-collection__item" data-collection-item>
+        <div class="config-collection__header">
+            <strong>Fallback <span data-item-number></span></strong>
+            <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+        </div>
+        <div class="form-grid">
+            <label><span>Name</span><input data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Name" /></label>
+            <label><span>ALPN</span><input data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Alpn" /></label>
+            <label><span>Path</span><input data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Path" /></label>
+            <label>
+                <span>Type</span>
+                <select data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Type">
+                    @foreach (var option in fallbackTypeOptions)
+                    {
+                        <option value="@option" selected="@(option == "tcp")">@option</option>
+                    }
+                </select>
+            </label>
+            <label><span>Destination</span><input data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].Dest" placeholder="127.0.0.1:9000 / /run/app.sock / serve-ws-none" /></label>
+            <label>
+                <span>Proxy Protocol 版本</span>
+                <select data-name-template="Form.Inbounds[1].Fallbacks[__INDEX__].ProxyProtocolVersion">
+                    <option value="0" selected="true">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                </select>
+            </label>
+        </div>
+    </div>
+</template>
+
+<template id="dns-server-template">
+    <div class="config-collection__item" data-collection-item>
+        <div class="config-collection__header">
+            <strong>DNS 服务器 <span data-item-number></span></strong>
+            <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+        </div>
+        <div class="form-grid">
+            <label><span>URL</span><input data-name-template="Form.Dns.Servers[__INDEX__].Url" placeholder="https://dns.example/dns-query" /></label>
+        </div>
+        <label>
+            <span>请求头</span>
+            <textarea data-name-template="Form.Dns.Servers[__INDEX__].HeadersText" rows="5" placeholder="Authorization=Bearer demo-token&#10;X-Node=panel"></textarea>
+            <small class="muted mono">每行一个 KEY=VALUE。</small>
+        </label>
+    </div>
+</template>
+
+<template id="outbound-template">
+    <div class="config-collection__item" data-collection-item>
+        <div class="config-collection__header">
+            <strong>出站 <span data-item-number></span></strong>
+            <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+        </div>
+        <div class="toggle-grid">
+            <div class="checkbox-field">
+                <span>启用</span>
+                <label class="switch">
+                    <input type="checkbox" data-name-template="Form.Outbounds[__INDEX__].Enabled" value="true" checked="true" />
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+            <div class="checkbox-field">
+                <span>启用多路复用</span>
+                <label class="switch">
+                    <input type="checkbox" data-name-template="Form.Outbounds[__INDEX__].MultiplexEnabled" value="true" />
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+            <div class="checkbox-field">
+                <span>跳过证书校验</span>
+                <label class="switch">
+                    <input type="checkbox" data-name-template="Form.Outbounds[__INDEX__].SkipCertificateValidation" value="true" />
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="config-subgrid">
+            <div class="form-grid">
+                <label><span>Tag</span><input data-name-template="Form.Outbounds[__INDEX__].Tag" placeholder="proxy" /></label>
+                <label>
+                    <span>协议</span>
+                    <select data-name-template="Form.Outbounds[__INDEX__].Protocol">
+                        @foreach (var option in outboundProtocolOptions)
+                        {
+                            <option value="@option" selected="@(option == OutboundProtocols.Freedom)">@option</option>
+                        }
+                    </select>
+                </label>
+                <label><span>Via</span><input data-name-template="Form.Outbounds[__INDEX__].Via" placeholder="eth0 / 192.0.2.10" /></label>
+                <label><span>Via CIDR</span><input data-name-template="Form.Outbounds[__INDEX__].ViaCidr" placeholder="192.0.2.0/24" /></label>
+                <label>
+                    <span>Target Strategy</span>
+                    <select data-name-template="Form.Outbounds[__INDEX__].TargetStrategy">
+                        @foreach (var option in outboundTargetStrategyOptions)
+                        {
+                            <option value="@option" selected="@(option == OutboundTargetStrategies.AsIs)">@option</option>
+                        }
+                    </select>
+                </label>
+                <label><span>代理出站 Tag</span><input data-name-template="Form.Outbounds[__INDEX__].ProxyOutboundTag" placeholder="upstream-proxy" /></label>
+            </div>
+            <div class="section-divider"></div>
+            <div class="form-grid">
+                <label>
+                    <span>传输</span>
+                    <select data-name-template="Form.Outbounds[__INDEX__].Transport">
+                        @foreach (var option in outboundTransportOptions)
+                        {
+                            <option value="@option" selected="@(option == TrojanOutboundTransports.Tls)">@option</option>
+                        }
+                    </select>
+                </label>
+                <label><span>远端主机</span><input data-name-template="Form.Outbounds[__INDEX__].ServerHost" placeholder="edge.example.com" /></label>
+                <label><span>远端端口</span><input data-name-template="Form.Outbounds[__INDEX__].ServerPort" value="443" /></label>
+                <label><span>SNI / ServerName</span><input data-name-template="Form.Outbounds[__INDEX__].ServerName" placeholder="edge.example.com" /></label>
+                <label><span>应用层协议 (CSV)</span><input data-name-template="Form.Outbounds[__INDEX__].ApplicationProtocols" placeholder="h2, http/1.1" /></label>
+                <label><span>密码</span><input data-name-template="Form.Outbounds[__INDEX__].Password" /></label>
+                <label><span>连接超时(秒)</span><input data-name-template="Form.Outbounds[__INDEX__].ConnectTimeoutSeconds" value="0" /></label>
+                <label><span>握手超时(秒)</span><input data-name-template="Form.Outbounds[__INDEX__].HandshakeTimeoutSeconds" value="0" /></label>
+            </div>
+            <div class="section-divider"></div>
+            <div class="form-grid">
+                <label><span>WS 路径</span><input data-name-template="Form.Outbounds[__INDEX__].WebSocketPath" placeholder="/ws" /></label>
+                <label><span>WS Early Data 字节数</span><input data-name-template="Form.Outbounds[__INDEX__].WebSocketEarlyDataBytes" value="0" /></label>
+                <label><span>WS 心跳周期(秒)</span><input data-name-template="Form.Outbounds[__INDEX__].WebSocketHeartbeatPeriodSeconds" value="0" /></label>
+                <label><span>多路复用并发</span><input data-name-template="Form.Outbounds[__INDEX__].MultiplexConcurrency" value="0" /></label>
+                <label><span>XUDP 并发</span><input data-name-template="Form.Outbounds[__INDEX__].MultiplexXudpConcurrency" value="0" /></label>
+                <label>
+                    <span>XUDP UDP/443</span>
+                    <select data-name-template="Form.Outbounds[__INDEX__].MultiplexXudpProxyUdp443">
+                        @foreach (var option in xudpProxyModes)
+                        {
+                            <option value="@option" selected="@(option == OutboundXudpProxyModes.Reject)">@option</option>
+                        }
+                    </select>
+                </label>
+            </div>
+            <label>
+                <span>WS 请求头</span>
+                <textarea data-name-template="Form.Outbounds[__INDEX__].WebSocketHeadersText" rows="5" placeholder="Host=edge.example.com&#10;X-Node=panel"></textarea>
+                <small class="muted mono">每行一个 KEY=VALUE。</small>
+            </label>
+        </div>
+    </div>
+</template>
+
+<template id="routing-rule-template">
+    <div class="config-collection__item" data-collection-item>
+        <div class="config-collection__header">
+            <strong>规则 <span data-item-number></span></strong>
+            <button type="button" class="button button--small" data-remove-collection-item>移除</button>
+        </div>
+        <div class="toggle-grid">
+            <div class="checkbox-field">
+                <span>启用</span>
+                <label class="switch">
+                    <input type="checkbox" data-name-template="Form.RoutingRules[__INDEX__].Enabled" value="true" checked="true" />
+                    <span class="switch-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="form-grid">
+            <label><span>入站 Tags (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].InboundTags" placeholder="trojan-tcp-tls, trojan-wss" /></label>
+            <label><span>协议 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Protocols" placeholder="http, tls, bittorrent" /></label>
+            <label><span>网络 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Networks" placeholder="tcp, udp" /></label>
+            <label><span>用户 ID (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].UserIds" placeholder="user-a, user-b" /></label>
+            <label><span>域名 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Domains" placeholder="example.com, geosite:cn" /></label>
+            <label><span>源 CIDR (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].SourceCidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" /></label>
+            <label><span>目标端口 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].DestinationPorts" placeholder="80,443,10000-20000" /></label>
+            <label><span>目标出站 Tag</span><input data-name-template="Form.RoutingRules[__INDEX__].OutboundTag" placeholder="proxy" /></label>
+        </div>
+    </div>
+</template>
+<script>
+    function toggleNodeGroupDropdown(event) {
+        if (event) {
+            event.stopPropagation();
+        }
+
+        const dropdown = document.getElementById('nodeGroupDropdown');
+        if (dropdown) {
+            dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+        }
+    }
+
+    function updateNodeGroupIds() {
+        const checkboxes = document.querySelectorAll('.node-group-checkbox:checked');
+        const ids = Array.from(checkboxes).map((checkbox) => checkbox.value).join(',');
+        const names = Array.from(checkboxes).map((checkbox) => checkbox.getAttribute('data-name')).join(', ');
+        
+        const hiddenInput = document.getElementById('nodeGroupIdsHidden');
+        if (hiddenInput) {
+            hiddenInput.value = ids;
+        }
+        
+        const textSpan = document.getElementById('nodeGroupSelectedText');
+        if (textSpan) {
+            textSpan.textContent = names || '点击选择权限组...';
+        }
+    }
+
+    function reindexCollection(container) {
+        if (!container) {
+            return;
+        }
+
+        const items = container.querySelectorAll('[data-collection-item]');
+        items.forEach((item, index) => {
+            item.querySelectorAll('[data-name-template]').forEach((field) => {
+                const template = field.getAttribute('data-name-template');
+                if (template) {
+                    field.name = template.replace(/__INDEX__/g, index);
+                }
+            });
+
+            item.querySelectorAll('[data-item-number]').forEach((label) => {
+                label.textContent = String(index + 1);
+            });
+        });
+    }
+
+    function addCollectionItem(containerId, templateId) {
+        const container = document.getElementById(containerId);
+        const template = document.getElementById(templateId);
+        if (!container || !template || !('content' in template)) {
+            return;
+        }
+
+        container.appendChild(template.content.cloneNode(true));
+        reindexCollection(container);
+    }
+
+    function readBooleanInputValue(input) {
+        return !!input && String(input.value).toLowerCase() === 'true';
+    }
+
+    function toggleElements(selector, shouldShow, displayValue = 'block') {
+        document.querySelectorAll(selector).forEach((element) => {
+            element.style.display = shouldShow ? displayValue : 'none';
+        });
+    }
+
+    function updateTransportMode() {
+        const transportMode = document.getElementById('transportMode');
+        const tlsPanel = document.getElementById('tls-panel');
+        const wssPanel = document.getElementById('wss-panel');
+        const tlsEnabledInput = document.getElementById('tlsEnabledInput');
+        const wssEnabledInput = document.getElementById('wssEnabledInput');
+        if (!transportMode || !tlsPanel || !wssPanel || !tlsEnabledInput || !wssEnabledInput) {
+            return;
+        }
+
+        const mode = transportMode.value;
+        const enableTls = mode === 'tls' || mode === 'both';
+        const enableWss = mode === 'wss' || mode === 'both';
+        tlsEnabledInput.value = enableTls ? 'true' : 'false';
+        wssEnabledInput.value = enableWss ? 'true' : 'false';
+        tlsPanel.classList.toggle('is-hidden', !enableTls);
+        wssPanel.classList.toggle('is-hidden', !enableWss);
+    }
+
+    function syncPrimaryDomain() {
+        const primaryDomainInput = document.getElementById('primaryDomainInput');
+        const wssHostInput = document.getElementById('wssHostInput');
+        if (!primaryDomainInput || !wssHostInput) {
+            return;
+        }
+
+        if (!primaryDomainInput.value.trim() && wssHostInput.value.trim()) {
+            primaryDomainInput.value = wssHostInput.value.trim();
+        }
+
+        wssHostInput.value = primaryDomainInput.value.trim();
+    }
+
+    function syncPanelCertificateDomain(force) {
+        const certificateModeInput = document.getElementById('certificateModeInput');
+        const panelCertificateInput = document.getElementById('Form_PanelCertificateId');
+        const primaryDomainInput = document.getElementById('primaryDomainInput');
+        if (!certificateModeInput || !panelCertificateInput || !primaryDomainInput) {
+            return;
+        }
+
+        if (certificateModeInput.value !== 'panel-distributed') {
+            return;
+        }
+
+        const selectedOption = panelCertificateInput.options[panelCertificateInput.selectedIndex];
+        const selectedDomain = selectedOption?.dataset?.domain?.trim() ?? '';
+        if (!selectedDomain) {
+            return;
+        }
+
+        if (force || !primaryDomainInput.value.trim()) {
+            primaryDomainInput.value = selectedDomain;
+        }
+
+        syncPrimaryDomain();
+    }
+
+    function getDefaultCertificateMode() {
+        const panelCertificateInput = document.getElementById('Form_PanelCertificateId');
+        if (panelCertificateInput && panelCertificateInput.options.length > 1) {
+            return 'panel-distributed';
+        }
+
+        return 'acme-managed';
+    }
+
+    function syncCertificateModeUi() {
+        const certificateModeInput = document.getElementById('certificateModeInput');
+        const certificateCompatMode = document.getElementById('certificateCompatMode');
+        const presetInputs = Array.from(document.querySelectorAll('[name="certificateModePreset"]'));
+        if (!certificateModeInput) {
+            return;
+        }
+
+        const mode = certificateModeInput.value.trim();
+        const isPresetMode = presetInputs.some((input) => input.value === mode);
+
+        presetInputs.forEach((input) => {
+            input.checked = input.value === mode;
+        });
+
+        document.querySelectorAll('[data-certificate-mode-option]').forEach((element) => {
+            element.classList.toggle('is-active', element.getAttribute('data-certificate-mode-option') === mode);
+        });
+
+        if (!certificateCompatMode) {
+            return;
+        }
+
+        if (isPresetMode) {
+            certificateCompatMode.value = '';
+            return;
+        }
+
+        const matchedOption = Array.from(certificateCompatMode.options).some((option) => option.value === mode);
+        certificateCompatMode.value = matchedOption ? mode : '';
+    }
+
+    function setCertificateMode(mode) {
+        const certificateModeInput = document.getElementById('certificateModeInput');
+        if (!certificateModeInput) {
+            return;
+        }
+
+        certificateModeInput.value = (mode ?? '').trim() || getDefaultCertificateMode();
+        updateCertificateModeVisibility();
+        syncCertificateModeUi();
+    }
+
+    function updateCertificateModeVisibility() {
+        const certificateModeInput = document.getElementById('certificateModeInput');
+        const certificateChallengeInput = document.getElementById('Form_CertificateChallengeType');
+        if (!certificateModeInput) {
+            return;
+        }
+
+        const mode = certificateModeInput.value;
+        toggleElements('.cert-manual-field', mode === 'manual-pfx');
+        toggleElements('.cert-acme-field', mode === 'acme-managed');
+        toggleElements('.cert-panel-field', mode === 'panel-distributed');
+        toggleElements('.cert-external-field', mode === 'acme-external');
+
+        if (certificateChallengeInput && mode === 'acme-managed') {
+            certificateChallengeInput.value = 'http-01';
+        }
+
+        if (mode === 'panel-distributed') {
+            syncPanelCertificateDomain(false);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        updateNodeGroupIds();
+        document.querySelectorAll('[data-collection]').forEach((container) => reindexCollection(container));
+
+        const transportMode = document.getElementById('transportMode');
+        const tlsEnabledInput = document.getElementById('tlsEnabledInput');
+        const wssEnabledInput = document.getElementById('wssEnabledInput');
+        if (transportMode && tlsEnabledInput && wssEnabledInput) {
+            if (readBooleanInputValue(tlsEnabledInput) && readBooleanInputValue(wssEnabledInput)) {
+                transportMode.value = 'both';
+            }
+            else if (readBooleanInputValue(wssEnabledInput)) {
+                transportMode.value = 'wss';
+            }
+            else {
+                transportMode.value = 'tls';
+            }
+
+            transportMode.addEventListener('change', updateTransportMode);
+            updateTransportMode();
+        }
+
+        const certificateModeInput = document.getElementById('certificateModeInput');
+        const certificateCompatMode = document.getElementById('certificateCompatMode');
+        if (certificateModeInput) {
+            const presetInputs = document.querySelectorAll('[name="certificateModePreset"]');
+
+            certificateModeInput.addEventListener('change', () => {
+                updateCertificateModeVisibility();
+                syncCertificateModeUi();
+            });
+
+            presetInputs.forEach((input) => {
+                input.addEventListener('change', () => {
+                    if (input.checked) {
+                        setCertificateMode(input.value);
+                    }
+                });
+            });
+
+            if (certificateCompatMode) {
+                certificateCompatMode.addEventListener('change', () => {
+                    setCertificateMode(certificateCompatMode.value);
+                });
+            }
+
+            if (!certificateModeInput.value.trim()) {
+                setCertificateMode(getDefaultCertificateMode());
+            }
+            else {
+                syncCertificateModeUi();
+                updateCertificateModeVisibility();
+            }
+        }
+
+        const primaryDomainInput = document.getElementById('primaryDomainInput');
+        if (primaryDomainInput) {
+            primaryDomainInput.addEventListener('input', syncPrimaryDomain);
+            syncPrimaryDomain();
+        }
+
+        const panelCertificateInput = document.getElementById('Form_PanelCertificateId');
+        if (panelCertificateInput) {
+            panelCertificateInput.addEventListener('change', () => syncPanelCertificateDomain(true));
+            syncPanelCertificateDomain(false);
+        }
+
+        document.addEventListener('click', (event) => {
+            const addButton = event.target.closest('[data-add-collection]');
+            if (addButton) {
+                addCollectionItem(addButton.getAttribute('data-add-collection'), addButton.getAttribute('data-template-id'));
+                return;
+            }
+
+            const removeButton = event.target.closest('[data-remove-collection-item]');
+            if (removeButton) {
+                const item = removeButton.closest('[data-collection-item]');
+                const container = item ? item.closest('[data-collection]') : null;
+                if (item) {
+                    item.remove();
+                }
+
+                if (container) {
+                    reindexCollection(container);
+                }
+                return;
+            }
+
+            const wrapper = document.querySelector('.custom-select-wrapper');
+            const dropdown = document.getElementById('nodeGroupDropdown');
+            if (wrapper && dropdown && !wrapper.contains(event.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+    });
+</script>

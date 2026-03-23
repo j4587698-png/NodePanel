@@ -1,0 +1,154 @@
+@model CertificateListPageViewModel
+@{
+    ViewData["Title"] = "证书管理";
+    var returnUrl = Url.Action("Certificates", "Dashboard") ?? "/admin/certificates";
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Certificates</p>
+        <h2>证书管理</h2>
+        <p class="muted">这里统一处理 Panel 自身 HTTPS 和节点分发证书。`http-01` 适合域名直接指向面板，`dns-01` 适合泛域名和统一下发。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button button--primary" asp-action="NewCertificate">新建证书</a>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<div class="grid grid--two">
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Panel HTTPS</p>
+                <h3>面板 HTTPS</h3>
+            </div>
+        </div>
+        <form asp-action="SavePanelHttpsSettings" method="post" class="form">
+            @Html.AntiForgeryToken()
+            <div asp-validation-summary="ModelOnly" class="error-box"></div>
+            <div class="form-grid">
+                <div class="checkbox-field">
+                    <span>启用 HTTPS</span>
+                    <label class="switch">
+                        <input asp-for="PanelHttps.Enabled" type="checkbox" />
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+                <label>
+                    <span>证书</span>
+                    <select asp-for="PanelHttps.CertificateId">
+                        <option value="">请选择</option>
+                        @foreach (var certificate in Model.Certificates)
+                        {
+                            <option value="@certificate.Definition.CertificateId">@certificate.Definition.DisplayName (@certificate.Definition.Domain)</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>监听地址</span>
+                    <input asp-for="PanelHttps.ListenAddress" />
+                </label>
+                <label>
+                    <span>监听端口</span>
+                    <input asp-for="PanelHttps.Port" />
+                </label>
+                <div class="checkbox-field">
+                    <span>HTTP 跳转 HTTPS</span>
+                    <label class="switch">
+                        <input asp-for="PanelHttps.RedirectHttpToHttps" type="checkbox" />
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="page-actions">
+                <button type="submit" class="button button--primary">保存 HTTPS 设置</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Notes</p>
+                <h3>使用说明</h3>
+            </div>
+        </div>
+        <div class="form">
+            <p class="muted">节点 `acme-managed` 继续由节点自己跑 `http-01`。</p>
+            <p class="muted">节点 `panel-distributed` 只消费面板下发的 PFX，续签后会自动重新推送快照。</p>
+            <p class="muted">泛域名请使用 `dns-01`，并在证书配置里填写 DNS hook 命令。</p>
+            <p class="muted">Panel HTTPS 的证书切换可热更新；首次启用或修改监听地址和端口仍需要重启进程。</p>
+        </div>
+    </section>
+</div>
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Catalog</p>
+            <h3>证书列表</h3>
+        </div>
+        <span class="metric">@Model.Certificates.Count</span>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>证书</th>
+                    <th>Challenge</th>
+                    <th>有效期</th>
+                    <th>绑定</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var certificate in Model.Certificates)
+            {
+                var definition = certificate.Definition;
+                <tr>
+                    <td>
+                        <strong>@definition.DisplayName</strong>
+                        <div class="muted mono">@definition.CertificateId</div>
+                        <div class="muted">@definition.Domain</div>
+                        @if (definition.AltNames.Count > 0)
+                        {
+                            <div class="muted">SAN: @string.Join(", ", definition.AltNames)</div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(definition.LastError))
+                        {
+                            <div class="inline-alert inline-alert--error">@definition.LastError</div>
+                        }
+                    </td>
+                    <td>
+                        <div>@definition.ChallengeType</div>
+                        <div class="muted">检查间隔 @definition.CheckIntervalMinutes 分钟</div>
+                        <div class="muted">提前 @definition.RenewBeforeDays 天续签</div>
+                    </td>
+                    <td>
+                        <div>@((definition.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "未签发")</div>
+                        <div class="muted">上次成功 @((definition.LastSuccessAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</div>
+                        <div class="muted mono">@definition.Thumbprint</div>
+                    </td>
+                    <td>
+                        <div>节点数: @certificate.BoundNodeCount</div>
+                        <div class="muted">Panel HTTPS: @(certificate.UsedByPanelHttps ? "是" : "否")</div>
+                    </td>
+                    <td class="table-actions">
+                        <form asp-action="RenewCertificate" asp-route-certificateId="@definition.CertificateId" method="post" class="inline-form">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="returnUrl" value="@returnUrl" />
+                            <button type="submit" class="button button--small">签发/续签</button>
+                        </form>
+                        <a class="button button--small" asp-action="Certificate" asp-route-certificateId="@definition.CertificateId">编辑</a>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>

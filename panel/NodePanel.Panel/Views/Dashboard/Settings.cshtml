@@ -1,0 +1,83 @@
+@using NodePanel.Panel.Models
+@model DashboardPageViewModel
+@{
+    ViewData["Title"] = "系统设置";
+    var s = Model.State.Settings;
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Settings</p>
+        <h2>系统设置</h2>
+        <p class="muted">配置面板的全局参数，如网站名称、支付网关以及门户默认公告。</p>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">General</p>
+            <h3>基础设置</h3>
+        </div>
+    </div>
+    <form asp-action="SaveSettings" method="post" class="form">
+        @Html.AntiForgeryToken()
+
+        <div class="form-grid">
+            <label>
+                <span>网站名称</span>
+                <input name="settings[site_name]" value="@s.GetValueOrDefault("site_name")" placeholder="例如：NodePanel" />
+            </label>
+            <label>
+                <span>网站货币符号</span>
+                <input name="settings[currency_symbol]" value="@s.GetValueOrDefault("currency_symbol")" placeholder="例如：¥" />
+            </label>
+            <label class="form-grid__span-2">
+                <span>门户默认公告 (支持基础 HTML)</span>
+                <textarea name="settings[portal_notice]" rows="4" placeholder="用户登录门户时默认看到的公告信息...">@s.GetValueOrDefault("portal_notice")</textarea>
+            </label>
+        </div>
+
+        <div style="margin-top: 2rem;">
+            <p class="eyebrow" style="margin-bottom: 1rem;">Payment Gateway</p>
+            <div class="form-grid">
+                <label>
+                    <span>支付网关开关</span>
+                    <select name="settings[payment_enabled]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        @if (s.GetValueOrDefault("payment_enabled") == "true")
+                        {
+                            <option value="true" selected>启用</option>
+                            <option value="false">禁用</option>
+                        }
+                        else
+                        {
+                            <option value="true">启用</option>
+                            <option value="false" selected>禁用</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>Epay 易支付网关地址 (需带 /submit.php)</span>
+                    <input name="settings[epay_apiurl]" value="@s.GetValueOrDefault("epay_apiurl")" placeholder="https://pay.example.com/" />
+                </label>
+                <label>
+                    <span>Epay 商户 ID (PID)</span>
+                    <input name="settings[epay_pid]" value="@s.GetValueOrDefault("epay_pid")" placeholder="例如：10001" />
+                </label>
+                <label class="form-grid__span-2">
+                    <span>Epay 商户通信密钥 (Secret Key)</span>
+                    <input name="settings[epay_key]" value="@s.GetValueOrDefault("epay_key")" placeholder="后台申请的通信密钥" />
+                </label>
+            </div>
+        </div>
+
+        <div class="page-actions" style="margin-top: 2rem;">
+            <button type="submit" class="button button--primary">保存所有设置</button>
+        </div>
+    </form>
+</section>

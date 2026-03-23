@@ -1,0 +1,28 @@
+@model PanelRestartingViewModel
+@{
+    ViewData["Title"] = Model.Title;
+}
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Restarting</p>
+        <h2>@Model.Title</h2>
+        <p class="muted">@Model.Message</p>
+    </div>
+</section>
+
+<section class="card">
+    <div class="form">
+        <p class="muted">如果页面没有自动恢复，可以手动打开下面的地址。</p>
+        <p><a class="button button--primary" href="@Model.RedirectUrl">返回证书页面</a></p>
+    </div>
+</section>
+
+@section Scripts {
+<script>
+    const redirectUrl = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.RedirectUrl));
+    setTimeout(() => {
+        window.location.href = redirectUrl;
+    }, 4000);
+</script>
+}
