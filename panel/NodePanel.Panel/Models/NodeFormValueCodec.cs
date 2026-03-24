@@ -4,15 +4,15 @@ namespace NodePanel.Panel.Models;
 
 internal static class NodeFormValueCodec
 {
-    public static IReadOnlyList<string> ParseCsv(string value)
-        => value
+    public static IReadOnlyList<string> ParseCsv(string? value)
+        => (value ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(static item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    public static string JoinCsv(IEnumerable<string> values)
-        => string.Join(", ", values.Where(static value => !string.IsNullOrWhiteSpace(value)));
+    public static string JoinCsv(IEnumerable<string>? values)
+        => string.Join(", ", (values ?? Array.Empty<string>()).Where(static value => !string.IsNullOrWhiteSpace(value)));
 
     public static bool TryParseEnvironmentVariables(
         string value,

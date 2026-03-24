@@ -458,9 +458,8 @@ public sealed class NodeFormInput
             .Select(static rule => rule.ToConfig())
             .ToArray();
 
-    private static IReadOnlyList<int> ParseGroupIds(string value)
-        => value
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    private static IReadOnlyList<int> ParseGroupIds(string? value)
+        => NodeFormValueCodec.ParseCsv(value)
             .Select(static item => int.TryParse(item, out var groupId) ? groupId : 0)
             .Where(static groupId => groupId > 0)
             .Distinct()
