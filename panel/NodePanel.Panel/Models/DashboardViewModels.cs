@@ -222,27 +222,27 @@ public sealed class NodeFormInput
                 Certificate = new CertificateOptions
                 {
                     Mode = normalizedCertificateMode,
-                    PfxPath = CertificatePfxPath.Trim(),
-                    PfxPassword = CertificatePfxPassword.Trim(),
+                    PfxPath = NodeFormValueCodec.TrimOrEmpty(CertificatePfxPath),
+                    PfxPassword = NodeFormValueCodec.TrimOrEmpty(CertificatePfxPassword),
                     PanelCertificateId = normalizedCertificateMode == CertificateModes.PanelDistributed
-                        ? PanelCertificateId.Trim()
+                        ? NodeFormValueCodec.TrimOrEmpty(PanelCertificateId)
                         : string.Empty,
-                    Domain = CertificateDomain.Trim(),
+                    Domain = NodeFormValueCodec.TrimOrEmpty(CertificateDomain),
                     AltNames = NodeFormValueCodec.ParseCsv(CertificateAltNames),
-                    Email = CertificateEmail.Trim(),
-                    AcmeDirectoryUrl = CertificateAcmeDirectoryUrl.Trim(),
+                    Email = NodeFormValueCodec.TrimOrEmpty(CertificateEmail),
+                    AcmeDirectoryUrl = NodeFormValueCodec.TrimOrEmpty(CertificateAcmeDirectoryUrl),
                     ChallengeType = CertificateChallengeType,
                     RenewBeforeDays = CertificateRenewBeforeDays,
                     CheckIntervalMinutes = CertificateCheckIntervalMinutes,
-                    HttpChallengeListenAddress = CertificateHttpChallengeListenAddress.Trim(),
+                    HttpChallengeListenAddress = NodeFormValueCodec.TrimOrEmpty(CertificateHttpChallengeListenAddress),
                     HttpChallengePort = CertificateHttpChallengePort,
                     ExternalTimeoutSeconds = CertificateExternalTimeoutSeconds,
                     RejectUnknownSni = CertificateRejectUnknownSni,
                     ClientHelloPolicy = CertificateClientHelloPolicy.ToConfig(),
                     UseStaging = CertificateUseStaging,
-                    ExternalToolPath = CertificateExternalToolPath.Trim(),
-                    ExternalArguments = CertificateExternalArguments.Trim(),
-                    WorkingDirectory = CertificateWorkingDirectory.Trim(),
+                    ExternalToolPath = NodeFormValueCodec.TrimOrEmpty(CertificateExternalToolPath),
+                    ExternalArguments = NodeFormValueCodec.TrimOrEmpty(CertificateExternalArguments),
+                    WorkingDirectory = NodeFormValueCodec.TrimOrEmpty(CertificateWorkingDirectory),
                     EnvironmentVariables = environmentVariables
                 },
                 Limits = new TrojanInboundLimits
@@ -263,13 +263,13 @@ public sealed class NodeFormInput
 
         request = new UpsertNodeRequest
         {
-            DisplayName = DisplayName.Trim(),
+            DisplayName = NodeFormValueCodec.TrimOrEmpty(DisplayName),
             Protocol = Protocol,
             GroupIds = ParseGroupIds(GroupIds),
             TrafficMultiplier = TrafficMultiplier,
             Enabled = Enabled,
-            SubscriptionHost = SubscriptionHost.Trim(),
-            SubscriptionSni = SubscriptionSni.Trim(),
+            SubscriptionHost = NodeFormValueCodec.TrimOrEmpty(SubscriptionHost),
+            SubscriptionSni = NodeFormValueCodec.TrimOrEmpty(SubscriptionSni),
             SubscriptionAllowInsecure = SubscriptionAllowInsecure,
             Config = config
         };
@@ -936,12 +936,12 @@ public sealed class TrojanInboundFormInput
             Enabled = Enabled,
             Protocol = InboundProtocols.Normalize(Protocol),
             Transport = normalizedTransport,
-            ListenAddress = ListenAddress.Trim(),
+            ListenAddress = NodeFormValueCodec.TrimOrEmpty(ListenAddress),
             Port = Port,
             HandshakeTimeoutSeconds = HandshakeTimeoutSeconds,
             AcceptProxyProtocol = AcceptProxyProtocol,
-            Host = normalizedTransport == InboundTransports.Wss ? Host.Trim() : string.Empty,
-            Path = normalizedTransport == InboundTransports.Wss ? Path.Trim() : string.Empty,
+            Host = normalizedTransport == InboundTransports.Wss ? NodeFormValueCodec.TrimOrEmpty(Host) : string.Empty,
+            Path = normalizedTransport == InboundTransports.Wss ? NodeFormValueCodec.TrimOrEmpty(Path) : string.Empty,
             EarlyDataBytes = normalizedTransport == InboundTransports.Wss ? Math.Max(0, EarlyDataBytes) : 0,
             HeartbeatPeriodSeconds = normalizedTransport == InboundTransports.Wss ? Math.Max(0, HeartbeatPeriodSeconds) : 0,
             ApplicationProtocols = NodeFormValueCodec.ParseCsv(ApplicationProtocols),
@@ -1010,11 +1010,11 @@ public sealed class UserFormInput
     public UpsertUserRequest ToRequest()
         => new()
         {
-            DisplayName = DisplayName.Trim(),
-            SubscriptionToken = SubscriptionToken.Trim(),
-            TrojanPassword = TrojanPassword.Trim(),
-            V2rayUuid = V2rayUuid.Trim(),
-            InviteUserId = InviteUserId.Trim(),
+            DisplayName = NodeFormValueCodec.TrimOrEmpty(DisplayName),
+            SubscriptionToken = NodeFormValueCodec.TrimOrEmpty(SubscriptionToken),
+            TrojanPassword = NodeFormValueCodec.TrimOrEmpty(TrojanPassword),
+            V2rayUuid = NodeFormValueCodec.TrimOrEmpty(V2rayUuid),
+            InviteUserId = NodeFormValueCodec.TrimOrEmpty(InviteUserId),
             CommissionBalance = CommissionBalance,
             CommissionRate = CommissionRate,
             GroupId = GroupId,
@@ -1023,16 +1023,13 @@ public sealed class UserFormInput
             DeviceLimit = Math.Max(0, DeviceLimit),
             Subscription = new PanelUserSubscriptionProfile
             {
-                PlanName = PlanName.Trim(),
+                PlanName = NodeFormValueCodec.TrimOrEmpty(PlanName),
                 TransferEnableBytes = Math.Max(0, TransferEnableBytes),
                 ExpiresAt = ParseOptionalDateTimeOffset(ExpiresAt),
-                PurchaseUrl = PurchaseUrl.Trim(),
-                PortalNotice = PortalNotice.Trim()
+                PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(PurchaseUrl),
+                PortalNotice = NodeFormValueCodec.TrimOrEmpty(PortalNotice)
             },
-            NodeIds = NodeIds
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray()
+            NodeIds = NodeFormValueCodec.ParseCsv(NodeIds)
         };
 
     public static UserFormInput FromRecord(PanelUserRecord record)
@@ -1061,7 +1058,7 @@ public sealed class UserFormInput
     private static string FormatOptionalDateTimeOffset(DateTimeOffset? value)
         => value?.ToLocalTime().ToString("yyyy-MM-ddTHH:mm", CultureInfo.InvariantCulture) ?? string.Empty;
 
-    private static DateTimeOffset? ParseOptionalDateTimeOffset(string value)
+    private static DateTimeOffset? ParseOptionalDateTimeOffset(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -1116,7 +1113,7 @@ public sealed class PlanFormInput
     public UpsertPlanRequest ToRequest()
         => new()
         {
-            Name = Name.Trim(),
+            Name = NodeFormValueCodec.TrimOrEmpty(Name),
             GroupId = GroupId,
             TransferEnableBytes = Math.Max(0, TransferEnableBytes),
             MonthPrice = MonthPrice,

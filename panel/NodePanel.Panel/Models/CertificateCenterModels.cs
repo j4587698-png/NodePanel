@@ -252,26 +252,26 @@ public sealed class PanelCertificateFormInput
 
         request = new UpsertPanelCertificateRequest
         {
-            DisplayName = DisplayName.Trim(),
+            DisplayName = NodeFormValueCodec.TrimOrEmpty(DisplayName),
             Enabled = Enabled,
-            Domain = Domain.Trim(),
+            Domain = NodeFormValueCodec.TrimOrEmpty(Domain),
             AltNames = domains.Skip(1).ToArray(),
-            Email = Email.Trim(),
-            AcmeDirectoryUrl = AcmeDirectoryUrl.Trim(),
+            Email = NodeFormValueCodec.TrimOrEmpty(Email),
+            AcmeDirectoryUrl = NodeFormValueCodec.TrimOrEmpty(AcmeDirectoryUrl),
             ChallengeType = challengeType,
             RenewBeforeDays = RenewBeforeDays,
             CheckIntervalMinutes = CheckIntervalMinutes,
             UseStaging = UseStaging,
-            PfxPassword = PfxPassword.Trim(),
+            PfxPassword = NodeFormValueCodec.TrimOrEmpty(PfxPassword),
             DnsProvider = dnsProvider,
-            DnsZone = DnsZone.Trim(),
-            DnsApiToken = DnsApiToken.Trim(),
-            DnsAccessKeyId = DnsAccessKeyId.Trim(),
-            DnsAccessKeySecret = DnsAccessKeySecret.Trim(),
-            DnsHookPresentCommand = DnsHookPresentCommand.Trim(),
-            DnsHookPresentArguments = DnsHookPresentArguments.Trim(),
-            DnsHookCleanupCommand = DnsHookCleanupCommand.Trim(),
-            DnsHookCleanupArguments = DnsHookCleanupArguments.Trim(),
+            DnsZone = NodeFormValueCodec.TrimOrEmpty(DnsZone),
+            DnsApiToken = NodeFormValueCodec.TrimOrEmpty(DnsApiToken),
+            DnsAccessKeyId = NodeFormValueCodec.TrimOrEmpty(DnsAccessKeyId),
+            DnsAccessKeySecret = NodeFormValueCodec.TrimOrEmpty(DnsAccessKeySecret),
+            DnsHookPresentCommand = NodeFormValueCodec.TrimOrEmpty(DnsHookPresentCommand),
+            DnsHookPresentArguments = NodeFormValueCodec.TrimOrEmpty(DnsHookPresentArguments),
+            DnsHookCleanupCommand = NodeFormValueCodec.TrimOrEmpty(DnsHookCleanupCommand),
+            DnsHookCleanupArguments = NodeFormValueCodec.TrimOrEmpty(DnsHookCleanupArguments),
             EnvironmentVariables = variables
         };
 
@@ -324,8 +324,8 @@ public sealed class PanelHttpsSettingsFormInput
         => new()
         {
             Enabled = Enabled,
-            CertificateId = CertificateId.Trim(),
-            ListenAddress = string.IsNullOrWhiteSpace(ListenAddress) ? "0.0.0.0" : ListenAddress.Trim(),
+            CertificateId = NodeFormValueCodec.TrimOrEmpty(CertificateId),
+            ListenAddress = string.IsNullOrWhiteSpace(ListenAddress) ? "0.0.0.0" : NodeFormValueCodec.TrimOrEmpty(ListenAddress),
             Port = Port is > 0 and <= 65535 ? Port : 443,
             RedirectHttpToHttps = RedirectHttpToHttps
         };

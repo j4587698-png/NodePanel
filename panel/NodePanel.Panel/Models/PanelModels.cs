@@ -245,6 +245,8 @@ public sealed record NodeRuntimeSnapshot
 
     public int AppliedRevision { get; init; }
 
+    public string Version { get; init; } = string.Empty;
+
     public string LastApplyError { get; init; } = string.Empty;
 
     public DateTimeOffset? LastSeenAt { get; init; }

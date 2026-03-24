@@ -55,6 +55,7 @@ SERVICE_SOURCE_ARG=""
 SERVICE_GITHUB_REPO=""
 SERVICE_GITHUB_TAG=""
 SERVICE_PACKAGE_RID=""
+SERVICE_PACKAGE_VERSION=""
 SAVED_PACKAGE_GITHUB_REPO=""
 SAVED_PACKAGE_RID=""
 
@@ -375,6 +376,7 @@ parse_config_arguments() {
     SERVICE_GITHUB_REPO=""
     SERVICE_GITHUB_TAG=""
     SERVICE_PACKAGE_RID=""
+    SERVICE_PACKAGE_VERSION=""
 
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
@@ -451,6 +453,7 @@ load_package_info_defaults() {
     local package_info_rid
     package_info_repo="$(np_read_key_value_file_value "$package_info_path" "github_repo")"
     package_info_rid="$(np_read_key_value_file_value "$package_info_path" "rid")"
+    SERVICE_PACKAGE_VERSION="$(np_resolve_package_version "$package_info_path" "$NODEPANEL_RESOLVED_GITHUB_TAG")"
 
     SERVICE_GITHUB_REPO="$(np_first_non_empty \
         "$SERVICE_GITHUB_REPO" \
@@ -472,6 +475,10 @@ persist_package_defaults() {
     if [[ -n "$SERVICE_PACKAGE_RID" ]]; then
         np_upsert_env_value "$ENV_FILE" "NODEPANEL_PACKAGE_RID" "$SERVICE_PACKAGE_RID"
     fi
+}
+
+persist_package_version() {
+    np_upsert_env_value "$ENV_FILE" "NODEPANEL_PACKAGE_VERSION" "$SERVICE_PACKAGE_VERSION"
 }
 
 fix_env_file_owner() {
@@ -616,7 +623,7 @@ install_or_update() {
 
     local temp_root
     temp_root="$(mktemp -d)"
-    trap 'rm -rf "$temp_root"' EXIT
+    trap 'temp_root_path="${temp_root:-}"; if [[ -n "$temp_root_path" ]]; then rm -rf -- "$temp_root_path"; fi' EXIT
 
     local source_root
     source_root="$(np_prepare_source_dir "$SCRIPT_DIR" "$SERVICE_SOURCE_ARG" "$temp_root" "$PACKAGE_PREFIX" "$SAVED_PACKAGE_GITHUB_REPO" "$SERVICE_GITHUB_TAG" "$SAVED_PACKAGE_RID")"
@@ -645,6 +652,7 @@ install_or_update() {
     ensure_install_configuration "$operation_name"
     apply_env_overrides
     persist_package_defaults
+    persist_package_version
 
     if [[ -f "$UNIT_FILE" ]]; then
         systemctl stop "${SYSTEMD_NAME}.service" || true
@@ -669,6 +677,7 @@ install_or_update() {
 
     np_log "${DISPLAY_NAME} has been installed to ${INSTALL_ROOT}"
     np_log "Environment file: ${ENV_FILE}"
+    np_log "Installed package version: ${SERVICE_PACKAGE_VERSION:-unknown}"
     systemctl --no-pager --full status "${SYSTEMD_NAME}.service" || true
 }
 
@@ -836,6 +845,7 @@ show_current_configuration() {
     local current_node_id
     local current_access_token
     local current_service_urls
+    local current_version
     local current_repo
     local current_rid
 
@@ -843,10 +853,12 @@ show_current_configuration() {
     current_node_id="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__Identity__NodeId")")"
     current_access_token="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__ControlPlane__AccessToken")")"
     current_service_urls="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "ASPNETCORE_URLS")")"
+    current_version="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_VERSION")")"
     current_repo="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_GITHUB_REPO")")"
     current_rid="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_RID")")"
 
     printf 'Env file        : %s\n' "$ENV_FILE"
+    printf 'Version         : %s\n' "${current_version:-"(not set)"}"
     printf 'Panel URL       : %s\n' "$(display_panel_url_default "$current_panel_url")"
     printf 'Control URL     : %s\n' "${current_panel_url:-"(not set)"}"
     printf 'Node ID         : %s\n' "${current_node_id:-"(not set)"}"
@@ -957,11 +969,14 @@ interactive_configure_component() {
 }
 
 show_status_command() {
+    show_service_overview
+
     if ! service_is_installed; then
         np_warn "${DISPLAY_NAME} is not installed yet."
         return 0
     fi
 
+    printf '%s\n' '----------------------------------------'
     systemctl status "${SYSTEMD_NAME}.service" --no-pager --full || true
 }
 

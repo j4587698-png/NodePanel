@@ -14,8 +14,11 @@ internal static class NodeFormValueCodec
     public static string JoinCsv(IEnumerable<string>? values)
         => string.Join(", ", (values ?? Array.Empty<string>()).Where(static value => !string.IsNullOrWhiteSpace(value)));
 
+    public static string TrimOrEmpty(string? value)
+        => value?.Trim() ?? string.Empty;
+
     public static bool TryParseEnvironmentVariables(
-        string value,
+        string? value,
         out IReadOnlyList<CertificateEnvironmentVariable> environmentVariables,
         out string error)
     {
@@ -44,7 +47,7 @@ internal static class NodeFormValueCodec
                 .Select(static item => $"{item.Name}={item.Value}"));
 
     public static bool TryParseHeaderLines(
-        string value,
+        string? value,
         out IReadOnlyDictionary<string, string> headers,
         out string error)
     {
@@ -65,7 +68,7 @@ internal static class NodeFormValueCodec
             headers.Select(static pair => $"{pair.Key}={pair.Value}"));
 
     private static bool TryParseKeyValueLines(
-        string value,
+        string? value,
         out IReadOnlyDictionary<string, string> entries,
         out string error)
     {

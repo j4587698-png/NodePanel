@@ -46,6 +46,20 @@ require_dotnet() {
     fi
 }
 
+resolve_package_version() {
+    if [[ -n "$VERSION" ]]; then
+        VERSION="${VERSION#v}"
+        return 0
+    fi
+
+    VERSION="$(sed -nE 's:.*<NodePanelVersionPrefix>([^<]+)</NodePanelVersionPrefix>.*:\1:p' "${REPO_ROOT}/Directory.Build.props" | head -n 1)"
+    VERSION="${VERSION#v}"
+    if [[ -z "$VERSION" ]]; then
+        printf 'Unable to resolve package version from Directory.Build.props\n' >&2
+        exit 1
+    fi
+}
+
 set_components() {
     local component="$1"
     case "$component" in
@@ -227,6 +241,7 @@ main() {
     fi
 
     require_dotnet
+    resolve_package_version
     mkdir -p "$OUTPUT_ROOT"
 
     local component

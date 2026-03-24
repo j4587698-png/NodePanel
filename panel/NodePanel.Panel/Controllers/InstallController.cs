@@ -49,18 +49,21 @@ public class InstallController : Controller
         try
         {
             // 1. Test connection
+            var normalizedDbType = NodeFormValueCodec.TrimOrEmpty(request.DbType);
+            var normalizedDbName = NodeFormValueCodec.TrimOrEmpty(request.DbName);
+            var normalizedAdminEmail = NodeFormValueCodec.TrimOrEmpty(request.AdminEmail);
             var dataType = DataType.Sqlite;
-            var connectionString = $"Data Source={request.DbName}";
+            var connectionString = $"Data Source={normalizedDbName}";
 
-            if (request.DbType.Equals("mysql", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(normalizedDbType, "mysql", StringComparison.OrdinalIgnoreCase))
             {
                 dataType = DataType.MySql;
-                connectionString = $"Server={request.DbHost};Port={request.DbPort};Database={request.DbName};Uid={request.DbUser};Pwd={request.DbPassword};";
+                connectionString = $"Server={NodeFormValueCodec.TrimOrEmpty(request.DbHost)};Port={NodeFormValueCodec.TrimOrEmpty(request.DbPort)};Database={normalizedDbName};Uid={NodeFormValueCodec.TrimOrEmpty(request.DbUser)};Pwd={NodeFormValueCodec.TrimOrEmpty(request.DbPassword)};";
             }
-            else if (request.DbType.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(normalizedDbType, "postgresql", StringComparison.OrdinalIgnoreCase))
             {
                 dataType = DataType.PostgreSQL;
-                connectionString = $"Host={request.DbHost};Port={request.DbPort};Database={request.DbName};Username={request.DbUser};Password={request.DbPassword};";
+                connectionString = $"Host={NodeFormValueCodec.TrimOrEmpty(request.DbHost)};Port={NodeFormValueCodec.TrimOrEmpty(request.DbPort)};Database={normalizedDbName};Username={NodeFormValueCodec.TrimOrEmpty(request.DbUser)};Password={NodeFormValueCodec.TrimOrEmpty(request.DbPassword)};";
             }
 
             using var testFsql = new FreeSqlBuilder()
@@ -75,14 +78,14 @@ public class InstallController : Controller
             testFsql.CodeFirst.SyncStructure<TrafficRecordEntity>();
 
             // 3. Insert temp admin if not exists
-            var adminExists = await testFsql.Select<UserEntity>().Where(u => u.Email == request.AdminEmail).AnyAsync();
+            var adminExists = await testFsql.Select<UserEntity>().Where(u => u.Email == normalizedAdminEmail).AnyAsync();
             if (!adminExists)
             {
                 var hasher = new PasswordHasher<UserEntity>();
                 var admin = new UserEntity
                 {
                     UserId = Guid.NewGuid().ToString("N"),
-                    Email = request.AdminEmail,
+                    Email = normalizedAdminEmail,
                     IsAdmin = true,
                     DisplayName = "Administrator",
                     TrojanPassword = Guid.NewGuid().ToString("N"),
@@ -90,7 +93,7 @@ public class InstallController : Controller
                     SubscriptionToken = Guid.NewGuid().ToString("N")
                 };
                 
-                admin.PasswordHash = hasher.HashPassword(admin, request.AdminPassword);
+                admin.PasswordHash = hasher.HashPassword(admin, NodeFormValueCodec.TrimOrEmpty(request.AdminPassword));
                 
                 await testFsql.Insert(admin).ExecuteAffrowsAsync();
             }
@@ -102,7 +105,7 @@ public class InstallController : Controller
             var jsonObj = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject ?? new JsonObject();
             if (jsonObj["Panel"] == null) jsonObj["Panel"] = new JsonObject();
             
-            jsonObj["Panel"]!["DbType"] = request.DbType;
+            jsonObj["Panel"]!["DbType"] = normalizedDbType;
             jsonObj["Panel"]!["DbConnectionString"] = connectionString;
 
             var options = new JsonSerializerOptions { WriteIndented = true };

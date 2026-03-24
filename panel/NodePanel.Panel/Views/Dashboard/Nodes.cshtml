@@ -58,6 +58,7 @@
                         <span class="badge @(node.Runtime.Connected ? "badge--ok" : "badge--idle")">
                             @(node.Runtime.Connected ? "已连接" : "离线")
                         </span>
+                        <div class="muted">版本 @(string.IsNullOrWhiteSpace(node.Runtime.Version) ? "-" : node.Runtime.Version)</div>
                         <div class="muted">修订 @node.Runtime.AppliedRevision / @node.Definition.DesiredRevision</div>
                         <div class="muted">@((node.Runtime.LastSeenAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</div>
                     </td>

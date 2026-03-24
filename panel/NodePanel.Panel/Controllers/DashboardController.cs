@@ -146,7 +146,7 @@ public sealed class DashboardController : Controller
                 });
         }
 
-        var certificateId = form.CertificateId.Trim();
+        var certificateId = NodeFormValueCodec.TrimOrEmpty(form.CertificateId);
         await _panelMutationService.SaveCertificateAsync(certificateId, request, cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = $"证书 {certificateId} 配置已保存。";
         return RedirectToAction(nameof(Certificate), new { certificateId });
@@ -337,7 +337,7 @@ public sealed class DashboardController : Controller
                 });
         }
 
-        var nodeId = form.NodeId.Trim();
+        var nodeId = NodeFormValueCodec.TrimOrEmpty(form.NodeId);
         await _panelMutationService.SaveNodeAsync(nodeId, request, cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = $"节点 {nodeId} 已保存。";
         return RedirectToAction(nameof(Node), new { nodeId });
@@ -442,7 +442,7 @@ public sealed class DashboardController : Controller
                 });
         }
 
-        var userId = form.UserId.Trim();
+        var userId = NodeFormValueCodec.TrimOrEmpty(form.UserId);
         var saved = await _panelMutationService.SaveUserAsync(userId, form.ToRequest(), cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = $"用户 {userId} 已保存。";
         return RedirectToAction(nameof(UserEditor), new { userId = saved.UserId });
@@ -574,7 +574,7 @@ public sealed class DashboardController : Controller
             });
         }
 
-        var planId = form.PlanId.Trim();
+        var planId = NodeFormValueCodec.TrimOrEmpty(form.PlanId);
         await _panelMutationService.SavePlanAsync(planId, form.ToRequest(), cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = $"套餐 {planId} 已保存。";
         return RedirectToAction(nameof(Index));
@@ -584,7 +584,7 @@ public sealed class DashboardController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeletePlan(string planId, CancellationToken cancellationToken)
     {
-        await _panelMutationService.DeletePlanAsync(planId.Trim(), cancellationToken).ConfigureAwait(false);
+        await _panelMutationService.DeletePlanAsync(NodeFormValueCodec.TrimOrEmpty(planId), cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = $"套餐 {planId} 已删除。";
         return RedirectToAction(nameof(Index));
     }
@@ -660,7 +660,7 @@ public sealed class DashboardController : Controller
         if (!ModelState.IsValid)
             return View("ServerGroup", new ServerGroupEditorViewModel { Form = form, IsEditMode = true, StatusMessage = "填写有误" });
 
-        await _panelMutationService.SaveServerGroupAsync(form.GroupId, form.Name.Trim(), cancellationToken);
+        await _panelMutationService.SaveServerGroupAsync(form.GroupId, NodeFormValueCodec.TrimOrEmpty(form.Name), cancellationToken);
         TempData["StatusMessage"] = "权限组已保存。";
         return RedirectToAction(nameof(ServerGroups));
     }

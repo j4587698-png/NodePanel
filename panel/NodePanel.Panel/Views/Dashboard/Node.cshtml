@@ -227,6 +227,7 @@
                 </span>
             </div>
             <dl class="stats">
+                <div><dt>Service 版本</dt><dd>@(string.IsNullOrWhiteSpace(Model.Runtime.Version) ? "-" : Model.Runtime.Version)</dd></div>
                 <div><dt>当前修订</dt><dd>@Model.Runtime.AppliedRevision</dd></div>
                 <div><dt>最近心跳</dt><dd>@((Model.Runtime.LastSeenAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
                 <div><dt>证书可用</dt><dd>@(certificate?.Available == true ? "是" : "否")</dd></div>

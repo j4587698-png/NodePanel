@@ -127,6 +127,15 @@ np_read_key_value_file_value() {
     np_strip_wrapping_quotes "$raw_value"
 }
 
+np_resolve_package_version() {
+    local package_info_path="$1"
+    local resolved_github_tag="${2:-}"
+    local package_info_version
+
+    package_info_version="$(np_read_key_value_file_value "$package_info_path" "version")"
+    printf '%s\n' "$(np_first_non_empty "$package_info_version" "${resolved_github_tag#v}")"
+}
+
 np_resolve_nologin_shell() {
     local candidate
     for candidate in /usr/sbin/nologin /sbin/nologin /usr/bin/false /bin/false; do
@@ -394,10 +403,17 @@ np_install_runtime_scripts() {
     local common_script_source="$2"
     local installed_script_path="$3"
     local installed_common_dir="$4"
+    local installed_common_path="${installed_common_dir}/nodepanel-common.sh"
 
     mkdir -p "$installed_common_dir"
-    install -m 644 "$common_script_source" "$installed_common_dir/nodepanel-common.sh"
-    install -m 755 "$component_script_source" "$installed_script_path"
+
+    if [[ ! -e "$installed_common_path" || ! "$common_script_source" -ef "$installed_common_path" ]]; then
+        install -m 644 "$common_script_source" "$installed_common_path"
+    fi
+
+    if [[ ! -e "$installed_script_path" || ! "$component_script_source" -ef "$installed_script_path" ]]; then
+        install -m 755 "$component_script_source" "$installed_script_path"
+    fi
 }
 
 np_copy_dir_contents() {

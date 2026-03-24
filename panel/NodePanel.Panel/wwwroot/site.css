@@ -73,6 +73,21 @@ a:hover { color: var(--admin-accent); }
     box-shadow: 4px 0 24px rgba(0,0,0,0.2);
 }
 
+.shell__sidebar-brand { display: grid; gap: 10px; }
+.shell__sidebar-meta {
+    margin-top: auto;
+    padding-top: 20px;
+    border-top: 1px solid var(--admin-border);
+}
+.shell__version {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--admin-border);
+    background: rgba(255, 255, 255, 0.03);
+}
 .shell__sidebar h1 { margin: 0; font-size: 32px; font-weight: 700; font-family: "Outfit", sans-serif; letter-spacing: -0.5px; background: linear-gradient(135deg, #fff, var(--admin-muted)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .shell__sidebar p { margin: 0; line-height: 1.6; }
 
@@ -307,6 +322,13 @@ small { display: block; margin-top: 8px; color: var(--admin-muted); }
 .portal-shell__topbar h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #fff, var(--portal-muted)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .portal-shell__topbar p { margin: 0; }
 .portal-shell__content { max-width: 1280px; margin: 0 auto; }
+.portal-version {
+    margin-top: 10px !important;
+    color: var(--portal-muted);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+}
 
 .portal-topbar__hint { color: var(--portal-muted); background: rgba(255,255,255,0.03); border: 1px solid var(--portal-border); border-radius: 999px; padding: 10px 18px; font-size: 14px; font-weight: 500; backdrop-filter: blur(10px); }
 .portal-eyebrow { color: var(--portal-accent); text-transform: uppercase; font-size: 12px; font-weight: 700; letter-spacing: 0.15em; }

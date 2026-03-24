@@ -2,6 +2,7 @@
 @{
     var state = await QueryService.BuildStateViewAsync(Context.RequestAborted);
     var siteName = state.Settings.GetValueOrDefault("site_name", "NodePanel");
+    var panelVersion = NodePanel.Panel.ApplicationVersion.Current;
     if (string.IsNullOrWhiteSpace(siteName)) siteName = "NodePanel";
 }
 <!DOCTYPE html>
@@ -15,7 +16,7 @@
 <body class="admin-body">
     <div class="shell">
         <aside class="shell__sidebar">
-            <div>
+            <div class="shell__sidebar-brand">
                 <p class="eyebrow">Control Plane</p>
                 <h1>@siteName</h1>
                 <p class="muted">管理端负责节点、证书、订阅出口和用户商业信息；用户订阅门户独立暴露给最终用户。</p>
@@ -66,6 +67,9 @@
                     <span>退出登录</span>
                 </a>
             </nav>
+            <div class="shell__sidebar-meta">
+                <span class="mono shell__version">Panel v@panelVersion</span>
+            </div>
         </aside>
         <main class="shell__content">
             @RenderBody()

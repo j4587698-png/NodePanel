@@ -300,7 +300,7 @@ app.Map(
             await previous.DisposeAsync().ConfigureAwait(false);
         }
 
-        nodeConnectionRegistry.RecordHello(nodeId, hello.AppliedRevision);
+        nodeConnectionRegistry.RecordHello(nodeId, hello.Version, hello.AppliedRevision);
         await controlPlanePushService.PushSnapshotAsync(nodeId, context.RequestAborted).ConfigureAwait(false);
 
         try

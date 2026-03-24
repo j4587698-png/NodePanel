@@ -104,13 +104,13 @@ public sealed class OutboundFormInput
 
         config = new OutboundConfig
         {
-            Tag = Tag.Trim(),
+            Tag = NodeFormValueCodec.TrimOrEmpty(Tag),
             Enabled = Enabled,
             Protocol = Protocol,
-            Via = Via.Trim(),
-            ViaCidr = ViaCidr.Trim(),
+            Via = NodeFormValueCodec.TrimOrEmpty(Via),
+            ViaCidr = NodeFormValueCodec.TrimOrEmpty(ViaCidr),
             TargetStrategy = TargetStrategy,
-            ProxyOutboundTag = ProxyOutboundTag.Trim(),
+            ProxyOutboundTag = NodeFormValueCodec.TrimOrEmpty(ProxyOutboundTag),
             MultiplexSettings = new OutboundMultiplexConfig
             {
                 Enabled = MultiplexEnabled,
@@ -119,15 +119,15 @@ public sealed class OutboundFormInput
                 XudpProxyUdp443 = MultiplexXudpProxyUdp443
             },
             Transport = Transport,
-            ServerHost = ServerHost.Trim(),
+            ServerHost = NodeFormValueCodec.TrimOrEmpty(ServerHost),
             ServerPort = ServerPort,
-            ServerName = ServerName.Trim(),
-            WebSocketPath = WebSocketPath.Trim(),
+            ServerName = NodeFormValueCodec.TrimOrEmpty(ServerName),
+            WebSocketPath = NodeFormValueCodec.TrimOrEmpty(WebSocketPath),
             WebSocketHeaders = headers,
             WebSocketEarlyDataBytes = WebSocketEarlyDataBytes,
             WebSocketHeartbeatPeriodSeconds = WebSocketHeartbeatPeriodSeconds,
             ApplicationProtocols = NodeFormValueCodec.ParseCsv(ApplicationProtocols),
-            Password = Password.Trim(),
+            Password = NodeFormValueCodec.TrimOrEmpty(Password),
             ConnectTimeoutSeconds = ConnectTimeoutSeconds,
             HandshakeTimeoutSeconds = HandshakeTimeoutSeconds,
             SkipCertificateValidation = SkipCertificateValidation

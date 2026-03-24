@@ -26,7 +26,8 @@ public sealed class AuthController : Controller
     {
         if (!ModelState.IsValid) return View(request);
 
-        var user = await _db.FSql.Select<UserEntity>().Where(u => u.Email == request.Email).FirstAsync();
+        var normalizedEmail = NodeFormValueCodec.TrimOrEmpty(request.Email);
+        var user = await _db.FSql.Select<UserEntity>().Where(u => u.Email == normalizedEmail).FirstAsync();
         if (user == null)
         {
             ModelState.AddModelError(string.Empty, "Invalid login attempt.");
@@ -75,7 +76,8 @@ public sealed class AuthController : Controller
     {
         if (!ModelState.IsValid) return View(request);
 
-        var exists = await _db.FSql.Select<UserEntity>().Where(u => u.Email == request.Email).AnyAsync();
+        var normalizedEmail = NodeFormValueCodec.TrimOrEmpty(request.Email);
+        var exists = await _db.FSql.Select<UserEntity>().Where(u => u.Email == normalizedEmail).AnyAsync();
         if (exists)
         {
             ModelState.AddModelError(string.Empty, "Email already in use.");
@@ -85,17 +87,18 @@ public sealed class AuthController : Controller
         var user = new UserEntity
         {
             UserId = Guid.NewGuid().ToString("N"),
-            Email = request.Email,
-            DisplayName = request.Email.Split('@')[0],
+            Email = normalizedEmail,
+            DisplayName = normalizedEmail.Split('@')[0],
             TrojanPassword = Guid.NewGuid().ToString("N"),
             V2rayUuid = Guid.NewGuid().ToString("D"),
             SubscriptionToken = Guid.NewGuid().ToString("N"),
             IsAdmin = false
         };
 
-        if (!string.IsNullOrWhiteSpace(request.InviteCode))
+        var normalizedInviteCode = NodeFormValueCodec.TrimOrEmpty(request.InviteCode);
+        if (!string.IsNullOrWhiteSpace(normalizedInviteCode))
         {
-            var inviteCode = await _db.FSql.Select<InviteCodeEntity>().Where(c => c.Code == request.InviteCode).FirstAsync();
+            var inviteCode = await _db.FSql.Select<InviteCodeEntity>().Where(c => c.Code == normalizedInviteCode).FirstAsync();
             if (inviteCode != null)
             {
                 user.InviteUserId = inviteCode.UserId;

@@ -69,13 +69,14 @@ public sealed class NodeConnectionRegistry
         }
     }
 
-    public void RecordHello(string nodeId, int appliedRevision)
+    public void RecordHello(string nodeId, string version, int appliedRevision)
         => UpdateRuntime(
             nodeId,
             runtime => runtime with
             {
                 Connected = true,
                 AppliedRevision = Math.Max(runtime.AppliedRevision, appliedRevision),
+                Version = string.IsNullOrWhiteSpace(version) ? runtime.Version : version.Trim(),
                 LastSeenAt = DateTimeOffset.UtcNow
             });
 

@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <NodePanelVersionPrefix>0.1.2</NodePanelVersionPrefix>
+    <NodePanelVersionPrefix>0.1.3</NodePanelVersionPrefix>
     <Version Condition="'$(Version)' == ''">$(NodePanelVersionPrefix)-dev</Version>
     <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
     <RepositoryUrl Condition="'$(RepositoryUrl)' == ''">https://github.com/j4587698-png/NodePanel</RepositoryUrl>

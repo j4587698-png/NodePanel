@@ -220,7 +220,7 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         var payload = new NodeHelloPayload
         {
             NodeId = _nodeId,
-            Version = typeof(ControlPlaneClientService).Assembly.GetName().Version?.ToString() ?? "0.1.0",
+            Version = NodePanel.Service.ApplicationVersion.Current,
             Capabilities = new[] { "trojan", "vless", "vmess", "udp", "tls", "ws", "stats", "rate-limit", "certificate-renew" },
             AppliedRevision = _runtimeConfigStore.GetSnapshot().Revision
         };

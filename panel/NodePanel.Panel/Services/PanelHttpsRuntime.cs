@@ -170,10 +170,10 @@ public sealed class PanelHttpsRuntime : IDisposable
             var snapshot = new PanelHttpsRuntimeSnapshot
             {
                 Enabled = true,
-                ListenAddress = string.IsNullOrWhiteSpace(form.ListenAddress) ? "0.0.0.0" : form.ListenAddress.Trim(),
+                ListenAddress = string.IsNullOrWhiteSpace(form.ListenAddress) ? "0.0.0.0" : NodeFormValueCodec.TrimOrEmpty(form.ListenAddress),
                 Port = form.Port is > 0 and <= 65535 ? form.Port : 443,
                 RedirectHttpToHttps = form.RedirectHttpToHttps,
-                CertificateId = form.CertificateId.Trim()
+                CertificateId = NodeFormValueCodec.TrimOrEmpty(form.CertificateId)
             };
 
             if (string.IsNullOrWhiteSpace(snapshot.CertificateId))

@@ -63,11 +63,11 @@ public sealed class TrojanFallbackFormInput
     public TrojanFallbackConfig ToConfig()
         => new()
         {
-            Name = Name.Trim(),
-            Alpn = Alpn.Trim(),
-            Path = Path.Trim(),
-            Type = Type.Trim(),
-            Dest = Dest.Trim(),
+            Name = NodeFormValueCodec.TrimOrEmpty(Name),
+            Alpn = NodeFormValueCodec.TrimOrEmpty(Alpn),
+            Path = NodeFormValueCodec.TrimOrEmpty(Path),
+            Type = NodeFormValueCodec.TrimOrEmpty(Type),
+            Dest = NodeFormValueCodec.TrimOrEmpty(Dest),
             ProxyProtocolVersion = ProxyProtocolVersion
         };
 
@@ -172,7 +172,7 @@ public sealed class DnsServerFormInput
 
         config = new DnsHttpServerConfig
         {
-            Url = Url.Trim(),
+            Url = NodeFormValueCodec.TrimOrEmpty(Url),
             Headers = headers
         };
         error = string.Empty;
@@ -228,7 +228,7 @@ public sealed class RoutingRuleFormInput
             Domains = NodeFormValueCodec.ParseCsv(Domains),
             SourceCidrs = NodeFormValueCodec.ParseCsv(SourceCidrs),
             DestinationPorts = NodeFormValueCodec.ParseCsv(DestinationPorts),
-            OutboundTag = OutboundTag.Trim()
+            OutboundTag = NodeFormValueCodec.TrimOrEmpty(OutboundTag)
         };
 
     public static RoutingRuleFormInput FromConfig(RoutingRuleConfig config)

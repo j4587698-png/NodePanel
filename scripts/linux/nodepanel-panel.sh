@@ -45,6 +45,7 @@ PACKAGE_SOURCE_ARG=""
 PACKAGE_GITHUB_REPO=""
 PACKAGE_GITHUB_TAG=""
 PACKAGE_RID=""
+PACKAGE_VERSION=""
 SAVED_PACKAGE_GITHUB_REPO=""
 SAVED_PACKAGE_RID=""
 
@@ -96,6 +97,7 @@ parse_package_arguments() {
     PACKAGE_GITHUB_REPO=""
     PACKAGE_GITHUB_TAG=""
     PACKAGE_RID=""
+    PACKAGE_VERSION=""
 
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
@@ -152,6 +154,7 @@ load_package_info_defaults() {
     local package_info_rid
     package_info_repo="$(np_read_key_value_file_value "$package_info_path" "github_repo")"
     package_info_rid="$(np_read_key_value_file_value "$package_info_path" "rid")"
+    PACKAGE_VERSION="$(np_resolve_package_version "$package_info_path" "$NODEPANEL_RESOLVED_GITHUB_TAG")"
 
     PACKAGE_GITHUB_REPO="$(np_first_non_empty \
         "$PACKAGE_GITHUB_REPO" \
@@ -173,6 +176,10 @@ persist_package_defaults() {
     if [[ -n "$PACKAGE_RID" ]]; then
         np_upsert_env_value "$ENV_FILE" "NODEPANEL_PACKAGE_RID" "$PACKAGE_RID"
     fi
+}
+
+persist_package_version() {
+    np_upsert_env_value "$ENV_FILE" "NODEPANEL_PACKAGE_VERSION" "$PACKAGE_VERSION"
 }
 
 write_launcher_file() {
@@ -299,7 +306,7 @@ install_or_update() {
 
     local temp_root
     temp_root="$(mktemp -d)"
-    trap 'rm -rf "$temp_root"' EXIT
+    trap 'temp_root_path="${temp_root:-}"; if [[ -n "$temp_root_path" ]]; then rm -rf -- "$temp_root_path"; fi' EXIT
 
     local source_root
     source_root="$(np_prepare_source_dir "$SCRIPT_DIR" "$PACKAGE_SOURCE_ARG" "$temp_root" "$PACKAGE_PREFIX" "$SAVED_PACKAGE_GITHUB_REPO" "$PACKAGE_GITHUB_TAG" "$SAVED_PACKAGE_RID")"
@@ -327,6 +334,7 @@ install_or_update() {
     fi
 
     persist_package_defaults
+    persist_package_version
 
     if [[ -f "$UNIT_FILE" ]]; then
         systemctl stop "${SYSTEMD_NAME}.service" || true
@@ -351,6 +359,7 @@ install_or_update() {
 
     np_log "${DISPLAY_NAME} has been installed to ${INSTALL_ROOT}"
     np_log "Environment file: ${ENV_FILE}"
+    np_log "Installed package version: ${PACKAGE_VERSION:-unknown}"
     np_log "Fresh installations should open http://<server>/install to finish database and admin setup."
     systemctl --no-pager --full status "${SYSTEMD_NAME}.service" || true
 }
@@ -416,6 +425,36 @@ show_logs() {
     journalctl -u "${SYSTEMD_NAME}.service" -n "$lines" --no-pager
 }
 
+panel_is_installed() {
+    [[ -f "$UNIT_FILE" || -x "$BIN_PATH" || -d "$INSTALL_ROOT" ]]
+}
+
+show_installed_metadata() {
+    local current_version
+    local current_repo
+    local current_rid
+
+    current_version="$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_VERSION")"
+    current_repo="$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_GITHUB_REPO")"
+    current_rid="$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_RID")"
+
+    printf 'Installed Version : %s\n' "${current_version:-"(not set)"}"
+    printf 'GitHub Repo       : %s\n' "${current_repo:-"${DEFAULT_GITHUB_REPO:-"(not set)"}"}"
+    printf 'Package RID       : %s\n' "${current_rid:-"(auto)"}"
+}
+
+show_status_command() {
+    show_installed_metadata
+
+    if ! panel_is_installed; then
+        np_warn "${DISPLAY_NAME} is not installed yet."
+        return 0
+    fi
+
+    printf '%s\n' '----------------------------------------'
+    systemctl status "${SYSTEMD_NAME}.service" --no-pager --full || true
+}
+
 main() {
     local command="${1:-}"
     shift || true
@@ -440,7 +479,7 @@ main() {
             run_systemctl restart
             ;;
         status)
-            run_systemctl status
+            show_status_command
             ;;
         log|logs)
             show_logs "$@"
