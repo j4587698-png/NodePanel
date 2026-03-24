@@ -30,7 +30,7 @@
         </div>
         <form asp-action="SavePanelHttpsSettings" method="post" class="form">
             @Html.AntiForgeryToken()
-            <div asp-validation-summary="ModelOnly" class="error-box"></div>
+        <div asp-validation-summary="All" class="error-box"></div>
             <div class="form-grid">
                 <div class="checkbox-field">
                     <span>启用 HTTPS</span>

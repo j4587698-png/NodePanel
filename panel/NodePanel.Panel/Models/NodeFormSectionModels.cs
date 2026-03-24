@@ -79,7 +79,7 @@ public sealed class TrojanFallbackFormInput
             Path = config.Path,
             Type = config.Type,
             Dest = config.Dest,
-            ProxyProtocolVersion = config.ProxyProtocolVersion
+            ProxyProtocolVersion = Math.Clamp(config.ProxyProtocolVersion, 0, 2)
         };
 }
 
@@ -140,8 +140,8 @@ public sealed class DnsFormInput
         => new()
         {
             Mode = DnsModes.Normalize(config.Mode),
-            TimeoutSeconds = config.TimeoutSeconds > 0 ? config.TimeoutSeconds : 5,
-            CacheTtlSeconds = Math.Max(0, config.CacheTtlSeconds),
+            TimeoutSeconds = config.TimeoutSeconds > 0 ? Math.Clamp(config.TimeoutSeconds, 1, 300) : 5,
+            CacheTtlSeconds = Math.Clamp(config.CacheTtlSeconds, 0, 86400),
             Servers = config.Servers.Select(DnsServerFormInput.FromConfig).ToList()
         };
 }

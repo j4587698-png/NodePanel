@@ -21,6 +21,7 @@
 <form asp-action="SavePlan" method="post" class="form">
     @Html.AntiForgeryToken()
     <input type="hidden" asp-for="IsEditMode" />
+    <div asp-validation-summary="All" class="error-box"></div>
 
     <section class="card stack">
         <div class="card__header">

@@ -247,6 +247,176 @@ public sealed class PanelFormNullSafetyTests
         Assert.Equal("0.0.0.0", normalized.ListenAddress);
     }
 
+    [Fact]
+    public void PanelCertificateFormInput_from_record_clamps_out_of_range_values()
+    {
+        var form = PanelCertificateFormInput.FromRecord(
+            new PanelCertificateRecord
+            {
+                CertificateId = "panel-cert",
+                Domain = "panel.example.com",
+                RenewBeforeDays = 999,
+                CheckIntervalMinutes = 99999
+            });
+
+        Assert.Equal(365, form.RenewBeforeDays);
+        Assert.Equal(1440, form.CheckIntervalMinutes);
+    }
+
+    [Fact]
+    public void NodeFormInput_from_record_clamps_out_of_range_values()
+    {
+        var form = NodeFormInput.FromRecord(
+            new PanelNodeRecord
+            {
+                NodeId = "node-a",
+                TrafficMultiplier = 0m,
+                Config = new NodeServiceConfig
+                {
+                    Certificate = new CertificateOptions
+                    {
+                        RenewBeforeDays = 999,
+                        CheckIntervalMinutes = 99999,
+                        ExternalTimeoutSeconds = 99999
+                    },
+                    Limits = new TrojanInboundLimits
+                    {
+                        GlobalBytesPerSecond = -1,
+                        ConnectTimeoutSeconds = 999,
+                        ConnectionIdleSeconds = 999999,
+                        UplinkOnlySeconds = 99999,
+                        DownlinkOnlySeconds = 99999
+                    },
+                    Telemetry = new TelemetryOptions
+                    {
+                        FlushIntervalSeconds = 99999
+                    }
+                }
+            });
+
+        Assert.Equal(0.01m, form.TrafficMultiplier);
+        Assert.Equal(365, form.CertificateRenewBeforeDays);
+        Assert.Equal(1440, form.CertificateCheckIntervalMinutes);
+        Assert.Equal(3600, form.CertificateExternalTimeoutSeconds);
+        Assert.Equal(0L, form.GlobalBytesPerSecond);
+        Assert.Equal(600, form.ConnectTimeoutSeconds);
+        Assert.Equal(86400, form.ConnectionIdleSeconds);
+        Assert.Equal(3600, form.UplinkOnlySeconds);
+        Assert.Equal(3600, form.DownlinkOnlySeconds);
+        Assert.Equal(3600, form.TelemetryFlushIntervalSeconds);
+    }
+
+    [Fact]
+    public void TrojanInboundFormInput_from_inbound_clamps_out_of_range_values()
+    {
+        var form = TrojanInboundFormInput.FromInbound(
+            new InboundConfig
+            {
+                Transport = InboundTransports.Wss,
+                Port = 99999,
+                HandshakeTimeoutSeconds = 999,
+                EarlyDataBytes = 999999,
+                HeartbeatPeriodSeconds = 99999
+            });
+
+        Assert.Equal(65535, form.Port);
+        Assert.Equal(600, form.HandshakeTimeoutSeconds);
+        Assert.Equal(65535, form.EarlyDataBytes);
+        Assert.Equal(3600, form.HeartbeatPeriodSeconds);
+    }
+
+    [Fact]
+    public void DnsFormInput_from_config_clamps_out_of_range_values()
+    {
+        var form = DnsFormInput.FromConfig(
+            new DnsOptions
+            {
+                TimeoutSeconds = 999,
+                CacheTtlSeconds = 999999
+            });
+
+        Assert.Equal(300, form.TimeoutSeconds);
+        Assert.Equal(86400, form.CacheTtlSeconds);
+    }
+
+    [Fact]
+    public void TrojanFallbackFormInput_from_config_clamps_out_of_range_values()
+    {
+        var form = TrojanFallbackFormInput.FromConfig(
+            new TrojanFallbackConfig
+            {
+                ProxyProtocolVersion = 999
+            });
+
+        Assert.Equal(2, form.ProxyProtocolVersion);
+    }
+
+    [Fact]
+    public void OutboundFormInput_from_config_clamps_out_of_range_values()
+    {
+        var form = OutboundFormInput.FromConfig(
+            new OutboundConfig
+            {
+                MultiplexSettings = new OutboundMultiplexConfig
+                {
+                    Concurrency = 99999,
+                    XudpConcurrency = 99999
+                },
+                ServerPort = 99999,
+                WebSocketEarlyDataBytes = 999999,
+                WebSocketHeartbeatPeriodSeconds = 99999,
+                ConnectTimeoutSeconds = 99999,
+                HandshakeTimeoutSeconds = 99999
+            });
+
+        Assert.Equal(1024, form.MultiplexConcurrency);
+        Assert.Equal(1024, form.MultiplexXudpConcurrency);
+        Assert.Equal(65535, form.ServerPort);
+        Assert.Equal(65535, form.WebSocketEarlyDataBytes);
+        Assert.Equal(3600, form.WebSocketHeartbeatPeriodSeconds);
+        Assert.Equal(600, form.ConnectTimeoutSeconds);
+        Assert.Equal(600, form.HandshakeTimeoutSeconds);
+    }
+
+    [Fact]
+    public void UserFormInput_from_record_clamps_out_of_range_values()
+    {
+        var form = UserFormInput.FromRecord(
+            new PanelUserRecord
+            {
+                UserId = "user-a",
+                CommissionRate = 999,
+                GroupId = -1,
+                BytesPerSecond = -1,
+                DeviceLimit = -1,
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    TransferEnableBytes = -1
+                }
+            });
+
+        Assert.Equal(100, form.CommissionRate);
+        Assert.Equal(0, form.GroupId);
+        Assert.Equal(0L, form.BytesPerSecond);
+        Assert.Equal(0, form.DeviceLimit);
+        Assert.Equal(0L, form.TransferEnableBytes);
+    }
+
+    [Fact]
+    public void PlanFormInput_from_record_clamps_out_of_range_values()
+    {
+        var form = PlanFormInput.FromRecord(
+            new PanelPlanRecord
+            {
+                PlanId = "plan-a",
+                GroupId = -1,
+                TransferEnableBytes = -1
+            });
+
+        Assert.Equal(0, form.GroupId);
+        Assert.Equal(0L, form.TransferEnableBytes);
+    }
+
     private static NodeFormInput CreateBaseForm()
         => new()
         {

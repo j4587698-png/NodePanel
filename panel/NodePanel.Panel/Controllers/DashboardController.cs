@@ -142,7 +142,7 @@ public sealed class DashboardController : Controller
                 {
                     Form = form,
                     IsEditMode = true,
-                    StatusMessage = "表单校验失败，请检查输入。"
+                    StatusMessage = BuildValidationStatusMessage("证书配置校验失败", configError)
                 });
         }
 
@@ -221,7 +221,7 @@ public sealed class DashboardController : Controller
                 {
                     Certificates = await _panelQueryService.GetCertificateViewsAsync(cancellationToken),
                     PanelHttps = normalizedPanelHttps,
-                    StatusMessage = "Panel HTTPS 设置校验失败，请检查输入。"
+                    StatusMessage = BuildValidationStatusMessage("Panel HTTPS 设置校验失败")
                 });
         }
 
@@ -331,7 +331,7 @@ public sealed class DashboardController : Controller
                 {
                     Form = form,
                     IsEditMode = true,
-                    StatusMessage = "表单校验失败，请检查输入。",
+                    StatusMessage = BuildValidationStatusMessage("节点配置校验失败", configError),
                     AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
                     AvailableCertificates = await _panelQueryService.GetCertificatesAsync(cancellationToken)
                 });
@@ -436,7 +436,7 @@ public sealed class DashboardController : Controller
                     IsEditMode = true,
                     PortalUrl = BuildPortalUrl(form.SubscriptionToken),
                     SubscriptionUrl = BuildSubscriptionUrl(form.SubscriptionToken),
-                    StatusMessage = "表单校验失败，请检查输入。",
+                    StatusMessage = BuildValidationStatusMessage("用户配置校验失败"),
                     Plans = state.Plans,
                     AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
                 });
@@ -569,7 +569,7 @@ public sealed class DashboardController : Controller
             { 
                 Form = form, 
                 IsEditMode = true, 
-                StatusMessage = "表单校验失败，请检查输入。", 
+                StatusMessage = BuildValidationStatusMessage("套餐配置校验失败"), 
                 AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken) 
             });
         }
@@ -603,6 +603,23 @@ public sealed class DashboardController : Controller
         }
 
         return RedirectToAction(actionName, routeValues)!;
+    }
+
+    private string BuildValidationStatusMessage(string title, string? configError = null)
+    {
+        if (!string.IsNullOrWhiteSpace(configError))
+        {
+            return $"{title}: {configError}";
+        }
+
+        var modelError = ModelState.Values
+            .SelectMany(static entry => entry.Errors)
+            .Select(static error => string.IsNullOrWhiteSpace(error.ErrorMessage) ? error.Exception?.Message : error.ErrorMessage)
+            .FirstOrDefault(static message => !string.IsNullOrWhiteSpace(message));
+
+        return string.IsNullOrWhiteSpace(modelError)
+            ? $"{title}，请检查输入。"
+            : $"{title}: {modelError}";
     }
 
     [HttpGet("tickets")]
