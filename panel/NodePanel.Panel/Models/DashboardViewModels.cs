@@ -48,7 +48,7 @@ public sealed class UserEditorViewModel
 
 public sealed class NodeFormInput
 {
-    [Required]
+    [Required(ErrorMessage = "节点 ID 不能为空。")]
     public string NodeId { get; set; } = string.Empty;
 
     public string DisplayName { get; set; } = string.Empty;
@@ -57,7 +57,7 @@ public sealed class NodeFormInput
 
     public string GroupIds { get; set; } = string.Empty;
 
-    [Range(0.01, 100)]
+    [Range(0.01, 100, ErrorMessage = "流量倍率必须在 0.01 到 100 之间。")]
     public decimal TrafficMultiplier { get; set; } = 1.0m;
 
     public bool Enabled { get; set; } = true;
@@ -92,18 +92,18 @@ public sealed class NodeFormInput
 
     public string CertificateChallengeType { get; set; } = CertificateChallengeTypes.Http01;
 
-    [Range(1, 365)]
+    [Range(1, 365, ErrorMessage = "证书续签提前天数必须在 1 到 365 之间。")]
     public int CertificateRenewBeforeDays { get; set; } = 30;
 
-    [Range(1, 1440)]
+    [Range(1, 1440, ErrorMessage = "证书检查间隔必须在 1 到 1440 分钟之间。")]
     public int CertificateCheckIntervalMinutes { get; set; } = 60;
 
     public string CertificateHttpChallengeListenAddress { get; set; } = "0.0.0.0";
 
-    [Range(1, 65535)]
+    [Range(1, 65535, ErrorMessage = "HTTP-01 监听端口必须在 1 到 65535 之间。")]
     public int CertificateHttpChallengePort { get; set; } = 80;
 
-    [Range(1, 3600)]
+    [Range(1, 3600, ErrorMessage = "外部证书工具超时必须在 1 到 3600 秒之间。")]
     public int CertificateExternalTimeoutSeconds { get; set; } = 300;
 
     public bool CertificateUseStaging { get; set; }
@@ -116,26 +116,26 @@ public sealed class NodeFormInput
 
     public string CertificateEnvironmentVariables { get; set; } = string.Empty;
 
-    [Range(0, long.MaxValue)]
+    [Range(0, long.MaxValue, ErrorMessage = "全局限速不能小于 0。")]
     public long GlobalBytesPerSecond { get; set; }
 
-    [Range(1, 600)]
+    [Range(1, 600, ErrorMessage = "连接超时必须在 1 到 600 秒之间。")]
     public int ConnectTimeoutSeconds { get; set; } = 10;
 
-    [Range(1, 3600)]
+    [Range(1, 3600, ErrorMessage = "遥测刷新间隔必须在 1 到 3600 秒之间。")]
     public int TelemetryFlushIntervalSeconds { get; set; } = 15;
 
     public bool CertificateRejectUnknownSni { get; set; }
 
     public ClientHelloPolicyFormInput CertificateClientHelloPolicy { get; set; } = new();
 
-    [Range(1, 86400)]
+    [Range(1, 86400, ErrorMessage = "空闲断开时间必须在 1 到 86400 秒之间。")]
     public int ConnectionIdleSeconds { get; set; } = 300;
 
-    [Range(1, 3600)]
+    [Range(1, 3600, ErrorMessage = "仅上行保活时间必须在 1 到 3600 秒之间。")]
     public int UplinkOnlySeconds { get; set; } = 1;
 
-    [Range(1, 3600)]
+    [Range(1, 3600, ErrorMessage = "仅下行保活时间必须在 1 到 3600 秒之间。")]
     public int DownlinkOnlySeconds { get; set; } = 1;
 
     public DnsFormInput Dns { get; set; } = new();
@@ -837,10 +837,10 @@ public sealed class TrojanInboundFormInput
 
     public string ListenAddress { get; set; } = "0.0.0.0";
 
-    [Range(0, 65535)]
+    [Range(0, 65535, ErrorMessage = "监听端口必须在 0 到 65535 之间。")]
     public int Port { get; set; } = 443;
 
-    [Range(1, 600)]
+    [Range(1, 600, ErrorMessage = "握手超时必须在 1 到 600 秒之间。")]
     public int HandshakeTimeoutSeconds { get; set; } = 10;
 
     public bool AcceptProxyProtocol { get; set; }
@@ -849,10 +849,10 @@ public sealed class TrojanInboundFormInput
 
     public string Path { get; set; } = string.Empty;
 
-    [Range(0, 65535)]
+    [Range(0, 65535, ErrorMessage = "Early Data 字节数必须在 0 到 65535 之间。")]
     public int EarlyDataBytes { get; set; }
 
-    [Range(0, 3600)]
+    [Range(0, 3600, ErrorMessage = "心跳间隔必须在 0 到 3600 秒之间。")]
     public int HeartbeatPeriodSeconds { get; set; }
 
     public string ApplicationProtocols { get; set; } = string.Empty;
@@ -965,7 +965,7 @@ public sealed class TrojanInboundFormInput
 
 public sealed class UserFormInput
 {
-    [Required]
+    [Required(ErrorMessage = "用户 ID 不能为空。")]
     public string UserId { get; set; } = string.Empty;
 
     public string DisplayName { get; set; } = string.Empty;
@@ -976,27 +976,27 @@ public sealed class UserFormInput
 
     public string V2rayUuid { get; set; } = string.Empty;
 
-    [Range(0, int.MaxValue)]
+    [Range(0, int.MaxValue, ErrorMessage = "权限组 ID 不能小于 0。")]
     public int GroupId { get; set; }
 
     public string InviteUserId { get; set; } = string.Empty;
 
     public decimal CommissionBalance { get; set; }
 
-    [Range(0, 100)]
+    [Range(0, 100, ErrorMessage = "佣金比例必须在 0 到 100 之间。")]
     public int CommissionRate { get; set; }
 
     public bool Enabled { get; set; } = true;
 
-    [Range(0, long.MaxValue)]
+    [Range(0, long.MaxValue, ErrorMessage = "限速不能小于 0。")]
     public long BytesPerSecond { get; set; }
 
-    [Range(0, int.MaxValue)]
+    [Range(0, int.MaxValue, ErrorMessage = "设备限制不能小于 0。")]
     public int DeviceLimit { get; set; }
 
     public string PlanName { get; set; } = string.Empty;
 
-    [Range(0, long.MaxValue)]
+    [Range(0, long.MaxValue, ErrorMessage = "总流量不能小于 0。")]
     public long TransferEnableBytes { get; set; }
 
     public string ExpiresAt { get; set; } = string.Empty;
@@ -1092,15 +1092,15 @@ public sealed class PlanEditorViewModel
 
 public sealed class PlanFormInput
 {
-    [Required]
+    [Required(ErrorMessage = "套餐 ID 不能为空。")]
     public string PlanId { get; set; } = string.Empty;
 
     public string Name { get; set; } = string.Empty;
 
-    [Range(0, int.MaxValue)]
+    [Range(0, int.MaxValue, ErrorMessage = "权限组 ID 不能小于 0。")]
     public int GroupId { get; set; }
 
-    [Range(0, long.MaxValue)]
+    [Range(0, long.MaxValue, ErrorMessage = "套餐总流量不能小于 0。")]
     public long TransferEnableBytes { get; set; }
 
     public decimal? MonthPrice { get; set; }
@@ -1184,7 +1184,7 @@ public sealed class ServerGroupFormInput
 {
     public int GroupId { get; set; }
     
-    [Required]
+    [Required(ErrorMessage = "权限组名称不能为空。")]
     public string Name { get; set; } = string.Empty;
 
     public static ServerGroupFormInput FromEntity(ServerGroupEntity entity)

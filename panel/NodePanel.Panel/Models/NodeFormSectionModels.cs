@@ -49,7 +49,7 @@ public sealed class TrojanFallbackFormInput
 
     public string Dest { get; set; } = string.Empty;
 
-    [Range(0, 2)]
+    [Range(0, 2, ErrorMessage = "Proxy Protocol 版本必须在 0 到 2 之间。")]
     public int ProxyProtocolVersion { get; set; }
 
     public bool IsEmpty()
@@ -128,10 +128,10 @@ public sealed class DnsFormInput
 {
     public string Mode { get; set; } = DnsModes.System;
 
-    [Range(1, 300)]
+    [Range(1, 300, ErrorMessage = "DNS 超时必须在 1 到 300 秒之间。")]
     public int TimeoutSeconds { get; set; } = 5;
 
-    [Range(0, 86400)]
+    [Range(0, 86400, ErrorMessage = "DNS 缓存 TTL 必须在 0 到 86400 秒之间。")]
     public int CacheTtlSeconds { get; set; } = 30;
 
     public List<DnsServerFormInput> Servers { get; set; } = [];

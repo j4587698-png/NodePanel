@@ -35,7 +35,22 @@ builder.Services
     .BindConfiguration(PanelOptions.SectionName);
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<PanelOptions>>().Value);
 
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllersWithViews(options =>
+{
+    options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true;
+
+    var messageProvider = options.ModelBindingMessageProvider;
+    messageProvider.SetAttemptedValueIsInvalidAccessor((value, fieldName) => $"{fieldName} 的值“{value}”无效。");
+    messageProvider.SetMissingBindRequiredValueAccessor(fieldName => $"缺少必填字段“{fieldName}”。");
+    messageProvider.SetMissingKeyOrValueAccessor(() => "缺少必填项。");
+    messageProvider.SetMissingRequestBodyRequiredValueAccessor(() => "请求内容不能为空。");
+    messageProvider.SetNonPropertyAttemptedValueIsInvalidAccessor(value => $"值“{value}”无效。");
+    messageProvider.SetNonPropertyUnknownValueIsInvalidAccessor(() => "提供的值无效。");
+    messageProvider.SetUnknownValueIsInvalidAccessor(fieldName => $"字段“{fieldName}”的值无效。");
+    messageProvider.SetValueIsInvalidAccessor(value => $"值“{value}”无效。");
+    messageProvider.SetValueMustBeANumberAccessor(fieldName => $"字段“{fieldName}”必须是数字。");
+    messageProvider.SetValueMustNotBeNullAccessor(fieldName => $"字段“{fieldName}”不能为空。");
+});
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton(panelHttpsRuntime);
 builder.Services.AddSingleton<PanelProcessControl>();

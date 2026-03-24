@@ -135,14 +135,14 @@ public sealed record UpsertPanelCertificateRequest
 
 public sealed class PanelCertificateFormInput
 {
-    [Required]
+    [Required(ErrorMessage = "证书 ID 不能为空。")]
     public string CertificateId { get; set; } = string.Empty;
 
     public string DisplayName { get; set; } = string.Empty;
 
     public bool Enabled { get; set; } = true;
 
-    [Required]
+    [Required(ErrorMessage = "主域名不能为空。")]
     public string Domain { get; set; } = string.Empty;
 
     public string AltNames { get; set; } = string.Empty;
@@ -153,10 +153,10 @@ public sealed class PanelCertificateFormInput
 
     public string ChallengeType { get; set; } = CertificateChallengeTypes.Http01;
 
-    [Range(1, 365)]
+    [Range(1, 365, ErrorMessage = "续签提前天数必须在 1 到 365 之间。")]
     public int RenewBeforeDays { get; set; } = 30;
 
-    [Range(1, 1440)]
+    [Range(1, 1440, ErrorMessage = "检查间隔必须在 1 到 1440 分钟之间。")]
     public int CheckIntervalMinutes { get; set; } = 60;
 
     public bool UseStaging { get; set; }
@@ -315,7 +315,7 @@ public sealed class PanelHttpsSettingsFormInput
 
     public string ListenAddress { get; set; } = "0.0.0.0";
 
-    [Range(1, 65535)]
+    [Range(1, 65535, ErrorMessage = "Panel HTTPS 端口必须在 1 到 65535 之间。")]
     public int Port { get; set; } = 443;
 
     public bool RedirectHttpToHttps { get; set; }

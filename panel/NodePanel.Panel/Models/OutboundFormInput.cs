@@ -22,10 +22,10 @@ public sealed class OutboundFormInput
 
     public bool MultiplexEnabled { get; set; }
 
-    [Range(0, 1024)]
+    [Range(0, 1024, ErrorMessage = "Mux 并发数必须在 0 到 1024 之间。")]
     public int MultiplexConcurrency { get; set; }
 
-    [Range(0, 1024)]
+    [Range(0, 1024, ErrorMessage = "XUDP 并发数必须在 0 到 1024 之间。")]
     public int MultiplexXudpConcurrency { get; set; }
 
     public string MultiplexXudpProxyUdp443 { get; set; } = OutboundXudpProxyModes.Reject;
@@ -34,7 +34,7 @@ public sealed class OutboundFormInput
 
     public string ServerHost { get; set; } = string.Empty;
 
-    [Range(0, 65535)]
+    [Range(0, 65535, ErrorMessage = "出站端口必须在 0 到 65535 之间。")]
     public int ServerPort { get; set; } = 443;
 
     public string ServerName { get; set; } = string.Empty;
@@ -43,20 +43,20 @@ public sealed class OutboundFormInput
 
     public string WebSocketHeadersText { get; set; } = string.Empty;
 
-    [Range(0, 65535)]
+    [Range(0, 65535, ErrorMessage = "WebSocket Early Data 字节数必须在 0 到 65535 之间。")]
     public int WebSocketEarlyDataBytes { get; set; }
 
-    [Range(0, 3600)]
+    [Range(0, 3600, ErrorMessage = "WebSocket 心跳间隔必须在 0 到 3600 秒之间。")]
     public int WebSocketHeartbeatPeriodSeconds { get; set; }
 
     public string ApplicationProtocols { get; set; } = string.Empty;
 
     public string Password { get; set; } = string.Empty;
 
-    [Range(0, 600)]
+    [Range(0, 600, ErrorMessage = "出站连接超时必须在 0 到 600 秒之间。")]
     public int ConnectTimeoutSeconds { get; set; }
 
-    [Range(0, 600)]
+    [Range(0, 600, ErrorMessage = "出站握手超时必须在 0 到 600 秒之间。")]
     public int HandshakeTimeoutSeconds { get; set; }
 
     public bool SkipCertificateValidation { get; set; }
