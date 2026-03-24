@@ -17,6 +17,7 @@ public sealed class PanelCertificateService
     private readonly PanelDnsChallengeService _dnsChallengeService;
     private readonly ILogger<PanelCertificateService> _logger;
     private readonly PanelAcmeHttpChallengeStore _httpChallengeStore;
+    private readonly PanelCertificateProgressTracker _panelCertificateProgressTracker;
     private readonly PanelHttpsRuntime _panelHttpsRuntime;
     private readonly PanelMutationService _panelMutationService;
 
@@ -26,6 +27,7 @@ public sealed class PanelCertificateService
         PanelAcmeHttpChallengeStore httpChallengeStore,
         PanelMutationService panelMutationService,
         PanelHttpsRuntime panelHttpsRuntime,
+        PanelCertificateProgressTracker panelCertificateProgressTracker,
         ILogger<PanelCertificateService> logger)
     {
         _db = db;
@@ -33,6 +35,7 @@ public sealed class PanelCertificateService
         _httpChallengeStore = httpChallengeStore;
         _panelMutationService = panelMutationService;
         _panelHttpsRuntime = panelHttpsRuntime;
+        _panelCertificateProgressTracker = panelCertificateProgressTracker;
         _logger = logger;
     }
 
@@ -102,7 +105,9 @@ public sealed class PanelCertificateService
                 return record;
             }
 
+            var triggerSource = ignoreSchedule ? "manual" : "auto";
             ValidateCertificate(record);
+            StartProgress(normalizedCertificateId, triggerSource, "正在校验证书配置。");
 
             entity.LastAttemptAt = DateTimeOffset.UtcNow;
             entity.LastError = string.Empty;
@@ -112,7 +117,7 @@ public sealed class PanelCertificateService
                 .ExecuteAffrowsAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var issued = await IssueCoreAsync(entity, cancellationToken).ConfigureAwait(false);
+            var issued = await IssueCoreAsync(entity, triggerSource, cancellationToken).ConfigureAwait(false);
             entity.AcmeAccountKeyPem = issued.AccountKeyPem;
             entity.PfxBase64 = Convert.ToBase64String(issued.PfxBytes);
             entity.AssetVersion = entity.AssetVersion > 0 ? entity.AssetVersion + 1 : 1;
@@ -123,6 +128,7 @@ public sealed class PanelCertificateService
             entity.LastError = string.Empty;
             entity.UpdatedAt = DateTimeOffset.UtcNow;
 
+            ReportProgress(entity.CertificateId, triggerSource, issued.TotalSteps - 1, issued.TotalSteps, "正在向绑定节点下发最新证书。");
             await _db.FSql.InsertOrUpdate<PanelCertificateEntity>()
                 .SetSource(entity)
                 .ExecuteAffrowsAsync(cancellationToken)
@@ -132,6 +138,7 @@ public sealed class PanelCertificateService
                 .PushNodesUsingPanelCertificateAsync(entity.CertificateId, cancellationToken)
                 .ConfigureAwait(false);
 
+            ReportProgress(entity.CertificateId, triggerSource, issued.TotalSteps, issued.TotalSteps, "正在刷新 Panel HTTPS 运行时证书。");
             await _panelHttpsRuntime.RefreshAsync(cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation(
@@ -149,6 +156,7 @@ public sealed class PanelCertificateService
         }
         finally
         {
+            CompleteProgress(normalizedCertificateId);
             gate.Release();
         }
     }
@@ -180,9 +188,13 @@ public sealed class PanelCertificateService
             .ConfigureAwait(false);
     }
 
-    private async Task<IssuedPanelCertificate> IssueCoreAsync(PanelCertificateEntity entity, CancellationToken cancellationToken)
+    private async Task<IssuedPanelCertificate> IssueCoreAsync(
+        PanelCertificateEntity entity,
+        string triggerSource,
+        CancellationToken cancellationToken)
     {
         var record = entity.ToRecord();
+        ReportProgress(record.CertificateId, triggerSource, 2, 0, "正在初始化 ACME 账户。");
         var accountKey = string.IsNullOrWhiteSpace(entity.AcmeAccountKeyPem)
             ? KeyFactory.NewKey(KeyAlgorithm.ES256)
             : KeyFactory.FromPem(entity.AcmeAccountKeyPem);
@@ -193,9 +205,12 @@ public sealed class PanelCertificateService
             : new List<string> { $"mailto:{record.Email.Trim()}" };
         _ = await acme.NewAccount(contacts, true, null, null, null).ConfigureAwait(false);
 
+        ReportProgress(record.CertificateId, triggerSource, 3, 0, "正在创建 ACME 证书订单。");
         var domains = ResolveDomains(record);
         var order = await acme.NewOrder(domains.ToList()).ConfigureAwait(false);
         var authorizations = await order.Authorizations().ConfigureAwait(false);
+        var totalSteps = (authorizations.Count() * 2) + 6;
+        var currentStep = 4;
 
         foreach (var authorizationContext in authorizations)
         {
@@ -215,18 +230,38 @@ public sealed class PanelCertificateService
             switch (challengeType)
             {
                 case CertificateChallengeTypes.Http01:
-                    await CompleteHttpChallengeAsync(authorizationContext, authorization, cancellationToken).ConfigureAwait(false);
+                    await CompleteHttpChallengeAsync(
+                            record.CertificateId,
+                            triggerSource,
+                            totalSteps,
+                            currentStep,
+                            authorizationContext,
+                            authorization,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     break;
 
                 case CertificateChallengeTypes.Dns01:
-                    await CompleteDnsChallengeAsync(acme, record, authorizationContext, authorization, cancellationToken).ConfigureAwait(false);
+                    await CompleteDnsChallengeAsync(
+                            acme,
+                            record,
+                            triggerSource,
+                            totalSteps,
+                            currentStep,
+                            authorizationContext,
+                            authorization,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     break;
 
                 default:
                     throw new InvalidOperationException($"Panel 不支持的 challenge 类型: {record.ChallengeType}。");
             }
+
+            currentStep += 2;
         }
 
+        ReportProgress(record.CertificateId, triggerSource, totalSteps - 2, totalSteps, "ACME 授权完成，正在生成证书文件。");
         var certificateKey = KeyFactory.NewKey(KeyAlgorithm.RS256);
         var certificateChain = await order.Generate(
                 new CsrInfo
@@ -248,11 +283,16 @@ public sealed class PanelCertificateService
             PfxBytes = pfxBytes,
             Thumbprint = certificate.Thumbprint ?? string.Empty,
             NotBefore = new DateTimeOffset(certificate.NotBefore),
-            NotAfter = new DateTimeOffset(certificate.NotAfter)
+            NotAfter = new DateTimeOffset(certificate.NotAfter),
+            TotalSteps = totalSteps
         };
     }
 
     private async Task CompleteHttpChallengeAsync(
+        string certificateId,
+        string triggerSource,
+        int totalSteps,
+        int currentStep,
         IAuthorizationContext authorizationContext,
         Authorization authorization,
         CancellationToken cancellationToken)
@@ -263,11 +303,21 @@ public sealed class PanelCertificateService
             throw new InvalidOperationException($"域名 {authorization.Identifier.Value} 未提供 http-01 challenge。");
         }
 
+        ReportProgress(certificateId, triggerSource, currentStep, totalSteps, $"正在写入 HTTP-01 challenge：{authorization.Identifier.Value}。");
         _httpChallengeStore.Put(challenge.Token, challenge.KeyAuthz);
         try
         {
             _ = await challenge.Validate().ConfigureAwait(false);
-            await WaitForAuthorizationAsync(authorizationContext, authorization.Identifier.Value, cancellationToken).ConfigureAwait(false);
+            ReportProgress(certificateId, triggerSource, currentStep + 1, totalSteps, $"HTTP-01 challenge 已提交，等待 ACME 验证：{authorization.Identifier.Value}。");
+            await WaitForAuthorizationAsync(
+                    authorizationContext,
+                    authorization.Identifier.Value,
+                    certificateId,
+                    triggerSource,
+                    currentStep + 1,
+                    totalSteps,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -278,6 +328,9 @@ public sealed class PanelCertificateService
     private async Task CompleteDnsChallengeAsync(
         AcmeContext acme,
         PanelCertificateRecord record,
+        string triggerSource,
+        int totalSteps,
+        int currentStep,
         IAuthorizationContext authorizationContext,
         Authorization authorization,
         CancellationToken cancellationToken)
@@ -300,6 +353,7 @@ public sealed class PanelCertificateService
             ChallengeToken = challenge.Token
         };
 
+        ReportProgress(record.CertificateId, triggerSource, currentStep, totalSteps, $"正在写入 DNS challenge：{identifier}。");
         if (_dnsChallengeService.HasApiProvider(record))
         {
             await _dnsChallengeService
@@ -322,16 +376,33 @@ public sealed class PanelCertificateService
         {
             if (_dnsChallengeService.HasApiProvider(record))
             {
-                await Task.Delay(_dnsChallengeService.GetPropagationDelay(record), cancellationToken).ConfigureAwait(false);
+                var propagationDelay = _dnsChallengeService.GetPropagationDelay(record);
+                ReportProgress(
+                    record.CertificateId,
+                    triggerSource,
+                    currentStep,
+                    totalSteps,
+                    $"DNS 记录已写入，等待传播：{identifier}（{Math.Max(1, (int)Math.Ceiling(propagationDelay.TotalSeconds))} 秒）。");
+                await Task.Delay(propagationDelay, cancellationToken).ConfigureAwait(false);
             }
 
             _ = await challenge.Validate().ConfigureAwait(false);
-            await WaitForAuthorizationAsync(authorizationContext, identifier, cancellationToken).ConfigureAwait(false);
+            ReportProgress(record.CertificateId, triggerSource, currentStep + 1, totalSteps, $"DNS challenge 已提交，等待 ACME 验证：{identifier}。");
+            await WaitForAuthorizationAsync(
+                    authorizationContext,
+                    identifier,
+                    record.CertificateId,
+                    triggerSource,
+                    currentStep + 1,
+                    totalSteps,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
             try
             {
+                ReportProgress(record.CertificateId, triggerSource, currentStep + 1, totalSteps, $"正在清理 DNS challenge：{identifier}。");
                 if (_dnsChallengeService.HasApiProvider(record))
                 {
                     await _dnsChallengeService
@@ -430,10 +501,24 @@ public sealed class PanelCertificateService
     private async Task WaitForAuthorizationAsync(
         IAuthorizationContext authorizationContext,
         string identifier,
+        string certificateId,
+        string triggerSource,
+        int currentStep,
+        int totalSteps,
         CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 60; attempt++)
         {
+            if (attempt == 0 || (attempt + 1) % 5 == 0)
+            {
+                ReportProgress(
+                    certificateId,
+                    triggerSource,
+                    currentStep,
+                    totalSteps,
+                    $"等待 ACME 验证 {identifier}（轮询 {attempt + 1}/60）。");
+            }
+
             var authorization = await authorizationContext.Resource().ConfigureAwait(false);
             if (authorization.Status == AuthorizationStatus.Valid)
             {
@@ -458,6 +543,15 @@ public sealed class PanelCertificateService
 
         throw new TimeoutException($"等待域名 {identifier} 的 ACME 授权完成超时。");
     }
+
+    private void StartProgress(string certificateId, string triggerSource, string stage)
+        => _panelCertificateProgressTracker.Start(certificateId, triggerSource, stage, currentStep: 1, totalSteps: 0);
+
+    private void ReportProgress(string certificateId, string triggerSource, int currentStep, int totalSteps, string stage)
+        => _panelCertificateProgressTracker.Update(certificateId, triggerSource, stage, currentStep, totalSteps);
+
+    private void CompleteProgress(string certificateId)
+        => _panelCertificateProgressTracker.Complete(certificateId);
 
     private static void ValidateCertificate(PanelCertificateRecord record)
     {
@@ -564,5 +658,7 @@ public sealed class PanelCertificateService
         public DateTimeOffset NotBefore { get; init; }
 
         public DateTimeOffset NotAfter { get; init; }
+
+        public int TotalSteps { get; init; }
     }
 }

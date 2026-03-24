@@ -62,6 +62,7 @@ builder.Services.AddSingleton<PanelAcmeHttpChallengeStore>();
 builder.Services.AddSingleton<PanelMutationService>();
 builder.Services.AddSingleton<PanelQueryService>();
 builder.Services.AddSingleton<PanelDnsChallengeService>();
+builder.Services.AddSingleton<PanelCertificateProgressTracker>();
 builder.Services.AddSingleton<PanelCertificateService>();
 builder.Services.AddSingleton<PanelPublicUrlBuilder>();
 builder.Services.AddSingleton<SubscriptionCatalogService>();
@@ -264,6 +265,8 @@ app.Map(
         NodeConnectionRegistry nodeConnectionRegistry,
         ControlPlanePushService controlPlanePushService) =>
     {
+        var logger = loggerFactory.CreateLogger("NodeControlPlaneEndpoint");
+
         if (!context.WebSockets.IsWebSocketRequest)
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -277,6 +280,9 @@ app.Map(
         var envelope = await session.ReceiveAsync(context.RequestAborted).ConfigureAwait(false);
         if (envelope is null || !string.Equals(envelope.Type, ControlMessageTypes.NodeHello, StringComparison.Ordinal))
         {
+            logger.LogWarning(
+                "Rejected control plane WebSocket from {RemoteIp} because the first message was not node.hello.",
+                context.Connection.RemoteIpAddress);
             await session.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Expected node.hello as the first message.", context.RequestAborted).ConfigureAwait(false);
             return;
         }
@@ -284,6 +290,9 @@ app.Map(
         var hello = JsonSerializer.Deserialize(envelope.Payload.GetRawText(), ControlPlaneJsonSerializerContext.Default.NodeHelloPayload);
         if (hello is null || string.IsNullOrWhiteSpace(hello.NodeId))
         {
+            logger.LogWarning(
+                "Rejected control plane WebSocket from {RemoteIp} because node.hello was invalid.",
+                context.Connection.RemoteIpAddress);
             await session.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Invalid node.hello payload.", context.RequestAborted).ConfigureAwait(false);
             return;
         }
@@ -291,6 +300,9 @@ app.Map(
         var nodeId = hello.NodeId.Trim();
         if (!db.IsConfigured)
         {
+            logger.LogWarning(
+                "Rejected control plane WebSocket for node {NodeId} because the panel database is not configured.",
+                nodeId);
             await session.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Backend database not configured.", context.RequestAborted).ConfigureAwait(false);
             return;
         }
@@ -300,6 +312,7 @@ app.Map(
         {
             if (!options.AutoRegisterUnknownNodes)
             {
+                logger.LogWarning("Rejected control plane WebSocket for unknown node {NodeId}.", nodeId);
                 await session.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Node is not registered.", context.RequestAborted).ConfigureAwait(false);
                 return;
             }
@@ -309,8 +322,15 @@ app.Map(
         }
 
         var previous = nodeConnectionRegistry.Register(nodeId, session);
+        logger.LogInformation(
+            "Node {NodeId} connected to control plane from {RemoteIp}. Version={Version}, AppliedRevision={AppliedRevision}.",
+            nodeId,
+            context.Connection.RemoteIpAddress,
+            hello.Version,
+            hello.AppliedRevision);
         if (previous is not null && !ReferenceEquals(previous, session))
         {
+            logger.LogInformation("Replacing an older control plane session for node {NodeId}.", nodeId);
             await previous.CloseAsync(WebSocketCloseStatus.NormalClosure, "Replaced by a newer session.", context.RequestAborted).ConfigureAwait(false);
             await previous.DisposeAsync().ConfigureAwait(false);
         }
@@ -371,9 +391,19 @@ app.Map(
                 }
             }
         }
+        catch (WebSocketException ex) when (!context.RequestAborted.IsCancellationRequested)
+        {
+            logger.LogInformation(ex, "Control plane WebSocket for node {NodeId} was closed unexpectedly.", nodeId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unhandled control plane error for node {NodeId}.", nodeId);
+            throw;
+        }
         finally
         {
             nodeConnectionRegistry.Unregister(nodeId, session);
+            logger.LogInformation("Node {NodeId} disconnected from control plane.", nodeId);
         }
     });
 

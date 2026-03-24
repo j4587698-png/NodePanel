@@ -86,6 +86,320 @@ public sealed record PanelCertificateView
     public int BoundNodeCount { get; init; }
 
     public bool UsedByPanelHttps { get; init; }
+
+    public PanelCertificateProgressSnapshot Progress { get; init; } = new();
+
+    public DateTimeOffset SnapshotTime { get; init; } = DateTimeOffset.UtcNow;
+
+    public PanelCertificateAssetState AssetState => PanelCertificateAssetState.FromRecord(Definition);
+
+    public PanelCertificateRuntimeStatusView RuntimeStatus
+        => PanelCertificateRuntimeStatusView.FromRecord(Definition, Progress, SnapshotTime);
+
+    public bool ShouldAutoRefresh => RuntimeStatus.ShouldAutoRefresh;
+}
+
+public sealed record PanelCertificateProgressSnapshot
+{
+    public string CertificateId { get; init; } = string.Empty;
+
+    public bool IsRunning { get; init; }
+
+    public string TriggerSource { get; init; } = string.Empty;
+
+    public string Stage { get; init; } = string.Empty;
+
+    public int CurrentStep { get; init; }
+
+    public int TotalSteps { get; init; }
+
+    public DateTimeOffset StartedAt { get; init; }
+
+    public DateTimeOffset UpdatedAt { get; init; }
+
+    public string StepLabel
+        => CurrentStep > 0 && TotalSteps > 0
+            ? $"步骤 {CurrentStep}/{TotalSteps}"
+            : string.Empty;
+}
+
+public sealed record PanelCertificateAssetState
+{
+    public string Label { get; init; } = "未签发";
+
+    public string BadgeClass { get; init; } = "badge badge--idle";
+
+    public string Message { get; init; } = string.Empty;
+
+    public bool HasUsableAsset { get; init; }
+
+    public static PanelCertificateAssetState FromRecord(PanelCertificateRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        var hasPfx = !string.IsNullOrWhiteSpace(record.PfxBase64);
+        var hasThumbprint = !string.IsNullOrWhiteSpace(record.Thumbprint);
+        var hasNotBefore = record.NotBefore is not null;
+        var hasNotAfter = record.NotAfter is not null;
+        var hasLastSuccess = record.LastSuccessAt is not null;
+
+        if (!hasPfx && !hasThumbprint && !hasNotBefore && !hasNotAfter && !hasLastSuccess)
+        {
+            return new PanelCertificateAssetState();
+        }
+
+        if (hasPfx && hasNotAfter)
+        {
+            var warnings = new List<string>();
+            if (!hasLastSuccess)
+            {
+                warnings.Add("缺少上次成功时间");
+            }
+
+            if (!hasThumbprint)
+            {
+                warnings.Add("缺少证书指纹");
+            }
+
+            if (!hasNotBefore)
+            {
+                warnings.Add("缺少生效时间");
+            }
+
+            return new PanelCertificateAssetState
+            {
+                Label = "已签发",
+                BadgeClass = warnings.Count == 0 ? "badge badge--ok" : "badge badge--warn",
+                Message = warnings.Count == 0 ? string.Empty : $"证书资产可用，但{string.Join("、", warnings)}。",
+                HasUsableAsset = true
+            };
+        }
+
+        var issues = new List<string>();
+        if (hasThumbprint && !hasPfx && !hasNotAfter && !hasLastSuccess)
+        {
+            issues.Add("检测到历史指纹，但没有可用证书资产");
+        }
+        else
+        {
+            if (!hasPfx)
+            {
+                issues.Add("缺少 PFX 资产");
+            }
+
+            if (!hasNotAfter)
+            {
+                issues.Add("缺少有效期");
+            }
+
+            if (!hasLastSuccess)
+            {
+                issues.Add("缺少上次成功时间");
+            }
+        }
+
+        if (!hasThumbprint)
+        {
+            issues.Add("缺少证书指纹");
+        }
+
+        if (!hasNotBefore && (hasPfx || hasNotAfter || hasLastSuccess))
+        {
+            issues.Add("缺少生效时间");
+        }
+
+        return new PanelCertificateAssetState
+        {
+            Label = "资产不完整",
+            BadgeClass = "badge badge--error",
+            Message = $"{string.Join("；", issues)}。",
+            HasUsableAsset = false
+        };
+    }
+}
+
+public sealed record PanelCertificateRuntimeStatusView
+{
+    public string Label { get; init; } = "未调度";
+
+    public string BadgeClass { get; init; } = "badge badge--idle";
+
+    public string Message { get; init; } = string.Empty;
+
+    public string Detail { get; init; } = string.Empty;
+
+    public DateTimeOffset? NextAutomaticRunAt { get; init; }
+
+    public bool IsRunning { get; init; }
+
+    public bool ShouldAutoRefresh { get; init; }
+
+    public static PanelCertificateRuntimeStatusView FromRecord(
+        PanelCertificateRecord record,
+        PanelCertificateProgressSnapshot progress,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(progress);
+
+        if (progress.IsRunning)
+        {
+            var detailParts = new List<string>();
+            var triggerLabel = GetTriggerLabel(progress.TriggerSource);
+            if (!string.IsNullOrWhiteSpace(triggerLabel))
+            {
+                detailParts.Add(triggerLabel);
+            }
+
+            if (!string.IsNullOrWhiteSpace(progress.StepLabel))
+            {
+                detailParts.Add(progress.StepLabel);
+            }
+
+            if (progress.UpdatedAt != default)
+            {
+                detailParts.Add($"更新于 {progress.UpdatedAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+            }
+
+            return new PanelCertificateRuntimeStatusView
+            {
+                Label = "签发中",
+                BadgeClass = "badge badge--warn",
+                Message = string.IsNullOrWhiteSpace(progress.Stage) ? "后台正在处理证书签发。" : progress.Stage,
+                Detail = string.Join(" · ", detailParts),
+                IsRunning = true,
+                ShouldAutoRefresh = true
+            };
+        }
+
+        if (!record.Enabled)
+        {
+            return new PanelCertificateRuntimeStatusView
+            {
+                Label = "已停用",
+                BadgeClass = "badge badge--idle",
+                Message = "自动续签已关闭。"
+            };
+        }
+
+        var nextAutomaticRunAt = CalculateNextAutomaticRunAt(record, now);
+        var hasUsableAsset = !string.IsNullOrWhiteSpace(record.PfxBase64) && record.NotAfter is not null;
+        var lastAttemptFailed = !string.IsNullOrWhiteSpace(record.LastError) &&
+                                record.LastAttemptAt is not null &&
+                                (record.LastSuccessAt is null || record.LastAttemptAt >= record.LastSuccessAt);
+
+        if (lastAttemptFailed)
+        {
+            return new PanelCertificateRuntimeStatusView
+            {
+                Label = hasUsableAsset ? "最近续签失败" : "最近签发失败",
+                BadgeClass = hasUsableAsset ? "badge badge--warn" : "badge badge--error",
+                Message = record.LastError,
+                Detail = FormatNextAutomaticRunDetail(nextAutomaticRunAt, now),
+                NextAutomaticRunAt = nextAutomaticRunAt
+            };
+        }
+
+        if (!hasUsableAsset)
+        {
+            return new PanelCertificateRuntimeStatusView
+            {
+                Label = "待签发",
+                BadgeClass = "badge badge--warn",
+                Message = BuildPendingMessage("满足自动签发条件", nextAutomaticRunAt, now),
+                Detail = FormatNextAutomaticRunDetail(nextAutomaticRunAt, now),
+                NextAutomaticRunAt = nextAutomaticRunAt
+            };
+        }
+
+        var renewWindowAt = record.NotAfter!.Value.AddDays(-Math.Max(1, record.RenewBeforeDays));
+        if (renewWindowAt <= now)
+        {
+            return new PanelCertificateRuntimeStatusView
+            {
+                Label = "待续签",
+                BadgeClass = "badge badge--warn",
+                Message = BuildPendingMessage("已进入自动续签窗口", nextAutomaticRunAt, now),
+                Detail = FormatNextAutomaticRunDetail(nextAutomaticRunAt, now),
+                NextAutomaticRunAt = nextAutomaticRunAt
+            };
+        }
+
+        return new PanelCertificateRuntimeStatusView
+        {
+            Label = "已就绪",
+            BadgeClass = "badge badge--ok",
+            Message = $"预计在 {renewWindowAt.ToLocalTime():yyyy-MM-dd HH:mm:ss} 进入自动续签窗口。",
+            Detail = FormatNextAutomaticRunDetail(renewWindowAt, now),
+            NextAutomaticRunAt = renewWindowAt
+        };
+    }
+
+    private static DateTimeOffset? CalculateNextAutomaticRunAt(PanelCertificateRecord record, DateTimeOffset now)
+    {
+        if (!record.Enabled)
+        {
+            return null;
+        }
+
+        var retryAt = record.LastAttemptAt?.AddMinutes(Math.Max(1, record.CheckIntervalMinutes));
+        var hasUsableAsset = !string.IsNullOrWhiteSpace(record.PfxBase64) && record.NotAfter is not null;
+        if (!hasUsableAsset)
+        {
+            if (retryAt is null)
+            {
+                return now;
+            }
+
+            return retryAt > now ? retryAt : now;
+        }
+
+        var renewWindowAt = record.NotAfter!.Value.AddDays(-Math.Max(1, record.RenewBeforeDays));
+        if (renewWindowAt > now)
+        {
+            return renewWindowAt;
+        }
+
+        if (retryAt is null)
+        {
+            return now;
+        }
+
+        return retryAt > now ? retryAt : now;
+    }
+
+    private static string BuildPendingMessage(string prefix, DateTimeOffset? nextAutomaticRunAt, DateTimeOffset now)
+    {
+        if (nextAutomaticRunAt is null || nextAutomaticRunAt <= now)
+        {
+            return $"{prefix}，后台循环会尽快尝试。";
+        }
+
+        return $"{prefix}，计划在 {nextAutomaticRunAt.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss} 自动处理。";
+    }
+
+    private static string FormatNextAutomaticRunDetail(DateTimeOffset? nextAutomaticRunAt, DateTimeOffset now)
+    {
+        if (nextAutomaticRunAt is null)
+        {
+            return string.Empty;
+        }
+
+        if (nextAutomaticRunAt <= now)
+        {
+            return "后台循环已满足处理条件。";
+        }
+
+        return $"下次自动处理 {nextAutomaticRunAt.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
+    }
+
+    private static string GetTriggerLabel(string triggerSource)
+        => triggerSource.Trim().ToLowerInvariant() switch
+        {
+            "manual" => "手动触发",
+            "auto" => "自动触发",
+            _ => string.Empty
+        };
 }
 
 public sealed record UpsertPanelCertificateRequest
@@ -385,6 +699,8 @@ public sealed class CertificateListPageViewModel
     public PanelHttpsSettingsFormInput PanelHttps { get; init; } = new();
 
     public string StatusMessage { get; init; } = string.Empty;
+
+    public bool ShouldAutoRefresh => Certificates.Any(static certificate => certificate.ShouldAutoRefresh);
 }
 
 public sealed class CertificateEditorViewModel
@@ -394,6 +710,10 @@ public sealed class CertificateEditorViewModel
     public required bool IsEditMode { get; init; }
 
     public string StatusMessage { get; init; } = string.Empty;
+
+    public PanelCertificateView? Certificate { get; init; }
+
+    public bool ShouldAutoRefresh => Certificate?.ShouldAutoRefresh == true;
 }
 
 public sealed class PanelRestartingViewModel

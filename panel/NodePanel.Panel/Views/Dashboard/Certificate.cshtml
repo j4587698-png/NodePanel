@@ -6,6 +6,18 @@
     var returnUrl = Url.Action("Certificate", "Dashboard", new { certificateId = Model.Form.CertificateId }) ?? "/admin/certificates";
 }
 
+@functions {
+    private static string GetAssetMessageClass(PanelCertificateAssetState assetState)
+        => assetState.HasUsableAsset ? "inline-alert inline-alert--warn" : "inline-alert inline-alert--error";
+
+    private static string GetRuntimeMessageClass(PanelCertificateRuntimeStatusView runtimeStatus)
+        => runtimeStatus.IsRunning || runtimeStatus.BadgeClass == "badge badge--warn"
+            ? "inline-alert inline-alert--warn"
+            : runtimeStatus.BadgeClass == "badge badge--error"
+                ? "inline-alert inline-alert--error"
+                : "muted";
+}
+
 <section class="page-header">
     <div>
         <p class="eyebrow">Certificate Editor</p>
@@ -30,6 +42,56 @@
     <div class="notice">@Model.StatusMessage</div>
 }
 
+@if (Model.Certificate is { } certificate)
+{
+    var assetState = certificate.AssetState;
+    var runtimeStatus = certificate.RuntimeStatus;
+
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Status</p>
+                <h3>签发状态</h3>
+            </div>
+        </div>
+        <div class="stats">
+            <div>
+                <dt>证书资产</dt>
+                <dd><span class="@assetState.BadgeClass">@assetState.Label</span></dd>
+                @if (!string.IsNullOrWhiteSpace(assetState.Message))
+                {
+                    <div class="@GetAssetMessageClass(assetState)">@assetState.Message</div>
+                }
+            </div>
+            <div>
+                <dt>自动签发</dt>
+                <dd><span class="@runtimeStatus.BadgeClass">@runtimeStatus.Label</span></dd>
+                @if (!string.IsNullOrWhiteSpace(runtimeStatus.Message))
+                {
+                    <div class="@GetRuntimeMessageClass(runtimeStatus)">@runtimeStatus.Message</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(runtimeStatus.Detail))
+                {
+                    <div class="muted">@runtimeStatus.Detail</div>
+                }
+            </div>
+            <div><dt>最近尝试</dt><dd>@((certificate.Definition.LastAttemptAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>最近成功</dt><dd>@((certificate.Definition.LastSuccessAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>证书有效期</dt><dd>@((certificate.Definition.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>下次自动处理</dt><dd>@((runtimeStatus.NextAutomaticRunAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>资产版本</dt><dd>@certificate.Definition.AssetVersion</dd></div>
+            <div><dt>Thumbprint</dt><dd class="mono">@(!string.IsNullOrWhiteSpace(certificate.Definition.Thumbprint) ? certificate.Definition.Thumbprint : "-")</dd></div>
+            @if (!string.IsNullOrWhiteSpace(certificate.Definition.LastError))
+            {
+                <div>
+                    <dt>最近错误</dt>
+                    <dd>@certificate.Definition.LastError</dd>
+                </div>
+            }
+        </div>
+    </section>
+}
+
 <section class="card">
     <div class="card__header">
         <div>
@@ -37,7 +99,7 @@
             <h3>证书配置</h3>
         </div>
     </div>
-    <form asp-action="SaveCertificate" method="post" class="form">
+    <form asp-action="SaveCertificate" method="post" class="form" id="certificateForm">
         @Html.AntiForgeryToken()
         <div asp-validation-summary="All" class="error-box"></div>
 
@@ -217,6 +279,8 @@
     document.addEventListener('DOMContentLoaded', () => {
         const challengeTypeInput = document.getElementById('challengeTypeInput');
         const dnsProviderInput = document.getElementById('dnsProviderInput');
+        const certificateForm = document.getElementById('certificateForm');
+        let isDirty = false;
         if (challengeTypeInput) {
             challengeTypeInput.addEventListener('change', updateDnsProviderVisibility);
         }
@@ -226,6 +290,22 @@
         }
 
         updateDnsProviderVisibility();
+
+        if (certificateForm) {
+            certificateForm.querySelectorAll('input, select, textarea').forEach((element) => {
+                element.addEventListener('input', () => { isDirty = true; });
+                element.addEventListener('change', () => { isDirty = true; });
+            });
+        }
+
+        const shouldAutoRefresh = @Model.ShouldAutoRefresh.ToString().ToLowerInvariant();
+        if (shouldAutoRefresh) {
+            window.setInterval(() => {
+                if (!document.hidden && !isDirty) {
+                    window.location.reload();
+                }
+            }, 3000);
+        }
     });
 </script>
 }

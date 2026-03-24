@@ -4,6 +4,18 @@
     var returnUrl = Url.Action("Certificates", "Dashboard") ?? "/admin/certificates";
 }
 
+@functions {
+    private static string GetAssetMessageClass(PanelCertificateAssetState assetState)
+        => assetState.HasUsableAsset ? "inline-alert inline-alert--warn" : "inline-alert inline-alert--error";
+
+    private static string GetRuntimeMessageClass(PanelCertificateRuntimeStatusView runtimeStatus)
+        => runtimeStatus.IsRunning || runtimeStatus.BadgeClass == "badge badge--warn"
+            ? "inline-alert inline-alert--warn"
+            : runtimeStatus.BadgeClass == "badge badge--error"
+                ? "inline-alert inline-alert--error"
+                : "muted";
+}
+
 <section class="page-header">
     <div>
         <p class="eyebrow">Certificates</p>
@@ -18,6 +30,11 @@
 @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
 {
     <div class="notice">@Model.StatusMessage</div>
+}
+
+@if (Model.ShouldAutoRefresh)
+{
+    <div class="inline-alert inline-alert--warn">检测到证书任务正在执行，页面会在未编辑表单时自动刷新。</div>
 }
 
 <div class="grid grid--two">
@@ -101,7 +118,7 @@
                 <tr>
                     <th>证书</th>
                     <th>Challenge</th>
-                    <th>有效期</th>
+                    <th>状态</th>
                     <th>绑定</th>
                     <th></th>
                 </tr>
@@ -110,6 +127,8 @@
             @foreach (var certificate in Model.Certificates)
             {
                 var definition = certificate.Definition;
+                var assetState = certificate.AssetState;
+                var runtimeStatus = certificate.RuntimeStatus;
                 <tr>
                     <td>
                         <strong>@definition.DisplayName</strong>
@@ -130,9 +149,33 @@
                         <div class="muted">提前 @definition.RenewBeforeDays 天续签</div>
                     </td>
                     <td>
-                        <div>@((definition.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "未签发")</div>
+                        <span class="@assetState.BadgeClass">@assetState.Label</span>
+                        @if (!string.IsNullOrWhiteSpace(assetState.Message))
+                        {
+                            <div class="@GetAssetMessageClass(assetState)">@assetState.Message</div>
+                        }
+                        <div style="margin-top: 10px;">
+                            <span class="@runtimeStatus.BadgeClass">@runtimeStatus.Label</span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(runtimeStatus.Message))
+                        {
+                            <div class="@GetRuntimeMessageClass(runtimeStatus)">@runtimeStatus.Message</div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(runtimeStatus.Detail))
+                        {
+                            <div class="muted">@runtimeStatus.Detail</div>
+                        }
+                        <div class="muted">有效期 @((definition.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</div>
+                        <div class="muted">最近尝试 @((definition.LastAttemptAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</div>
                         <div class="muted">上次成功 @((definition.LastSuccessAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</div>
-                        <div class="muted mono">@definition.Thumbprint</div>
+                        @if (runtimeStatus.NextAutomaticRunAt is not null)
+                        {
+                            <div class="muted">下次自动处理 @runtimeStatus.NextAutomaticRunAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(definition.Thumbprint))
+                        {
+                            <div class="muted mono">Thumbprint @definition.Thumbprint</div>
+                        }
                     </td>
                     <td>
                         <div>节点数: @certificate.BoundNodeCount</div>
@@ -152,3 +195,24 @@
         </table>
     </div>
 </section>
+
+@section Scripts {
+@if (Model.ShouldAutoRefresh)
+{
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        let isDirty = false;
+        document.querySelectorAll('input, select, textarea').forEach((element) => {
+            element.addEventListener('input', () => { isDirty = true; });
+            element.addEventListener('change', () => { isDirty = true; });
+        });
+
+        window.setInterval(() => {
+            if (!document.hidden && !isDirty) {
+                window.location.reload();
+            }
+        }, 3000);
+    });
+</script>
+}
+}

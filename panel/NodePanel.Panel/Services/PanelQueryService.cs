@@ -7,11 +7,16 @@ public sealed class PanelQueryService
 {
     private readonly NodeConnectionRegistry _nodeConnectionRegistry;
     private readonly DatabaseService _db;
+    private readonly PanelCertificateProgressTracker _panelCertificateProgressTracker;
 
-    public PanelQueryService(DatabaseService db, NodeConnectionRegistry nodeConnectionRegistry)
+    public PanelQueryService(
+        DatabaseService db,
+        NodeConnectionRegistry nodeConnectionRegistry,
+        PanelCertificateProgressTracker panelCertificateProgressTracker)
     {
         _db = db;
         _nodeConnectionRegistry = nodeConnectionRegistry;
+        _panelCertificateProgressTracker = panelCertificateProgressTracker;
     }
 
     public async Task<PanelStateView> BuildStateViewAsync(CancellationToken cancellationToken = default)
@@ -147,6 +152,20 @@ public sealed class PanelQueryService
         return entity?.ToRecord();
     }
 
+    public async Task<PanelCertificateView?> FindCertificateViewAsync(string certificateId, CancellationToken cancellationToken = default)
+    {
+        if (!_db.IsConfigured) return null;
+
+        var normalizedCertificateId = certificateId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedCertificateId))
+        {
+            return null;
+        }
+
+        var certificates = await GetCertificateViewsAsync(cancellationToken).ConfigureAwait(false);
+        return certificates.FirstOrDefault(item => string.Equals(item.Definition.CertificateId, normalizedCertificateId, StringComparison.Ordinal));
+    }
+
     public async Task<IReadOnlyList<PanelCertificateView>> GetCertificateViewsAsync(CancellationToken cancellationToken = default)
     {
         if (!_db.IsConfigured) return Array.Empty<PanelCertificateView>();
@@ -155,6 +174,7 @@ public sealed class PanelQueryService
         var nodes = await _db.FSql.Select<NodeEntity>().ToListAsync(cancellationToken);
         var settings = await GetSettingsDictionaryAsync(cancellationToken).ConfigureAwait(false);
         var panelHttpsCertificateId = settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsCertificateId) ?? string.Empty;
+        var snapshotTime = DateTimeOffset.UtcNow;
 
         return certificates
             .Select(entity =>
@@ -171,7 +191,9 @@ public sealed class PanelQueryService
                 {
                     Definition = record,
                     BoundNodeCount = boundNodeCount,
-                    UsedByPanelHttps = string.Equals(panelHttpsCertificateId, record.CertificateId, StringComparison.Ordinal)
+                    UsedByPanelHttps = string.Equals(panelHttpsCertificateId, record.CertificateId, StringComparison.Ordinal),
+                    Progress = _panelCertificateProgressTracker.GetSnapshot(record.CertificateId),
+                    SnapshotTime = snapshotTime
                 };
             })
             .OrderBy(static item => item.Definition.CertificateId, StringComparer.Ordinal)

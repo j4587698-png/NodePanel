@@ -22,19 +22,27 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
         using var buffer = new MemoryStream();
         var chunk = new byte[8 * 1024];
 
-        while (_socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+        try
         {
-            var result = await _socket.ReceiveAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close)
+            while (_socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
             {
-                return null;
-            }
+                var result = await _socket.ReceiveAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    return null;
+                }
 
-            buffer.Write(chunk, 0, result.Count);
-            if (result.EndOfMessage)
-            {
-                break;
+                buffer.Write(chunk, 0, result.Count);
+                if (result.EndOfMessage)
+                {
+                    break;
+                }
             }
+        }
+        catch (WebSocketException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation(ex, "Control plane socket closed without a clean WebSocket shutdown.");
+            return null;
         }
 
         if (buffer.Length == 0)

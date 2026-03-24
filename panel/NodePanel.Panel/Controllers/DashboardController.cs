@@ -102,7 +102,8 @@ public sealed class DashboardController : Controller
             {
                 Form = new PanelCertificateFormInput(),
                 IsEditMode = false,
-                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
+                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty,
+                Certificate = null
             });
 
     [HttpGet("certificates/{certificateId}")]
@@ -120,7 +121,8 @@ public sealed class DashboardController : Controller
             {
                 Form = PanelCertificateFormInput.FromRecord(certificate),
                 IsEditMode = true,
-                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
+                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty,
+                Certificate = await _panelQueryService.FindCertificateViewAsync(certificateId, cancellationToken)
             });
     }
 
@@ -142,7 +144,10 @@ public sealed class DashboardController : Controller
                 {
                     Form = form,
                     IsEditMode = true,
-                    StatusMessage = BuildValidationStatusMessage("证书配置校验失败", configError)
+                    StatusMessage = BuildValidationStatusMessage("证书配置校验失败", configError),
+                    Certificate = string.IsNullOrWhiteSpace(form.CertificateId)
+                        ? null
+                        : await _panelQueryService.FindCertificateViewAsync(form.CertificateId, cancellationToken)
                 });
         }
 

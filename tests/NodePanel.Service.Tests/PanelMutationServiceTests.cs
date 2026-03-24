@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NodePanel.ControlPlane.Configuration;
@@ -10,6 +12,112 @@ namespace NodePanel.Service.Tests;
 
 public sealed class PanelMutationServiceTests
 {
+    [Fact]
+    public async Task PanelCertificateEntity_roundtrip_preserves_thumbprint_and_timestamps()
+    {
+        using var harness = new PanelMutationHarness();
+
+        var notBefore = DateTimeOffset.UtcNow.AddDays(-1);
+        var notAfter = DateTimeOffset.UtcNow.AddDays(30);
+        var lastAttemptAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        var lastSuccessAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var createdAt = DateTimeOffset.UtcNow.AddDays(-10);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-30);
+
+        var entity = new PanelCertificateEntity
+        {
+            CertificateId = "panel-cert",
+            DisplayName = "Panel Certificate",
+            Domain = "panel.example.com",
+            PfxBase64 = Convert.ToBase64String([1, 2, 3]),
+            Thumbprint = "AD4276A4B92312B203D12A22E6512623673C7C85",
+            NotBefore = notBefore,
+            NotAfter = notAfter,
+            LastAttemptAt = lastAttemptAt,
+            LastSuccessAt = lastSuccessAt,
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt
+        };
+
+        await harness.DatabaseService.FSql.InsertOrUpdate<PanelCertificateEntity>()
+            .SetSource(entity)
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        var stored = await harness.DatabaseService.FSql.Select<PanelCertificateEntity>()
+            .Where(item => item.CertificateId == entity.CertificateId)
+            .FirstAsync(CancellationToken.None);
+
+        Assert.NotNull(stored);
+        Assert.Equal(entity.PfxBase64, stored!.PfxBase64);
+        Assert.Equal(entity.Thumbprint, stored.Thumbprint);
+        Assert.Equal(entity.NotBefore, stored.NotBefore);
+        Assert.Equal(entity.NotAfter, stored.NotAfter);
+        Assert.Equal(entity.LastAttemptAt, stored.LastAttemptAt);
+        Assert.Equal(entity.LastSuccessAt, stored.LastSuccessAt);
+        Assert.Equal(entity.CreatedAt, stored.CreatedAt);
+        Assert.Equal(entity.UpdatedAt, stored.UpdatedAt);
+    }
+
+    [Fact]
+    public void PanelCertificateEntity_falls_back_to_legacy_datetime_columns()
+    {
+        var notBefore = DateTimeOffset.UtcNow.AddDays(-1);
+        var notAfter = DateTimeOffset.UtcNow.AddDays(30);
+        var lastAttemptAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        var lastSuccessAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var createdAt = DateTimeOffset.UtcNow.AddDays(-10);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-30);
+
+        var entity = new PanelCertificateEntity
+        {
+            LegacyNotBefore = notBefore,
+            LegacyNotAfter = notAfter,
+            LegacyLastAttemptAt = lastAttemptAt,
+            LegacyLastSuccessAt = lastSuccessAt,
+            LegacyCreatedAt = createdAt,
+            LegacyUpdatedAt = updatedAt,
+            NotBeforeUnixMilliseconds = null,
+            NotAfterUnixMilliseconds = null,
+            LastAttemptAtUnixMilliseconds = null,
+            LastSuccessAtUnixMilliseconds = null,
+            CreatedAtUnixMilliseconds = null,
+            UpdatedAtUnixMilliseconds = null
+        };
+
+        Assert.Equal(notBefore, entity.NotBefore);
+        Assert.Equal(notAfter, entity.NotAfter);
+        Assert.Equal(lastAttemptAt, entity.LastAttemptAt);
+        Assert.Equal(lastSuccessAt, entity.LastSuccessAt);
+        Assert.Equal(createdAt, entity.CreatedAt);
+        Assert.Equal(updatedAt, entity.UpdatedAt);
+    }
+
+    [Fact]
+    public void PanelCertificateEntity_uses_pfx_metadata_when_timestamp_columns_are_missing()
+    {
+        var password = "panel-password";
+        var pfx = CreateTestCertificatePfx("panel.example.com", password, out var thumbprint, out var notBefore, out var notAfter);
+
+        var entity = new PanelCertificateEntity
+        {
+            CertificateId = "panel-cert",
+            Domain = "panel.example.com",
+            PfxPassword = password,
+            PfxBase64 = Convert.ToBase64String(pfx),
+            Thumbprint = string.Empty,
+            LegacyNotBefore = null,
+            LegacyNotAfter = null,
+            NotBeforeUnixMilliseconds = null,
+            NotAfterUnixMilliseconds = null
+        };
+
+        var record = entity.ToRecord();
+
+        Assert.Equal(thumbprint, record.Thumbprint);
+        Assert.Equal(notBefore, record.NotBefore);
+        Assert.Equal(notAfter, record.NotAfter);
+    }
+
     [Fact]
     public async Task SaveNodeAsync_keeps_initial_revision_and_increments_on_update()
     {
@@ -175,6 +283,34 @@ public sealed class PanelMutationServiceTests
                 TransferEnableBytes = 1024
             }
         };
+
+    private static byte[] CreateTestCertificatePfx(
+        string commonName,
+        string password,
+        out string thumbprint,
+        out DateTimeOffset notBefore,
+        out DateTimeOffset notAfter)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest($"CN={commonName}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+
+        var start = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var end = start.AddDays(30);
+
+        using var certificate = request.CreateSelfSigned(start, end);
+        var exported = certificate.Export(X509ContentType.Pfx, password);
+        using var exportable = X509CertificateLoader.LoadPkcs12(
+            exported,
+            password,
+            X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+
+        thumbprint = exportable.Thumbprint ?? string.Empty;
+        notBefore = new DateTimeOffset(exportable.NotBefore);
+        notAfter = new DateTimeOffset(exportable.NotAfter);
+        return exported;
+    }
 
     private sealed class PanelMutationHarness : IDisposable
     {

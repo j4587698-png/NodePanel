@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -64,19 +65,7 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
                 await socket.ConnectAsync(uri, connectCts.Token).ConfigureAwait(false);
 
                 Volatile.Write(ref _socket, socket);
-                await SendAsync(CreateHelloEnvelope(), stoppingToken).ConfigureAwait(false);
-
-                var receiveLoop = ReceiveLoopAsync(socket, stoppingToken);
-                var heartbeatLoop = HeartbeatLoopAsync(stoppingToken);
-                await Task.WhenAny(receiveLoop, heartbeatLoop).ConfigureAwait(false);
-
-                try
-                {
-                    await Task.WhenAll(receiveLoop, heartbeatLoop).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                }
+                await RunConnectionAsync(socket, uri, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -94,6 +83,14 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
                 }
             }
 
+            if (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            _logger.LogInformation(
+                "Control plane connection is down. Retrying in {DelaySeconds}s.",
+                _options.ControlPlane.ReconnectDelaySeconds);
             await Task.Delay(TimeSpan.FromSeconds(_options.ControlPlane.ReconnectDelaySeconds), stoppingToken).ConfigureAwait(false);
         }
     }
@@ -128,6 +125,38 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         {
             _sendLock.Release();
         }
+    }
+
+    private async Task RunConnectionAsync(ClientWebSocket socket, Uri uri, CancellationToken stoppingToken)
+    {
+        using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var connectionToken = connectionCts.Token;
+
+        if (!await SendAsync(CreateHelloEnvelope(), connectionToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("The control plane WebSocket connected, but node.hello could not be sent.");
+        }
+
+        _logger.LogInformation("Connected to control plane {Url} as node {NodeId}.", uri, _nodeId);
+
+        var receiveLoop = ReceiveLoopAsync(socket, connectionToken);
+        var heartbeatLoop = HeartbeatLoopAsync(connectionToken);
+        var completed = await Task.WhenAny(receiveLoop, heartbeatLoop).ConfigureAwait(false);
+
+        connectionCts.Cancel();
+
+        var primaryFailure = await AwaitLoopFailureAsync(completed, connectionToken).ConfigureAwait(false);
+        var secondaryLoop = ReferenceEquals(completed, receiveLoop) ? heartbeatLoop : receiveLoop;
+        var secondaryFailure = await AwaitLoopFailureAsync(secondaryLoop, connectionToken).ConfigureAwait(false);
+        var failure = primaryFailure ?? secondaryFailure;
+
+        if (failure is null)
+        {
+            _logger.LogInformation("Control plane connection for node {NodeId} closed.", _nodeId);
+            return;
+        }
+
+        ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     private async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
@@ -183,7 +212,10 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(_options.ControlPlane.HeartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
-            await SendAsync(CreateHeartbeatEnvelope(), cancellationToken).ConfigureAwait(false);
+            if (!await SendAsync(CreateHeartbeatEnvelope(), cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
         }
     }
 
@@ -192,19 +224,27 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         using var buffer = new MemoryStream();
         var chunk = new byte[8 * 1024];
 
-        while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+        try
         {
-            var result = await socket.ReceiveAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close)
+            while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
             {
-                return null;
-            }
+                var result = await socket.ReceiveAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    return null;
+                }
 
-            buffer.Write(chunk, 0, result.Count);
-            if (result.EndOfMessage)
-            {
-                break;
+                buffer.Write(chunk, 0, result.Count);
+                if (result.EndOfMessage)
+                {
+                    break;
+                }
             }
+        }
+        catch (WebSocketException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation(ex, "Control plane receive loop ended unexpectedly for node {NodeId}.", _nodeId);
+            return null;
         }
 
         if (buffer.Length == 0)
@@ -213,6 +253,23 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         }
 
         return JsonSerializer.Deserialize(buffer.ToArray(), ControlPlaneJsonSerializerContext.Default.ControlPlaneEnvelope);
+    }
+
+    private static async Task<Exception?> AwaitLoopFailureAsync(Task loop, CancellationToken connectionToken)
+    {
+        try
+        {
+            await loop.ConfigureAwait(false);
+            return null;
+        }
+        catch (OperationCanceledException) when (connectionToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
     }
 
     private ControlPlaneEnvelope CreateHelloEnvelope()
