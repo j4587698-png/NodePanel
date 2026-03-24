@@ -20,7 +20,7 @@ Options:
   --component service|panel|all   Build only one component. Default: all
   --rid RID                       Runtime identifier. Can be repeated. Default: linux-x64
   --configuration Release|Debug   Build configuration. Default: Release
-  --self-contained true|false     Publish self-contained packages. Default: true
+  --self-contained true|false     Publish self-contained panel packages. Default: true
   --output-root PATH              Package output directory
   --github-repo OWNER/REPO        Persist GitHub release repo metadata into PACKAGE_INFO
   --version SEMVER                Override .NET/package version metadata
@@ -32,6 +32,10 @@ Examples:
   ./publish-linux.sh --github-repo owner/repo --rid linux-x64 --rid linux-arm64
   ./publish-linux.sh --github-repo owner/repo --version 0.1.0 --rid linux-x64
   ./publish-linux.sh --rid linux-x64 --rid linux-arm64 --self-contained false
+
+Notes:
+  service packages are always published as Native AOT self-contained binaries.
+  --self-contained only changes panel packaging.
 EOF
 }
 
@@ -92,20 +96,55 @@ package_component() {
     local readme_path="${SCRIPT_DIR}/README.md"
     local build_time
     local git_commit
+    local publish_mode
+    local component_self_contained
+    local -a publish_args
 
     rm -rf "$work_root"
     mkdir -p "$publish_dir" "$package_dir/app" "$OUTPUT_ROOT"
 
-    printf '[publish] %s %s\n' "$component" "$rid"
-    dotnet publish "$project_path" \
-        --configuration "$CONFIGURATION" \
-        --runtime "$rid" \
-        --self-contained "$SELF_CONTAINED" \
-        -p:UseAppHost=true \
-        -p:PublishSingleFile=false \
-        -p:PublishReadyToRun=false \
-        ${VERSION:+-p:Version="$VERSION"} \
+    publish_mode="dotnet-publish"
+    component_self_contained="$SELF_CONTAINED"
+    publish_args=(
+        --configuration "$CONFIGURATION"
+        --runtime "$rid"
         --output "$publish_dir"
+    )
+
+    case "$component" in
+        service)
+            publish_mode="native-aot"
+            component_self_contained="true"
+            publish_args+=(
+                --self-contained "true"
+                -p:PublishAot=true
+                -p:DebugSymbols=false
+                -p:DebugType=None
+                -p:StripSymbols=true
+            )
+            ;;
+        panel)
+            if [[ "$SELF_CONTAINED" == "true" ]]; then
+                publish_mode="self-contained"
+            else
+                publish_mode="framework-dependent"
+            fi
+
+            publish_args+=(
+                --self-contained "$SELF_CONTAINED"
+                -p:UseAppHost=true
+                -p:PublishSingleFile=false
+                -p:PublishReadyToRun=false
+            )
+            ;;
+    esac
+
+    if [[ -n "$VERSION" ]]; then
+        publish_args+=("-p:Version=$VERSION")
+    fi
+
+    printf '[publish] %s %s (%s)\n' "$component" "$rid" "$publish_mode"
+    dotnet publish "$project_path" "${publish_args[@]}"
 
     cp -a "$publish_dir/." "$package_dir/app/"
     cp "$installer_path" "$package_dir/install.sh"
@@ -119,7 +158,8 @@ package_component() {
 component=${component}
 rid=${rid}
 configuration=${CONFIGURATION}
-self_contained=${SELF_CONTAINED}
+self_contained=${component_self_contained}
+publish_mode=${publish_mode}
 git_commit=${git_commit}
 build_time=${build_time}
 github_repo=${GITHUB_REPO}

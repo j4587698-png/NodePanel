@@ -41,6 +41,11 @@ readonly SELF_SCRIPT_SOURCE="$(np_abs_path "${BASH_SOURCE[0]}")"
 readonly COMMON_SCRIPT_SOURCE="$(np_abs_path "${NODEPANEL_COMMON_SOURCE}")"
 readonly PACKAGE_PREFIX="nodepanel-service"
 readonly DEFAULT_GITHUB_REPO="${NODEPANEL_DEFAULT_GITHUB_REPO:-}"
+readonly COLOR_RED=$'\033[0;31m'
+readonly COLOR_GREEN=$'\033[0;32m'
+readonly COLOR_YELLOW=$'\033[0;33m'
+readonly COLOR_CYAN=$'\033[0;36m'
+readonly COLOR_PLAIN=$'\033[0m'
 
 SERVICE_PANEL_URL=""
 SERVICE_NODE_ID=""
@@ -56,6 +61,7 @@ SAVED_PACKAGE_RID=""
 usage() {
     cat <<'EOF'
 Usage:
+  nodepanel-service.sh                         (interactive menu)
   nodepanel-service.sh install [package_dir|package.tar.gz|package_url|owner/repo|owner/repo@tag] [options]
   nodepanel-service.sh update [package_dir|package.tar.gz|package_url|owner/repo|owner/repo@tag] [options]
   nodepanel-service.sh configure [options]
@@ -69,6 +75,8 @@ Usage:
   nodepanel-service.sh uninstall [--purge]
 
 Options:
+  --panel URL
+  --panel-base-url URL
   --panel-url URL
   --control-plane-url URL
   --node-id ID
@@ -82,11 +90,12 @@ Options:
   --rid RID
 
 Examples:
-  bash install.sh install --panel-url wss://panel.example.com/control/ws --node-id node-001
-  bash install.sh install owner/repo --panel-url wss://panel.example.com/control/ws --node-id node-001
-  bash install.sh install v1.2.3 --github-repo owner/repo --panel-url wss://panel.example.com/control/ws --node-id node-001
-  bash install.sh install https://downloads.example.com/nodepanel-service-linux-x64.tar.gz --panel-url wss://panel.example.com/control/ws --node-id node-001
-  nodepanel-service update /tmp/nodepanel-service-linux-x64.tar.gz --panel-url ws://127.0.0.1/control/ws
+  bash install.sh install
+  bash install.sh install --panel https://panel.example.com --node-id node-001
+  bash install.sh install owner/repo --panel https://panel.example.com --node-id node-001
+  bash install.sh install v1.2.3 --github-repo owner/repo --panel https://panel.example.com --node-id node-001
+  bash install.sh install https://downloads.example.com/nodepanel-service-linux-x64.tar.gz --panel http://127.0.0.1 --node-id node-001
+  nodepanel-service update /tmp/nodepanel-service-linux-x64.tar.gz --panel http://127.0.0.1
   nodepanel-service update owner/repo@v1.2.3
   nodepanel-service update
   nodepanel-service configure --access-token your-token
@@ -100,6 +109,258 @@ require_option_value() {
     if [[ -z "$option_value" ]]; then
         np_die "Missing value for ${option_name}"
     fi
+}
+
+trim_value() {
+    local value="${1:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s\n' "$value"
+}
+
+is_interactive_session() {
+    [[ -t 0 && -t 1 ]]
+}
+
+normalize_panel_url() {
+    local raw_value
+    raw_value="$(trim_value "${1:-}")"
+    if [[ -z "$raw_value" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    if [[ ! "$raw_value" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]]; then
+        case "$raw_value" in
+            localhost|localhost:*|127.*|[[]::1[]]*|::1|::1:*)
+                raw_value="http://${raw_value}"
+                ;;
+            *)
+                raw_value="https://${raw_value}"
+                ;;
+        esac
+    fi
+
+    local scheme
+    local authority
+    local path
+    local query
+
+    if [[ "$raw_value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/?#]+)([^?#]*)?(\?[^#]*)?$ ]]; then
+        scheme="${BASH_REMATCH[1],,}"
+        authority="${BASH_REMATCH[2]}"
+        path="${BASH_REMATCH[3]}"
+        query="${BASH_REMATCH[4]}"
+    else
+        np_die "Invalid panel URL: ${raw_value}"
+    fi
+
+    case "$scheme" in
+        http)
+            scheme="ws"
+            ;;
+        https)
+            scheme="wss"
+            ;;
+        ws|wss)
+            ;;
+        *)
+            np_die "Unsupported panel URL scheme: ${scheme}. Use http, https, ws or wss."
+            ;;
+    esac
+
+    path="${path:-}"
+    query="${query:-}"
+
+    case "$path" in
+        ""|"/"|"/control"|"/control/"|"/control/ws/")
+            path="/control/ws"
+            ;;
+    esac
+
+    printf '%s://%s%s%s\n' "$scheme" "$authority" "$path" "$query"
+}
+
+display_panel_url_default() {
+    local raw_value
+    raw_value="$(trim_value "${1:-}")"
+    if [[ -z "$raw_value" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    local scheme
+    local authority
+    local path
+    local query
+
+    if [[ "$raw_value" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://([^/?#]+)([^?#]*)?(\?[^#]*)?$ ]]; then
+        scheme="${BASH_REMATCH[1],,}"
+        authority="${BASH_REMATCH[2]}"
+        path="${BASH_REMATCH[3]}"
+        query="${BASH_REMATCH[4]}"
+    else
+        printf '%s\n' "$raw_value"
+        return 0
+    fi
+
+    case "$scheme" in
+        ws)
+            scheme="http"
+            ;;
+        wss)
+            scheme="https"
+            ;;
+    esac
+
+    path="${path:-}"
+    query="${query:-}"
+
+    case "$path" in
+        "/control/ws"|"/control/ws/"|"/control"|"/control/")
+            path=""
+            query=""
+            ;;
+    esac
+
+    printf '%s://%s%s%s\n' "$scheme" "$authority" "$path" "$query"
+}
+
+prompt_value() {
+    local label="$1"
+    local default_value="${2:-}"
+    local input_value
+
+    while true; do
+        if [[ -n "$default_value" ]]; then
+            printf '%s [%s]: ' "$label" "$default_value" >&2
+        else
+            printf '%s: ' "$label" >&2
+        fi
+
+        if ! IFS= read -r input_value; then
+            printf '\n' >&2
+            np_die "Interactive input was interrupted."
+        fi
+
+        input_value="$(trim_value "$input_value")"
+        if [[ -n "$input_value" ]]; then
+            printf '%s\n' "$input_value"
+            return 0
+        fi
+
+        if [[ -n "$default_value" ]]; then
+            printf '%s\n' "$default_value"
+            return 0
+        fi
+    done
+}
+
+prompt_secret_value() {
+    local label="$1"
+    local default_value="${2:-}"
+    local input_value
+
+    while true; do
+        if [[ -n "$default_value" ]]; then
+            printf '%s [press Enter to keep current]: ' "$label" >&2
+        else
+            printf '%s: ' "$label" >&2
+        fi
+
+        if ! IFS= read -r -s input_value; then
+            printf '\n' >&2
+            np_die "Interactive input was interrupted."
+        fi
+        printf '\n' >&2
+
+        input_value="$(trim_value "$input_value")"
+        if [[ -n "$input_value" ]]; then
+            printf '%s\n' "$input_value"
+            return 0
+        fi
+
+        if [[ -n "$default_value" ]]; then
+            printf '%s\n' "$default_value"
+            return 0
+        fi
+    done
+}
+
+prompt_optional_value() {
+    local label="$1"
+    local default_value="${2:-}"
+    local input_value
+
+    if [[ -n "$default_value" ]]; then
+        printf '%s [%s]: ' "$label" "$default_value" >&2
+    else
+        printf '%s: ' "$label" >&2
+    fi
+
+    if ! IFS= read -r input_value; then
+        printf '\n' >&2
+        np_die "Interactive input was interrupted."
+    fi
+
+    input_value="$(trim_value "$input_value")"
+    if [[ -n "$input_value" ]]; then
+        printf '%s\n' "$input_value"
+        return 0
+    fi
+
+    printf '%s\n' "$default_value"
+}
+
+ensure_install_configuration() {
+    local operation_name="$1"
+
+    if [[ -n "$SERVICE_PANEL_URL" ]]; then
+        SERVICE_PANEL_URL="$(normalize_panel_url "$SERVICE_PANEL_URL")"
+    fi
+    SERVICE_NODE_ID="$(trim_value "$SERVICE_NODE_ID")"
+    SERVICE_ACCESS_TOKEN="$(trim_value "$SERVICE_ACCESS_TOKEN")"
+
+    if [[ "$operation_name" != "install" ]]; then
+        return 0
+    fi
+
+    local saved_panel_url
+    local saved_node_id
+    local saved_access_token
+    saved_panel_url="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__PanelUrl")")"
+    saved_node_id="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__Identity__NodeId")")"
+    saved_access_token="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__ControlPlane__AccessToken")")"
+
+    if [[ -z "$SERVICE_PANEL_URL" ]]; then
+        SERVICE_PANEL_URL="$saved_panel_url"
+    fi
+    if [[ -z "$SERVICE_NODE_ID" ]]; then
+        SERVICE_NODE_ID="$saved_node_id"
+    fi
+    if [[ -z "$SERVICE_ACCESS_TOKEN" ]]; then
+        SERVICE_ACCESS_TOKEN="$saved_access_token"
+    fi
+
+    if [[ -n "$SERVICE_PANEL_URL" && -n "$SERVICE_NODE_ID" && -n "$SERVICE_ACCESS_TOKEN" ]]; then
+        if [[ "$SERVICE_PANEL_URL" != ws://* && "$SERVICE_PANEL_URL" != wss://* ]]; then
+            SERVICE_PANEL_URL="$(normalize_panel_url "$SERVICE_PANEL_URL")"
+        fi
+        return 0
+    fi
+
+    if ! is_interactive_session; then
+        np_die "Missing required service configuration. Provide --panel/--panel-url, --node-id and --access-token, or rerun this install command in an interactive shell."
+    fi
+
+    np_log "Interactive setup for ${DISPLAY_NAME}"
+    np_log "Enter the panel URL only. The script will convert it to the correct ws/wss control-plane address automatically."
+
+    local panel_input
+    panel_input="$(prompt_value "Panel URL" "$(display_panel_url_default "$SERVICE_PANEL_URL")")"
+    SERVICE_PANEL_URL="$(normalize_panel_url "$panel_input")"
+    SERVICE_NODE_ID="$(prompt_value "Node ID" "$SERVICE_NODE_ID")"
+    SERVICE_ACCESS_TOKEN="$(prompt_secret_value "Access Token" "$SERVICE_ACCESS_TOKEN")"
 }
 
 parse_config_arguments() {
@@ -117,7 +378,7 @@ parse_config_arguments() {
 
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
-            --panel-url|--control-plane-url)
+            --panel|--panel-base-url|--panel-url|--control-plane-url)
                 require_option_value "$1" "${2:-}"
                 SERVICE_PANEL_URL="$2"
                 shift 2
@@ -381,6 +642,7 @@ install_or_update() {
         write_default_env_file
     fi
 
+    ensure_install_configuration "$operation_name"
     apply_env_overrides
     persist_package_defaults
 
@@ -429,6 +691,7 @@ configure_component() {
     fi
 
     load_saved_package_defaults
+    ensure_install_configuration configure
     apply_env_overrides
     persist_package_defaults
     np_log "Updated ${ENV_FILE}"
@@ -496,11 +759,371 @@ show_logs() {
     np_require_cmd journalctl
 
     if [[ "$follow" == "1" ]]; then
-        journalctl -u "${SYSTEMD_NAME}.service" -n "$lines" -f
+        journalctl -u "${SYSTEMD_NAME}.service" -n "$lines" -f || true
         return 0
     fi
 
-    journalctl -u "${SYSTEMD_NAME}.service" -n "$lines" --no-pager
+    journalctl -u "${SYSTEMD_NAME}.service" -n "$lines" --no-pager || true
+}
+
+service_is_installed() {
+    [[ -f "$UNIT_FILE" || -x "$BIN_PATH" || -d "$INSTALL_ROOT" ]]
+}
+
+service_active_state() {
+    if ! service_is_installed; then
+        printf 'not-installed\n'
+        return 0
+    fi
+
+    systemctl is-active "${SYSTEMD_NAME}.service" 2>/dev/null || true
+}
+
+service_enabled_state() {
+    if ! service_is_installed; then
+        printf 'not-installed\n'
+        return 0
+    fi
+
+    systemctl is-enabled "${SYSTEMD_NAME}.service" 2>/dev/null || true
+}
+
+render_state_label() {
+    local state="${1:-unknown}"
+    case "$state" in
+        active)
+            printf '%sactive%s\n' "$COLOR_GREEN" "$COLOR_PLAIN"
+            ;;
+        activating|reloading)
+            printf '%s%s%s\n' "$COLOR_YELLOW" "$state" "$COLOR_PLAIN"
+            ;;
+        inactive|failed|deactivating)
+            printf '%s%s%s\n' "$COLOR_RED" "$state" "$COLOR_PLAIN"
+            ;;
+        enabled)
+            printf '%senabled%s\n' "$COLOR_GREEN" "$COLOR_PLAIN"
+            ;;
+        disabled)
+            printf '%sdisabled%s\n' "$COLOR_RED" "$COLOR_PLAIN"
+            ;;
+        not-installed)
+            printf '%snot installed%s\n' "$COLOR_RED" "$COLOR_PLAIN"
+            ;;
+        *)
+            printf '%s\n' "$state"
+            ;;
+    esac
+}
+
+mask_secret() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        printf '(not set)\n'
+        return 0
+    fi
+
+    local length="${#value}"
+    if [[ "$length" -le 6 ]]; then
+        printf '******\n'
+        return 0
+    fi
+
+    printf '%s***%s\n' "${value:0:3}" "${value:length-2:2}"
+}
+
+show_current_configuration() {
+    local current_panel_url
+    local current_node_id
+    local current_access_token
+    local current_service_urls
+    local current_repo
+    local current_rid
+
+    current_panel_url="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__PanelUrl")")"
+    current_node_id="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__Identity__NodeId")")"
+    current_access_token="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__ControlPlane__AccessToken")")"
+    current_service_urls="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "ASPNETCORE_URLS")")"
+    current_repo="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_GITHUB_REPO")")"
+    current_rid="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_RID")")"
+
+    printf 'Env file        : %s\n' "$ENV_FILE"
+    printf 'Panel URL       : %s\n' "$(display_panel_url_default "$current_panel_url")"
+    printf 'Control URL     : %s\n' "${current_panel_url:-"(not set)"}"
+    printf 'Node ID         : %s\n' "${current_node_id:-"(not set)"}"
+    printf 'Access Token    : %s\n' "$(mask_secret "$current_access_token")"
+    printf 'Service URLs    : %s\n' "${current_service_urls:-"(default)"}"
+    printf 'GitHub Repo     : %s\n' "${current_repo:-"${DEFAULT_GITHUB_REPO:-"(not set)"}"}"
+    printf 'Package RID     : %s\n' "${current_rid:-"(auto)"}"
+}
+
+show_service_overview() {
+    local installed_text='no'
+    local active_state
+    local enabled_state
+
+    if service_is_installed; then
+        installed_text="${COLOR_GREEN}yes${COLOR_PLAIN}"
+    else
+        installed_text="${COLOR_RED}no${COLOR_PLAIN}"
+    fi
+
+    active_state="$(service_active_state)"
+    enabled_state="$(service_enabled_state)"
+
+    printf 'Installed       : %b\n' "$installed_text"
+    printf 'Runtime State   : %b' "$(render_state_label "$active_state")"
+    printf 'Auto Start      : %b' "$(render_state_label "$enabled_state")"
+    show_current_configuration
+}
+
+pause_for_menu() {
+    printf '\nPress Enter to return to the menu: ' >&2
+    read -r _ || true
+}
+
+confirm_choice() {
+    local prompt_text="$1"
+    local default_value="${2:-n}"
+    local input_value
+    local hint='y/N'
+
+    if [[ "$default_value" == "y" ]]; then
+        hint='Y/n'
+    fi
+
+    printf '%s [%s]: ' "$prompt_text" "$hint" >&2
+    if ! IFS= read -r input_value; then
+        printf '\n' >&2
+        return 1
+    fi
+
+    input_value="$(trim_value "$input_value")"
+    if [[ -z "$input_value" ]]; then
+        input_value="$default_value"
+    fi
+
+    [[ "$input_value" == "y" || "$input_value" == "Y" ]]
+}
+
+menu_require_installed() {
+    if service_is_installed; then
+        return 0
+    fi
+
+    np_warn "${DISPLAY_NAME} is not installed yet."
+    return 1
+}
+
+prompt_package_source() {
+    printf '%s\n' "Supported package source:" >&2
+    printf '%s\n' "  - leave blank to use the saved/latest GitHub release" >&2
+    printf '%s\n' "  - owner/repo or owner/repo@tag" >&2
+    printf '%s\n' "  - local package directory / archive path / package URL" >&2
+    prompt_optional_value "Package source" ""
+}
+
+interactive_configure_component() {
+    np_require_linux
+    np_require_root
+
+    load_saved_package_defaults
+
+    SERVICE_PANEL_URL="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__PanelUrl")")"
+    SERVICE_NODE_ID="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__Identity__NodeId")")"
+    SERVICE_ACCESS_TOKEN="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "NodePanel__ControlPlane__AccessToken")")"
+    SERVICE_ASPNETCORE_URLS="$(trim_value "$(np_read_key_value_file_value "$ENV_FILE" "ASPNETCORE_URLS")")"
+
+    np_log "Interactive configuration for ${DISPLAY_NAME}"
+    np_log "Enter the panel URL only. The script will convert it to ws:// or wss:// automatically."
+
+    local panel_input
+    panel_input="$(prompt_value "Panel URL" "$(display_panel_url_default "$SERVICE_PANEL_URL")")"
+    SERVICE_PANEL_URL="$(normalize_panel_url "$panel_input")"
+    SERVICE_NODE_ID="$(prompt_value "Node ID" "$SERVICE_NODE_ID")"
+    SERVICE_ACCESS_TOKEN="$(prompt_secret_value "Access Token" "$SERVICE_ACCESS_TOKEN")"
+    SERVICE_ASPNETCORE_URLS="$(prompt_optional_value "Service listen URL" "${SERVICE_ASPNETCORE_URLS:-http://127.0.0.1:6610}")"
+
+    apply_env_overrides
+    persist_package_defaults
+    np_log "Updated ${ENV_FILE}"
+
+    if [[ -f "$UNIT_FILE" ]]; then
+        systemctl restart "${SYSTEMD_NAME}.service" || true
+        systemctl --no-pager --full status "${SYSTEMD_NAME}.service" || true
+        return 0
+    fi
+
+    np_warn "${DISPLAY_NAME} is not installed yet. Configuration was written only."
+}
+
+show_status_command() {
+    if ! service_is_installed; then
+        np_warn "${DISPLAY_NAME} is not installed yet."
+        return 0
+    fi
+
+    systemctl status "${SYSTEMD_NAME}.service" --no-pager --full || true
+}
+
+menu_install_component() {
+    local source_arg
+    if service_is_installed && ! confirm_choice "Reinstall ${DISPLAY_NAME}?" "n"; then
+        return 0
+    fi
+
+    source_arg="$(prompt_package_source)"
+    if [[ -n "$source_arg" ]]; then
+        install_or_update install "$source_arg"
+        return 0
+    fi
+
+    install_or_update install
+}
+
+menu_update_component() {
+    local source_arg
+    if ! menu_require_installed; then
+        return 0
+    fi
+
+    source_arg="$(prompt_package_source)"
+    if [[ -n "$source_arg" ]]; then
+        install_or_update update "$source_arg"
+        return 0
+    fi
+
+    install_or_update update
+}
+
+menu_uninstall_component() {
+    local purge_flag="0"
+
+    if ! menu_require_installed; then
+        return 0
+    fi
+
+    if ! confirm_choice "Uninstall ${DISPLAY_NAME}?" "n"; then
+        return 0
+    fi
+
+    if confirm_choice "Delete data and environment files as well?" "n"; then
+        purge_flag="1"
+    fi
+
+    uninstall_component "$purge_flag"
+}
+
+menu_run_systemctl_action() {
+    local action="$1"
+    if ! menu_require_installed; then
+        return 0
+    fi
+
+    np_require_root
+    systemctl "$action" "${SYSTEMD_NAME}.service" || true
+    systemctl --no-pager --full status "${SYSTEMD_NAME}.service" || true
+}
+
+show_menu() {
+    while true; do
+        clear 2>/dev/null || true
+        printf '\n%sNodePanel Service Manager%s\n' "$COLOR_CYAN" "$COLOR_PLAIN"
+        printf '%s\n' '----------------------------------------'
+        show_service_overview
+        printf '%s\n' '----------------------------------------'
+        cat <<'EOF'
+  1. Install / Reinstall Service
+  2. Update Service
+  3. Configure Panel Access
+  4. Start Service
+  5. Stop Service
+  6. Restart Service
+  7. Show Service Status
+  8. Follow Service Logs
+  9. Enable Auto Start
+ 10. Disable Auto Start
+ 11. Show Current Config
+ 12. Uninstall Service
+  0. Exit
+EOF
+
+        printf 'Choose [0-12]: ' >&2
+        local choice
+        if ! IFS= read -r choice; then
+            printf '\n' >&2
+            return 0
+        fi
+
+        case "$(trim_value "$choice")" in
+            1)
+                menu_install_component
+                pause_for_menu
+                ;;
+            2)
+                menu_update_component
+                pause_for_menu
+                ;;
+            3)
+                interactive_configure_component
+                pause_for_menu
+                ;;
+            4)
+                menu_run_systemctl_action start
+                pause_for_menu
+                ;;
+            5)
+                menu_run_systemctl_action stop
+                pause_for_menu
+                ;;
+            6)
+                menu_run_systemctl_action restart
+                pause_for_menu
+                ;;
+            7)
+                show_status_command
+                pause_for_menu
+                ;;
+            8)
+                if menu_require_installed; then
+                    local lines
+                    lines="$(prompt_optional_value "Log lines" "200")"
+                    printf 'Press Ctrl+C to stop following logs.\n' >&2
+                    show_logs -f "${lines:-200}"
+                fi
+                ;;
+            9)
+                if menu_require_installed; then
+                    np_require_root
+                    systemctl enable "${SYSTEMD_NAME}.service" || true
+                    systemctl status "${SYSTEMD_NAME}.service" --no-pager --full || true
+                fi
+                pause_for_menu
+                ;;
+            10)
+                if menu_require_installed; then
+                    np_require_root
+                    systemctl disable "${SYSTEMD_NAME}.service" || true
+                    systemctl status "${SYSTEMD_NAME}.service" --no-pager --full || true
+                fi
+                pause_for_menu
+                ;;
+            11)
+                show_current_configuration
+                pause_for_menu
+                ;;
+            12)
+                menu_uninstall_component
+                pause_for_menu
+                ;;
+            0|q|quit|exit)
+                return 0
+                ;;
+            *)
+                np_warn "Please enter a valid number between 0 and 12."
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 main() {
@@ -515,7 +1138,11 @@ main() {
             install_or_update update "$@"
             ;;
         configure)
-            configure_component "$@"
+            if [[ "$#" -eq 0 && is_interactive_session ]]; then
+                interactive_configure_component
+            else
+                configure_component "$@"
+            fi
             ;;
         start)
             np_require_root
@@ -530,7 +1157,7 @@ main() {
             run_systemctl restart
             ;;
         status)
-            run_systemctl status
+            show_status_command
             ;;
         log|logs)
             show_logs "$@"
@@ -550,7 +1177,14 @@ main() {
                 uninstall_component 0
             fi
             ;;
-        ""|-h|--help|help)
+        "")
+            if is_interactive_session; then
+                show_menu
+            else
+                usage
+            fi
+            ;;
+        -h|--help|help)
             usage
             ;;
         *)

@@ -6,6 +6,7 @@ This directory contains Linux deployment helpers for both components:
   1-click bootstrap script. Download just this file first, then let it fetch the matching component installer from GitHub Releases.
 - `publish-linux.sh`
   Builds Linux publish directories and `.tar.gz` packages for `panel` and `service`.
+  `service` is published as Native AOT; `panel` keeps the regular .NET publish layout.
 - `nodepanel-panel.sh`
   Installs, updates and manages the panel with `systemd`.
 - `nodepanel-service.sh`
@@ -23,6 +24,11 @@ Default outputs:
 
 - `artifacts/linux/nodepanel-panel-linux-x64.tar.gz`
 - `artifacts/linux/nodepanel-service-linux-x64.tar.gz`
+
+Package mode summary:
+
+- `panel`: regular `dotnet publish`, keeps the multi-file app layout
+- `service`: Native AOT self-contained binary, no host `dotnet` runtime required
 
 Custom runtime example:
 
@@ -47,6 +53,8 @@ Release steps:
 1. Update `NodePanelVersionPrefix`
 2. Commit and push `main`
 3. GitHub Actions creates `vX.Y.Z`, builds Linux packages and publishes the release
+
+The release workflow builds each Linux RID on its matching runner so the Native AOT service package is produced per architecture.
 
 If the same release tag already exists, pushes to `main` skip the publish step automatically.
 
@@ -73,20 +81,20 @@ sudo bash install.sh panel
 Install service from the latest release:
 
 ```bash
-sudo bash install.sh service \
-  --panel-url wss://panel.example.com/control/ws \
-  --node-id node-001 \
-  --access-token your-token
+sudo bash install.sh service
+```
+
+This opens the interactive service menu. The installed command below opens the same menu later:
+
+```bash
+sudo nodepanel-service
 ```
 
 Install a specific release:
 
 ```bash
 sudo bash install.sh panel install owner/repo@v0.1.0
-sudo bash install.sh service install owner/repo@v0.1.0 \
-  --panel-url wss://panel.example.com/control/ws \
-  --node-id node-001 \
-  --access-token your-token
+sudo bash install.sh service install owner/repo@v0.1.0
 ```
 
 ## Install Panel
@@ -142,36 +150,33 @@ When installed with these scripts, the default `/etc/nodepanel/panel.env` enable
 ```bash
 tar -xzf nodepanel-service-linux-x64.tar.gz
 cd nodepanel-service-linux-x64
-sudo bash install.sh install \
-  --panel-url wss://panel.example.com/control/ws \
-  --node-id node-001 \
-  --access-token your-token
+sudo bash install.sh install
 ```
 
 Direct package URL install:
 
 ```bash
 sudo bash install.sh install \
-  https://downloads.example.com/nodepanel-service-linux-x64.tar.gz \
-  --panel-url wss://panel.example.com/control/ws \
-  --node-id node-001 \
-  --access-token your-token
+  https://downloads.example.com/nodepanel-service-linux-x64.tar.gz
 ```
 
 GitHub repo install:
 
 ```bash
-sudo bash install.sh install owner/repo \
-  --panel-url wss://panel.example.com/control/ws \
-  --node-id node-001 \
-  --access-token your-token
+sudo bash install.sh install owner/repo
 ```
 
 GitHub specific version install:
 
 ```bash
-sudo bash install.sh install owner/repo@v1.2.3 \
-  --panel-url wss://panel.example.com/control/ws \
+sudo bash install.sh install owner/repo@v1.2.3
+```
+
+Non-interactive install is still available:
+
+```bash
+sudo bash install.sh install owner/repo \
+  --panel https://panel.example.com \
   --node-id node-001 \
   --access-token your-token
 ```
@@ -183,14 +188,39 @@ Default paths:
 - env file: `/etc/nodepanel/service.env`
 - systemd unit: `nodepanel-service`
 
+The service package is Native AOT. On Linux installs it runs the bundled native executable directly and does not depend on a system `dotnet` runtime.
+
 The install and update commands can write the runtime config directly into:
 
 ```text
 /etc/nodepanel/service.env
 ```
 
+The service entry is menu-driven by default:
+
+- `sudo bash install.sh service`
+- `sudo nodepanel-service`
+
+The install flow inside the menu is interactive when required values are missing. It asks for:
+
+- panel URL
+- node ID
+- access token
+
+You can enter a normal panel URL such as:
+
+- `https://panel.example.com`
+- `http://127.0.0.1`
+- `panel.example.com`
+
+The script automatically converts it to the actual control-plane endpoint:
+
+- `https://panel.example.com` -> `wss://panel.example.com/control/ws`
+- `http://127.0.0.1` -> `ws://127.0.0.1/control/ws`
+
 Supported configuration options:
 
+- `--panel` / `--panel-base-url`
 - `--panel-url` / `--control-plane-url`
 - `--node-id`
 - `--access-token` / `--control-plane-access-token`
@@ -206,8 +236,14 @@ When the package came from GitHub Releases, the scripts keep `NODEPANEL_GITHUB_R
 If the service has already been installed, update the config later with:
 
 ```bash
+sudo nodepanel-service configure
+```
+
+Or non-interactively:
+
+```bash
 sudo nodepanel-service configure \
-  --panel-url wss://panel.example.com/control/ws \
+  --panel https://panel.example.com \
   --node-id node-001 \
   --access-token your-token
 ```

@@ -4,7 +4,7 @@ set -euo pipefail
 readonly DEFAULT_GITHUB_REPO="${NODEPANEL_DEFAULT_GITHUB_REPO:-j4587698-png/NodePanel}"
 
 BOOTSTRAP_COMPONENT=""
-BOOTSTRAP_COMMAND="install"
+BOOTSTRAP_COMMAND=""
 BOOTSTRAP_SOURCE_ARG=""
 BOOTSTRAP_HELPER_REPO=""
 BOOTSTRAP_HELPER_TAG=""
@@ -29,12 +29,16 @@ Bootstrap options:
   --github-repo OWNER/REPO
   --version TAG
   --tag TAG
+  --panel URL
+  --panel-base-url URL
+  --panel-url URL
 
 Examples:
   bash install.sh panel
   bash install.sh panel install owner/repo
   bash install.sh panel install owner/repo@v0.1.0
-  bash install.sh service install --github-repo owner/repo --version v0.1.0 --panel-url wss://panel.example.com/control/ws --node-id node-001
+  bash install.sh service
+  bash install.sh service install --github-repo owner/repo --version v0.1.0 --panel https://panel.example.com --node-id node-001 --access-token your-token
   bash install.sh service update
 EOF
 }
@@ -130,7 +134,7 @@ np_bootstrap_parse_args() {
                 BOOTSTRAP_FORWARD_ARGS+=("$1" "$2")
                 shift 2
                 ;;
-            --rid|--panel-url|--control-plane-url|--node-id|--access-token|--control-plane-access-token|--aspnetcore-urls|--service-urls)
+            --rid|--panel|--panel-base-url|--panel-url|--control-plane-url|--node-id|--access-token|--control-plane-access-token|--aspnetcore-urls|--service-urls)
                 np_bootstrap_require_option_value "$1" "${2:-}"
                 BOOTSTRAP_FORWARD_ARGS+=("$1" "$2")
                 shift 2
@@ -174,6 +178,14 @@ np_bootstrap_parse_args() {
 
     if [[ -z "$BOOTSTRAP_HELPER_REPO" ]]; then
         BOOTSTRAP_HELPER_REPO="$DEFAULT_GITHUB_REPO"
+    fi
+
+    if [[ -z "$BOOTSTRAP_COMMAND" ]]; then
+        if [[ "$BOOTSTRAP_COMPONENT" == "panel" ]]; then
+            BOOTSTRAP_COMMAND="install"
+        elif [[ -n "$BOOTSTRAP_SOURCE_ARG" || "${#BOOTSTRAP_FORWARD_ARGS[@]}" -gt 0 ]]; then
+            BOOTSTRAP_COMMAND="install"
+        fi
     fi
 }
 
@@ -230,9 +242,16 @@ main() {
     np_bootstrap_parse_args "$@"
     np_bootstrap_download_helpers
 
+    if [[ -n "$BOOTSTRAP_COMMAND" ]]; then
+        NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
+            "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
+            "$BOOTSTRAP_COMMAND" \
+            "${BOOTSTRAP_FORWARD_ARGS[@]}"
+        return 0
+    fi
+
     NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
         "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
-        "$BOOTSTRAP_COMMAND" \
         "${BOOTSTRAP_FORWARD_ARGS[@]}"
 }
 

@@ -9,7 +9,7 @@ NODEPANEL_RESOLVED_GITHUB_TAG=""
 NODEPANEL_RESOLVED_PACKAGE_RID=""
 
 np_log() {
-    printf '[nodepanel] %s\n' "$*"
+    printf '[nodepanel] %s\n' "$*" >&2
 }
 
 np_warn() {

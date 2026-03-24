@@ -19,8 +19,14 @@ permissions:
   contents: write
 
 jobs:
-  release-linux:
+  resolve-release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      tag_exists: ${{ steps.meta.outputs.tag_exists }}
+      should_create_tag: ${{ steps.meta.outputs.should_create_tag }}
+      should_publish: ${{ steps.meta.outputs.should_publish }}
 
     steps:
       - name: Checkout
@@ -74,12 +80,6 @@ jobs:
           echo "should_create_tag=${should_create_tag}" >> "$GITHUB_OUTPUT"
           echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup .NET
-        if: steps.meta.outputs.should_publish == 'true'
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
       - name: Create Release Tag
         if: steps.meta.outputs.should_create_tag == 'true'
         shell: bash
@@ -90,26 +90,76 @@ jobs:
           git tag "${{ steps.meta.outputs.tag }}"
           git push origin "${{ steps.meta.outputs.tag }}"
 
+  build-linux:
+    needs: resolve-release
+    if: needs.resolve-release.outputs.should_publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout Release Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve-release.outputs.tag }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Build Linux Packages
-        if: steps.meta.outputs.should_publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
           chmod +x ./scripts/linux/publish-linux.sh
           ./scripts/linux/publish-linux.sh \
             --github-repo "${{ github.repository }}" \
-            --version "${{ steps.meta.outputs.version }}" \
-            --rid linux-x64 \
-            --rid linux-arm64
+            --version "${{ needs.resolve-release.outputs.version }}" \
+            --rid "${{ matrix.rid }}"
+
+      - name: Upload Linux Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages-${{ matrix.rid }}
+          path: artifacts/linux/*.tar.gz
+          if-no-files-found: error
+
+  publish-release:
+    needs:
+      - resolve-release
+      - build-linux
+    if: needs.resolve-release.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Release Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve-release.outputs.tag }}
+
+      - name: Download Linux Packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-packages-*
+          path: artifacts/linux
+          merge-multiple: true
 
       - name: Publish GitHub Release
-        if: steps.meta.outputs.should_publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ needs.resolve-release.outputs.tag }}
           generate_release_notes: true
           overwrite_files: true
-          prerelease: ${{ contains(steps.meta.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.resolve-release.outputs.version, '-') }}
           files: |
             artifacts/linux/*.tar.gz
             scripts/linux/install.sh
@@ -117,10 +167,15 @@ jobs:
             scripts/linux/nodepanel-service.sh
             scripts/linux/lib/nodepanel-common.sh
 
+  skip-release:
+    needs: resolve-release
+    if: needs.resolve-release.outputs.should_publish != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
       - name: Skip Release
-        if: steps.meta.outputs.should_publish != 'true'
         env:
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
