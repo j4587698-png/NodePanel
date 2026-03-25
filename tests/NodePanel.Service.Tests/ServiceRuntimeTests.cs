@@ -1125,6 +1125,108 @@ public sealed class ServiceRuntimeTests
         }
     }
 
+    [Fact]
+    public async Task ApplySnapshotAsync_normalizes_local_proxy_inbounds_and_strategy_outbounds()
+    {
+        var testRoot = CreateTestRoot();
+        try
+        {
+            var runtimeConfigStore = new RuntimeConfigStore();
+            var orchestrator = new ConfigOrchestrator(
+                runtimeConfigStore,
+                new UserStore(),
+                new RateLimiterRegistry(),
+                [new FreedomOutboundHandler(), new TestProtocolOutboundHandler(OutboundProtocols.Selector)],
+                [new TrojanInboundRuntimeCompiler()],
+                new PersistedNodeConfigStore(
+                    new NodePanelOptions
+                    {
+                        CachedConfigPath = Path.Combine(testRoot, "runtime.json")
+                    },
+                    new TestLogger<PersistedNodeConfigStore>()),
+                new TestLogger<ConfigOrchestrator>());
+
+            orchestrator.ApplyBootstrap(new NodeServiceConfig());
+
+            var applyResult = await orchestrator.ApplySnapshotAsync(
+                1,
+                new NodeServiceConfig
+                {
+                    LocalInbounds =
+                    [
+                        new LocalInboundConfig
+                        {
+                            Tag = " socks-local ",
+                            Enabled = true,
+                            Protocol = " SOCKS ",
+                            ListenAddress = " ",
+                            Port = -1,
+                            HandshakeTimeoutSeconds = 0
+                        },
+                        new LocalInboundConfig
+                        {
+                            Tag = "http-local",
+                            Enabled = true,
+                            Protocol = " HTTP ",
+                            ListenAddress = " 127.0.0.1 ",
+                            Port = 10809,
+                            HandshakeTimeoutSeconds = 15
+                        }
+                    ],
+                    Outbounds =
+                    [
+                        new OutboundConfig
+                        {
+                            Tag = "direct",
+                            Enabled = true,
+                            Protocol = OutboundProtocols.Freedom
+                        },
+                        new OutboundConfig
+                        {
+                            Tag = " auto ",
+                            Enabled = true,
+                            Protocol = " selector ",
+                            CandidateTags = [" direct "],
+                            SelectedTag = " direct "
+                        }
+                    ]
+                },
+                CancellationToken.None);
+
+            Assert.True(applyResult.Success, applyResult.Error);
+
+            var snapshot = runtimeConfigStore.GetSnapshot();
+            Assert.Collection(
+                snapshot.Config.LocalInbounds,
+                socks =>
+                {
+                    Assert.Equal("socks-local", socks.Tag);
+                    Assert.Equal(LocalInboundProtocols.Socks, socks.Protocol);
+                    Assert.Equal("127.0.0.1", socks.ListenAddress);
+                    Assert.Equal(10808, socks.Port);
+                    Assert.Equal(10, socks.HandshakeTimeoutSeconds);
+                },
+                http =>
+                {
+                    Assert.Equal("http-local", http.Tag);
+                    Assert.Equal(LocalInboundProtocols.Http, http.Protocol);
+                    Assert.Equal("127.0.0.1", http.ListenAddress);
+                    Assert.Equal(10809, http.Port);
+                    Assert.Equal(15, http.HandshakeTimeoutSeconds);
+                });
+
+            Assert.True(snapshot.OutboundPlan.TryGetOutbound("auto", out var strategy));
+            Assert.Equal(OutboundProtocols.Selector, strategy.Protocol);
+            Assert.Equal(["direct"], strategy.CandidateTags);
+            Assert.Equal("direct", strategy.SelectedTag);
+            Assert.Equal(StrategyOutboundDefaults.ProbeUrl, strategy.ProbeUrl);
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(testRoot);
+        }
+    }
+
     private static string CreateTestRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "np", Guid.NewGuid().ToString("N")[..8]);
@@ -1207,5 +1309,26 @@ public sealed class ServiceRuntimeTests
             settings = default!;
             return false;
         }
+    }
+
+    private sealed class TestProtocolOutboundHandler : IOutboundHandler
+    {
+        public TestProtocolOutboundHandler(string protocol)
+        {
+            Protocol = protocol;
+        }
+
+        public string Protocol { get; }
+
+        public ValueTask<Stream> OpenTcpAsync(
+            DispatchContext context,
+            DispatchDestination destination,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult<Stream>(Stream.Null);
+
+        public ValueTask<IOutboundUdpTransport> OpenUdpAsync(
+            DispatchContext context,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<IOutboundUdpTransport>(new NotSupportedException());
     }
 }

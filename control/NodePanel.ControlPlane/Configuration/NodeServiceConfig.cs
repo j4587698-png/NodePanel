@@ -6,6 +6,8 @@ public sealed record NodeServiceConfig
 {
     public IReadOnlyList<InboundConfig> Inbounds { get; init; } = Array.Empty<InboundConfig>();
 
+    public IReadOnlyList<LocalInboundConfig> LocalInbounds { get; init; } = Array.Empty<LocalInboundConfig>();
+
     public IReadOnlyList<OutboundConfig> Outbounds { get; init; } = Array.Empty<OutboundConfig>();
 
     public IReadOnlyList<RoutingRuleConfig> RoutingRules { get; init; } = Array.Empty<RoutingRuleConfig>();

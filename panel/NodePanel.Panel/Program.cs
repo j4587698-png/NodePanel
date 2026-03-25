@@ -66,6 +66,7 @@ builder.Services.AddSingleton<PanelCertificateProgressTracker>();
 builder.Services.AddSingleton<PanelCertificateService>();
 builder.Services.AddSingleton<PanelPublicUrlBuilder>();
 builder.Services.AddSingleton<SubscriptionCatalogService>();
+builder.Services.AddSingleton<SubscriptionProfileResolver>();
 builder.Services.AddSingleton<SubscriptionRenderer>();
 builder.Services.AddSingleton<UserPortalService>();
 builder.Services.AddSingleton<EpayService>();
@@ -227,14 +228,14 @@ app.MapPost(
 
 app.MapGet(
     "/client/subscribe",
-    async (string? token, string? flag, HttpContext context, SubscriptionRenderer subscriptionRenderer, CancellationToken cancellationToken) =>
+    async (string? token, string? flag, string? profile, HttpContext context, SubscriptionRenderer subscriptionRenderer, CancellationToken cancellationToken) =>
     {
         if (string.IsNullOrWhiteSpace(token))
         {
             return Results.BadRequest(new { error = "Missing subscription token." });
         }
 
-        var renderResult = await subscriptionRenderer.TryRenderAsync(token, flag, context.Request.Headers["User-Agent"].ToString(), cancellationToken);
+        var renderResult = await subscriptionRenderer.TryRenderAsync(token, flag, profile, context.Request.Headers["User-Agent"].ToString(), cancellationToken);
         if (!renderResult.Success)
         {
             return Results.NotFound(new { error = renderResult.Error });

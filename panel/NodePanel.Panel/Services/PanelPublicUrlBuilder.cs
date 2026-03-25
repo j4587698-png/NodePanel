@@ -22,7 +22,7 @@ public sealed class PanelPublicUrlBuilder
         return BuildAbsoluteUrl(ResolvePortalBaseUri(request), $"/portal/{Uri.EscapeDataString(token)}");
     }
 
-    public string BuildSubscriptionUrl(string token, string? flag, HttpRequest request)
+    public string BuildSubscriptionUrl(string token, string? flag, HttpRequest request, string? profile = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentNullException.ThrowIfNull(request);
@@ -31,6 +31,11 @@ public sealed class PanelPublicUrlBuilder
         if (!string.IsNullOrWhiteSpace(flag))
         {
             path += $"&flag={Uri.EscapeDataString(flag.Trim())}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile))
+        {
+            path += $"&profile={Uri.EscapeDataString(profile.Trim())}";
         }
 
         return BuildAbsoluteUrl(ResolveSubscribeBaseUri(request), path);

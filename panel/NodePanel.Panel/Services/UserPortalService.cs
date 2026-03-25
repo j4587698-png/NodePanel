@@ -53,7 +53,7 @@ public sealed class UserPortalService
         {
             AppName = ResolveAppName(),
             DisplayName = title,
-            Plans = state.Plans,
+            Plans = state.Plans.Where(PlanPresentation.HasAvailableCycles).ToArray(),
             CurrencySymbol = state.Settings.GetValueOrDefault("currency_symbol", "¥") ?? "¥",
             StatusMessage = string.Empty
         };
@@ -117,7 +117,7 @@ public sealed class UserPortalService
                 {
                     CopyId = $"{endpoint.NodeId}-{endpoint.Transport}-{endpoint.Port}",
                     Name = endpoint.DisplayName,
-                    TransportLabel = string.Equals(endpoint.Transport, "ws", StringComparison.OrdinalIgnoreCase) ? "Trojan / WSS" : "Trojan / TLS",
+                    TransportLabel = BuildTransportLabel(endpoint),
                     Address = $"{endpoint.Host}:{endpoint.Port}",
                     Sni = endpoint.Sni,
                     Path = endpoint.Path,
@@ -140,15 +140,24 @@ public sealed class UserPortalService
         {
             new PortalClientLinkViewModel { Title = "Shadowrocket", Description = "iOS 一键导入", Url = $"shadowrocket://add/sub://{ToSafeBase64(_publicUrlBuilder.BuildSubscriptionUrl(token, "shadowrocket", request))}?remark={remark}" },
             new PortalClientLinkViewModel { Title = "Quantumult X", Description = "配置远程资源", Url = BuildQuantumultXScheme(_publicUrlBuilder.BuildSubscriptionUrl(token, "quantumultx", request), title) },
-            new PortalClientLinkViewModel { Title = "Clash", Description = "Clash 系列订阅", Url = $"clash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "clash", request))}&name={remark}" },
-            new PortalClientLinkViewModel { Title = "Stash", Description = "Stash YAML 订阅", Url = $"stash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "stash", request))}&name={remark}" },
-            new PortalClientLinkViewModel { Title = "Surge", Description = "Surge 配置导入", Url = $"surge:///install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "surge", request))}&name={remark}" }
+            new PortalClientLinkViewModel { Title = "Clash", Description = "Clash 系列订阅", Url = $"clash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "clash", request, SubscriptionProfileNames.Full))}&name={remark}" },
+            new PortalClientLinkViewModel { Title = "Stash", Description = "Stash YAML 订阅", Url = $"stash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "stash", request, SubscriptionProfileNames.Full))}&name={remark}" },
+            new PortalClientLinkViewModel { Title = "Surge", Description = "Surge 配置导入", Url = $"surge:///install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "surge", request, SubscriptionProfileNames.Full))}&name={remark}" }
         };
     }
 
     private static string BuildQuantumultXScheme(string subscriptionUrl, string title) => $"quantumult-x:///update-configuration?remote-resource={Uri.EscapeDataString(JsonSerializer.Serialize(new { server_remote = new[] { $"{subscriptionUrl}, tag={title}" } }))}";
     private static string ToSafeBase64(string value) => Convert.ToBase64String(Encoding.UTF8.GetBytes(value)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private string ResolveAppName() => string.IsNullOrWhiteSpace(_options.AppName) ? "NodePanel" : _options.AppName;
+    private static string BuildTransportLabel(SubscriptionEndpoint endpoint)
+    {
+        var protocol = string.IsNullOrWhiteSpace(endpoint.Protocol)
+            ? "Trojan"
+            : endpoint.Protocol.Trim().ToUpperInvariant();
+        var transport = string.Equals(endpoint.Transport, "ws", StringComparison.OrdinalIgnoreCase) ? "WSS" : "TLS";
+        return $"{protocol} / {transport}";
+    }
+
     private static string FormatTraffic(long bytes)
     {
         if (bytes >= 1099511627776d) return $"{bytes / 1099511627776d:0.##} TB";

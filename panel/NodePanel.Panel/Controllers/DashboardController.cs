@@ -459,6 +459,7 @@ public sealed class DashboardController : Controller
     {
         var normalizedUserId = userId?.Trim() ?? string.Empty;
         var normalizedPlanId = planId?.Trim() ?? string.Empty;
+        var normalizedCycle = cycle?.Trim() ?? string.Empty;
 
         var user = await _panelQueryService.FindUserAsync(normalizedUserId, cancellationToken);
         var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
@@ -470,49 +471,65 @@ public sealed class DashboardController : Controller
             return RedirectToAction(nameof(UserEditor), new { userId = normalizedUserId });
         }
 
-        DateTimeOffset? targetExpiresAt = cycle switch
+        var price = PlanPresentation.GetCyclePrice(plan, normalizedCycle);
+        if (!price.HasValue)
         {
-            "month" => DateTimeOffset.UtcNow.AddDays(31),
-            "quarter" => DateTimeOffset.UtcNow.AddDays(90),
-            "half_year" => DateTimeOffset.UtcNow.AddDays(180),
-            "year" => DateTimeOffset.UtcNow.AddDays(365),
-            "one_time" => null,
-            _ => DateTimeOffset.UtcNow.AddDays(31)
-        };
+            TempData["StatusMessage"] = "所选周期未开放购买。";
+            return RedirectToAction(nameof(UserEditor), new { userId = normalizedUserId });
+        }
 
-        decimal amount = cycle switch
-        {
-            "month" => plan.MonthPrice ?? 0,
-            "quarter" => plan.QuarterPrice ?? 0,
-            "half_year" => plan.HalfYearPrice ?? 0,
-            "year" => plan.YearPrice ?? 0,
-            "one_time" => plan.OneTimePrice ?? 0,
-            _ => 0
-        };
+        var amount = price.Value;
+        var isResetTrafficOrder = string.Equals(normalizedCycle, "reset_price", StringComparison.Ordinal);
 
-        var request = new UpsertUserRequest
+        if (!isResetTrafficOrder)
         {
-            DisplayName = user.DisplayName,
-            SubscriptionToken = user.SubscriptionToken,
-            TrojanPassword = user.TrojanPassword,
-            V2rayUuid = user.V2rayUuid,
-            GroupId = plan.GroupId,
-            Enabled = true,
-            BytesPerSecond = user.BytesPerSecond,
-            DeviceLimit = user.DeviceLimit,
-            NodeIds = user.NodeIds,
-            Subscription = user.Subscription with
+            var request = new UpsertUserRequest
             {
-                PlanName = plan.Name,
-                TransferEnableBytes = plan.TransferEnableBytes,
-                ExpiresAt = targetExpiresAt
-            }
-        };
+                DisplayName = user.DisplayName,
+                SubscriptionToken = user.SubscriptionToken,
+                TrojanPassword = user.TrojanPassword,
+                V2rayUuid = user.V2rayUuid,
+                GroupId = plan.GroupId,
+                Enabled = true,
+                BytesPerSecond = user.BytesPerSecond,
+                DeviceLimit = user.DeviceLimit,
+                NodeIds = user.NodeIds,
+                Subscription = user.Subscription with
+                {
+                    PlanName = plan.Name,
+                    Cycle = normalizedCycle,
+                    TransferEnableBytes = plan.TransferEnableBytes,
+                    ExpiresAt = PlanPresentation.CalculateExpiresAt(normalizedCycle, user.Subscription.ExpiresAt)
+                }
+            };
 
-        await _panelMutationService.SaveUserAsync(normalizedUserId, request, cancellationToken).ConfigureAwait(false);
-        await _panelMutationService.CreateOrderAsync(normalizedUserId, normalizedPlanId, cycle, amount, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await _panelMutationService.SaveUserAsync(normalizedUserId, request, cancellationToken).ConfigureAwait(false);
+        }
+        var initialStatus = amount == 0m && !isResetTrafficOrder ? 1 : 0;
+        var order = await _panelMutationService.CreateOrderAsync(
+                normalizedUserId,
+                normalizedPlanId,
+                normalizedCycle,
+                amount,
+                initialStatus,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         TempData["StatusMessage"] = $"已成功为用户 {normalizedUserId} 应用套餐 {plan.PlanId} 并生成了对应订单。";
+        if (amount == 0m && isResetTrafficOrder)
+        {
+            await _panelMutationService.CompleteOrderAsync(order.OrderId, cancellationToken).ConfigureAwait(false);
+            TempData["StatusMessage"] = $"已为用户 {normalizedUserId} 立即完成 0 元流量重置。";
+        }
+        else if (isResetTrafficOrder)
+        {
+            TempData["StatusMessage"] = $"已为用户 {normalizedUserId} 生成流量重置订单，支付后生效。";
+        }
+        else if (amount == 0m)
+        {
+            TempData["StatusMessage"] = $"已为用户 {normalizedUserId} 应用套餐 {plan.PlanId}，0 元订单已自动完成。";
+        }
+
         return RedirectToAction(nameof(UserEditor), new { userId = normalizedUserId });
     }
 

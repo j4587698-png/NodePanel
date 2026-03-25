@@ -267,6 +267,142 @@ public sealed class PanelMutationServiceTests
         Assert.Equal(3, (await harness.GetUserAsync("user-a")).DeviceLimit);
     }
 
+    [Fact]
+    public async Task SaveUserAsync_persists_cycle_and_preserves_existing_cycle_when_request_omits_it()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    Cycle = "month",
+                    TransferEnableBytes = 1024
+                }
+            },
+            CancellationToken.None);
+
+        var updated = await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                DisplayName = "Updated User",
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    TransferEnableBytes = 2048
+                }
+            },
+            CancellationToken.None);
+
+        Assert.Equal("month", updated.Subscription.Cycle);
+        Assert.Equal("month", (await harness.GetUserAsync("user-a")).Cycle);
+    }
+
+    [Fact]
+    public async Task CompleteOrderAsync_applies_plan_cycle_and_quota_to_user()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePlanAsync(
+            "plan-a",
+            new UpsertPlanRequest
+            {
+                Name = "Pro Plan",
+                GroupId = 2,
+                TransferEnableBytes = 536870912000L,
+                MonthPrice = 20m
+            },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()),
+            CancellationToken.None);
+
+        var order = await harness.MutationService.CreateOrderAsync(
+            "user-a",
+            "plan-a",
+            "month",
+            20m,
+            cancellationToken: CancellationToken.None);
+
+        await harness.MutationService.CompleteOrderAsync(order.OrderId, CancellationToken.None);
+
+        var user = await harness.GetUserAsync("user-a");
+
+        Assert.Equal("Pro Plan", user.PlanName);
+        Assert.Equal("month", user.Cycle);
+        Assert.Equal(536870912000L, user.TransferEnableBytes);
+        Assert.Equal(2, user.GroupId);
+    }
+
+    [Fact]
+    public async Task CompleteOrderAsync_reset_price_only_resets_traffic()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePlanAsync(
+            "reset-pack",
+            new UpsertPlanRequest
+            {
+                Name = "Reset Pack",
+                GroupId = 1,
+                TransferEnableBytes = 107374182400L,
+                ResetPrice = 5m
+            },
+            CancellationToken.None);
+
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(20);
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    Cycle = "month",
+                    TransferEnableBytes = 107374182400L,
+                    ExpiresAt = expiresAt
+                }
+            },
+            CancellationToken.None);
+
+        await harness.DatabaseService.FSql.InsertOrUpdate<TrafficRecordEntity>()
+            .SetSource(
+                new TrafficRecordEntity
+                {
+                    UserId = "user-a",
+                    UploadBytes = 100,
+                    DownloadBytes = 200
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        var order = await harness.MutationService.CreateOrderAsync(
+            "user-a",
+            "reset-pack",
+            "reset_price",
+            5m,
+            cancellationToken: CancellationToken.None);
+
+        await harness.MutationService.CompleteOrderAsync(order.OrderId, CancellationToken.None);
+
+        var user = await harness.GetUserAsync("user-a");
+        var traffic = await harness.DatabaseService.FSql.Select<TrafficRecordEntity>()
+            .Where(item => item.UserId == "user-a")
+            .FirstAsync(CancellationToken.None);
+
+        Assert.Equal("starter", user.PlanName);
+        Assert.Equal("month", user.Cycle);
+        Assert.Equal(107374182400L, user.TransferEnableBytes);
+        Assert.NotNull(traffic);
+        Assert.Equal(0L, traffic!.UploadBytes);
+        Assert.Equal(0L, traffic.DownloadBytes);
+    }
+
     private static UpsertUserRequest CreateUserRequest(IReadOnlyList<string> nodeIds)
         => new()
         {

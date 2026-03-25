@@ -138,6 +138,7 @@ public sealed class ConfigOrchestrator
     {
         var normalized = config with
         {
+            LocalInbounds = NormalizeLocalInbounds(config.LocalInbounds),
             Outbounds = NormalizeOutbounds(config.Outbounds),
             RoutingRules = NormalizeRoutingRules(config.RoutingRules),
             Certificate = NormalizeCertificateOptions(config.Certificate),
@@ -191,6 +192,12 @@ public sealed class ConfigOrchestrator
         }
 
         if (!ValidateDnsOptions(config.Dns, out error))
+        {
+            snapshot = new NodeRuntimeSnapshot(Math.Max(0, revision), config, NodeRuntimePlan.Empty);
+            return false;
+        }
+
+        if (!ValidateLocalInboundDefinitions(config.LocalInbounds, out error))
         {
             snapshot = new NodeRuntimeSnapshot(Math.Max(0, revision), config, NodeRuntimePlan.Empty);
             return false;
@@ -375,7 +382,23 @@ public sealed class ConfigOrchestrator
     {
         foreach (var outbound in outbounds)
         {
-            if (!string.Equals(outbound.Protocol, OutboundProtocols.Trojan, StringComparison.Ordinal))
+            var protocol = OutboundProtocols.Normalize(outbound.Protocol);
+            if (protocol is OutboundProtocols.Selector or
+                OutboundProtocols.UrlTest or
+                OutboundProtocols.Fallback or
+                OutboundProtocols.LoadBalance)
+            {
+                if (!Uri.TryCreate(outbound.ProbeUrl, UriKind.Absolute, out var probeUri) ||
+                    probeUri.Scheme is not ("http" or "https"))
+                {
+                    error = $"Strategy outbound '{outbound.Tag}' requires a valid probe URL.";
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!string.Equals(protocol, OutboundProtocols.Trojan, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -405,6 +428,52 @@ public sealed class ConfigOrchestrator
                  TrojanOutboundTransports.Wss))
             {
                 error = $"Trojan outbound '{outbound.Tag}' uses an unsupported transport: {outbound.Transport}.";
+                return false;
+            }
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool ValidateLocalInboundDefinitions(IReadOnlyList<LocalInboundConfig> localInbounds, out string? error)
+    {
+        var seenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenBindings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var inbound in localInbounds)
+        {
+            if (!inbound.Enabled)
+            {
+                continue;
+            }
+
+            var tag = inbound.Tag.Trim();
+            if (tag.Length == 0)
+            {
+                error = "Local inbound tag cannot be empty.";
+                return false;
+            }
+
+            if (!seenTags.Add(tag))
+            {
+                error = $"Duplicate local inbound tag: {tag}.";
+                return false;
+            }
+
+            var protocol = LocalInboundProtocols.Normalize(inbound.Protocol);
+            if (protocol is not (LocalInboundProtocols.Socks or LocalInboundProtocols.Http))
+            {
+                error = $"Unsupported local inbound protocol: {inbound.Protocol}.";
+                return false;
+            }
+
+            var normalizedAddress = NormalizeLocalInboundListenAddress(inbound.ListenAddress);
+            var normalizedPort = NormalizeLocalInboundPort(inbound.Port);
+            var bindingKey = $"{normalizedAddress}:{normalizedPort}";
+            if (!seenBindings.Add(bindingKey))
+            {
+                error = $"Duplicate local inbound binding: {bindingKey}.";
                 return false;
             }
         }
@@ -607,6 +676,19 @@ public sealed class ConfigOrchestrator
             .ToArray();
     }
 
+    private static IReadOnlyList<LocalInboundConfig> NormalizeLocalInbounds(IReadOnlyList<LocalInboundConfig> localInbounds)
+        => localInbounds
+            .Where(static inbound => !string.IsNullOrWhiteSpace(inbound.Tag))
+            .Select(static inbound => inbound with
+            {
+                Tag = inbound.Tag.Trim(),
+                Protocol = LocalInboundProtocols.Normalize(inbound.Protocol),
+                ListenAddress = NormalizeLocalInboundListenAddress(inbound.ListenAddress),
+                Port = NormalizeLocalInboundPort(inbound.Port),
+                HandshakeTimeoutSeconds = NormalizePositive(inbound.HandshakeTimeoutSeconds, 10)
+            })
+            .ToArray();
+
     private static IReadOnlyList<RoutingRuleConfig> NormalizeRoutingRules(IReadOnlyList<RoutingRuleConfig> routingRules)
         => routingRules
             .Where(static rule => !string.IsNullOrWhiteSpace(rule.OutboundTag))
@@ -686,12 +768,23 @@ public sealed class ConfigOrchestrator
                 outbound.ApplicationProtocols),
             Password = outbound.Password.Trim(),
             ConnectTimeoutSeconds = Math.Max(0, outbound.ConnectTimeoutSeconds),
-            HandshakeTimeoutSeconds = Math.Max(0, outbound.HandshakeTimeoutSeconds)
+            HandshakeTimeoutSeconds = Math.Max(0, outbound.HandshakeTimeoutSeconds),
+            CandidateTags = NormalizeStringList(outbound.CandidateTags),
+            SelectedTag = outbound.SelectedTag.Trim(),
+            ProbeUrl = string.IsNullOrWhiteSpace(outbound.ProbeUrl)
+                ? StrategyOutboundDefaults.ProbeUrl
+                : outbound.ProbeUrl.Trim(),
+            ProbeIntervalSeconds = NormalizePositive(outbound.ProbeIntervalSeconds, StrategyOutboundDefaults.ProbeIntervalSeconds),
+            ProbeTimeoutSeconds = NormalizePositive(outbound.ProbeTimeoutSeconds, StrategyOutboundDefaults.ProbeTimeoutSeconds),
+            ToleranceMilliseconds = Math.Max(0, outbound.ToleranceMilliseconds)
         };
     }
 
     private static string NormalizeListenAddress(string value)
         => string.IsNullOrWhiteSpace(value) ? "0.0.0.0" : value.Trim();
+
+    private static string NormalizeLocalInboundListenAddress(string value)
+        => string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value.Trim();
 
     private static IReadOnlyList<string> NormalizeOutboundApplicationProtocols(
         string protocol,
@@ -763,6 +856,9 @@ public sealed class ConfigOrchestrator
 
     private static int NormalizePort(int value, int fallback)
         => value is > 0 and <= 65535 ? value : fallback;
+
+    private static int NormalizeLocalInboundPort(int value)
+        => value is >= 0 and <= 65535 ? value : 10808;
 
     private static int NormalizePositive(int value, int fallback)
         => value > 0 ? value : fallback;

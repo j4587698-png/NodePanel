@@ -47,12 +47,14 @@
             @foreach (var node in Model.State.Nodes)
             {
                 var certificate = node.Runtime.LastStatus?.Certificate;
-                var tcpTls = NodeServiceConfigInbounds.GetTrojanTransportInbound(node.Definition.Config, InboundTransports.Tls);
-                var wss = NodeServiceConfigInbounds.GetTrojanTransportInbound(node.Definition.Config, InboundTransports.Wss);
+                var normalizedProtocol = InboundProtocols.Normalize(node.Definition.Protocol);
+                var tcpTls = NodeServiceConfigInbounds.GetProtocolTransportInbound(node.Definition.Config, normalizedProtocol, InboundTransports.Tls);
+                var wss = NodeServiceConfigInbounds.GetProtocolTransportInbound(node.Definition.Config, normalizedProtocol, InboundTransports.Wss);
                 <tr>
                     <td>
                         <strong>@node.Definition.DisplayName</strong>
                         <div class="muted mono">@node.Definition.NodeId</div>
+                        <div class="muted">@normalizedProtocol.ToUpperInvariant()</div>
                     </td>
                     <td>
                         <span class="badge @(node.Runtime.Connected ? "badge--ok" : "badge--idle")">
@@ -80,6 +82,14 @@
                     <td>
                         <div>@(string.IsNullOrWhiteSpace(node.Definition.SubscriptionHost) ? "-" : node.Definition.SubscriptionHost)</div>
                         <div class="muted">@node.Definition.SubscriptionSni</div>
+                        @if (!string.IsNullOrWhiteSpace(node.Definition.SubscriptionRegion))
+                        {
+                            <div class="muted">地区 @node.Definition.SubscriptionRegion</div>
+                        }
+                        @if (node.Definition.SubscriptionTags.Count > 0)
+                        {
+                            <div class="muted">标签 @string.Join(", ", node.Definition.SubscriptionTags)</div>
+                        }
                     </td>
                     <td class="table-actions">
                         @if (node.CanRequestCertificateRenewal)

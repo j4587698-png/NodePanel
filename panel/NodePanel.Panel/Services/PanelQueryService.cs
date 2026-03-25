@@ -128,6 +128,9 @@ public sealed class PanelQueryService
         return stateView.TrafficSummaries.GetValueOrDefault(userId);
     }
 
+    public Task<IReadOnlyDictionary<string, string>> GetSettingsAsync(CancellationToken cancellationToken = default)
+        => GetSettingsDictionaryAsync(cancellationToken);
+
     public async Task<PanelNodeRecord?> FindNodeAsync(string nodeId, CancellationToken cancellationToken = default)
     {
         if (!_db.IsConfigured) return null;

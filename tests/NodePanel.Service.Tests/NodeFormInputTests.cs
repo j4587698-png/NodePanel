@@ -367,6 +367,139 @@ public sealed class NodeFormInputTests
             InboundProtocols.Normalize(NodeServiceConfigInbounds.GetProtocolTransportInbound(request.Config, protocol, InboundTransports.Wss).Protocol));
     }
 
+    [Fact]
+    public void Subscription_metadata_round_trips_between_form_request_and_record()
+    {
+        var form = CreateBaseForm();
+        form.SubscriptionRegion = "香港";
+        form.SubscriptionTags = "stream, ai, stream";
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal("香港", request.SubscriptionRegion);
+        Assert.Equal(["stream", "ai"], request.SubscriptionTags);
+
+        var record = new PanelNodeRecord
+        {
+            NodeId = "node-a",
+            DisplayName = "Node A",
+            Protocol = InboundProtocols.Trojan,
+            SubscriptionRegion = request.SubscriptionRegion,
+            SubscriptionTags = request.SubscriptionTags,
+            Config = request.Config
+        };
+
+        var rebound = NodeFormInput.FromRecord(record);
+        Assert.Equal("香港", rebound.SubscriptionRegion);
+        Assert.Equal("stream, ai", rebound.SubscriptionTags);
+    }
+
+    [Fact]
+    public void Local_inbounds_round_trip_through_advanced_config_json()
+    {
+        var record = new PanelNodeRecord
+        {
+            NodeId = "node-local",
+            DisplayName = "Node Local",
+            Protocol = InboundProtocols.Trojan,
+            Config = new NodeServiceConfig
+            {
+                LocalInbounds =
+                [
+                    new LocalInboundConfig
+                    {
+                        Tag = "socks-local",
+                        Enabled = true,
+                        Protocol = LocalInboundProtocols.Socks,
+                        ListenAddress = "127.0.0.1",
+                        Port = 10808,
+                        HandshakeTimeoutSeconds = 12
+                    },
+                    new LocalInboundConfig
+                    {
+                        Tag = "http-local",
+                        Enabled = true,
+                        Protocol = LocalInboundProtocols.Http,
+                        ListenAddress = "127.0.0.1",
+                        Port = 10809,
+                        HandshakeTimeoutSeconds = 15
+                    }
+                ]
+            }
+        };
+
+        var form = NodeFormInput.FromRecord(record);
+
+        Assert.Contains("\"localInbounds\"", form.AdvancedConfigJson, StringComparison.Ordinal);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal(2, request.Config.LocalInbounds.Count);
+        Assert.Equal("socks-local", request.Config.LocalInbounds[0].Tag);
+        Assert.Equal(LocalInboundProtocols.Socks, request.Config.LocalInbounds[0].Protocol);
+        Assert.Equal("http-local", request.Config.LocalInbounds[1].Tag);
+        Assert.Equal(LocalInboundProtocols.Http, request.Config.LocalInbounds[1].Protocol);
+    }
+
+    [Fact]
+    public void Strategy_outbounds_round_trip_with_structured_outbounds()
+    {
+        var record = new PanelNodeRecord
+        {
+            NodeId = "node-strategy",
+            DisplayName = "Node Strategy",
+            Protocol = InboundProtocols.Trojan,
+            Config = new NodeServiceConfig
+            {
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    },
+                    new OutboundConfig
+                    {
+                        Tag = "proxy",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Trojan,
+                        ServerHost = "edge.example.com",
+                        ServerPort = 443,
+                        Password = "secret"
+                    },
+                    new OutboundConfig
+                    {
+                        Tag = "auto",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Selector,
+                        CandidateTags = ["proxy", "direct"],
+                        SelectedTag = "proxy",
+                        ProbeUrl = "https://probe.example/test"
+                    }
+                ]
+            }
+        };
+
+        var form = NodeFormInput.FromRecord(record);
+
+        Assert.Equal(2, form.Outbounds.Count);
+        Assert.Contains("\"auto\"", form.AdvancedConfigJson, StringComparison.Ordinal);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal(3, request.Config.Outbounds.Count);
+        var strategyOutbound = Assert.Single(
+            request.Config.Outbounds,
+            static outbound => string.Equals(outbound.Tag, "auto", StringComparison.Ordinal));
+        Assert.Equal(OutboundProtocols.Selector, strategyOutbound.Protocol);
+        Assert.Equal(["proxy", "direct"], strategyOutbound.CandidateTags);
+        Assert.Equal("proxy", strategyOutbound.SelectedTag);
+    }
+
     private static NodeFormInput CreateBaseForm()
         => new()
         {

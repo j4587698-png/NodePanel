@@ -1,3 +1,4 @@
+@using NodePanel.Panel.Models
 @model NodePanel.Panel.Models.PortalStoreViewModel
 @{
     Layout = "~/Views/Shared/_PortalLayout.cshtml";
@@ -7,10 +8,11 @@
 <style>
     .store-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
         gap: 24px;
         margin-top: 24px;
     }
+
     .plan-card {
         background: var(--admin-bg);
         border: 1px solid var(--admin-border);
@@ -18,43 +20,80 @@
         padding: 24px;
         display: flex;
         flex-direction: column;
+        gap: 20px;
     }
+
     .plan-card__header {
-        margin-bottom: 24px;
         text-align: center;
-        padding-bottom: 24px;
+        padding-bottom: 20px;
         border-bottom: 1px solid var(--admin-border);
     }
+
     .plan-card__header h3 {
         margin: 0;
         font-size: 24px;
         color: #fff;
     }
+
     .plan-card__price {
         font-size: 32px;
         font-weight: bold;
         color: var(--admin-accent);
         margin: 16px 0 8px;
     }
-    .plan-card__desc {
+
+    .plan-card__desc,
+    .plan-card__meta,
+    .plan-card__note {
         color: var(--admin-muted);
         font-size: 14px;
     }
+
+    .plan-card__cycles {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .plan-card__cycle {
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .plan-card__cycle-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 6px;
+        color: #fff;
+        font-weight: 600;
+    }
+
+    .plan-card__cycle-meta {
+        color: var(--admin-muted);
+        font-size: 13px;
+    }
+
     .plan-form {
         margin-top: auto;
         display: flex;
         flex-direction: column;
         gap: 16px;
     }
+
     .plan-form select {
         width: 100%;
         padding: 10px 12px;
-        background: rgba(255,255,255,0.05);
+        background: rgba(255, 255, 255, 0.05);
         border: 1px solid var(--admin-border);
         color: #fff;
         border-radius: 6px;
         outline: none;
     }
+
     .plan-form select:focus {
         border-color: var(--admin-accent);
     }
@@ -63,7 +102,7 @@
 <div class="portal-card">
     <div style="margin-bottom: 1rem;">
         <h2 style="margin: 0 0 8px; color: #fff;">购买订阅套餐</h2>
-        <p class="muted" style="margin: 0;">选择适合您的流量套餐及支付周期。</p>
+        <p class="muted" style="margin: 0;">选择合适的流量套餐和销售周期。周期说明里会直接显示有效时长和重置方式。</p>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
@@ -76,30 +115,56 @@
     <div class="store-grid">
         @foreach (var plan in Model.Plans)
         {
+            var cycles = PlanPresentation.GetAvailableCycles(plan);
+            var previewPrice = PlanPresentation.FormatPrice(PlanPresentation.GetPreviewPrice(plan), Model.CurrencySymbol);
+            var trafficText = PlanPresentation.FormatTraffic(plan.TransferEnableBytes);
+            var resetSummary = PlanPresentation.GetResetSummary(plan);
+            var hasFreeCycle = cycles.Any(option => option.Price == 0m);
+
             <div class="plan-card">
                 <div class="plan-card__header">
                     <h3>@plan.Name</h3>
-                    <div class="plan-card__price">@Model.CurrencySymbol@(plan.MonthPrice ?? plan.YearPrice ?? plan.OneTimePrice ?? 0) <span style="font-size: 14px; font-weight: normal; color: var(--admin-muted);">起</span></div>
-                    <div class="plan-card__desc">包含 @(plan.TransferEnableBytes / (1024.0 * 1024 * 1024)) GB 高速流量</div>
+                    <div class="plan-card__price">@previewPrice <span style="font-size: 14px; font-weight: normal; color: var(--admin-muted);">起</span></div>
+                    <div class="plan-card__desc">包含 @trafficText 流量</div>
+                    @if (!string.IsNullOrWhiteSpace(resetSummary))
+                    {
+                        <div class="plan-card__meta">@resetSummary</div>
+                    }
+                    @if (hasFreeCycle)
+                    {
+                        <div class="plan-card__note">含 0 元周期，提交订单后会直接生效。</div>
+                    }
+                </div>
+
+                <div class="plan-card__cycles">
+                    @foreach (var option in cycles)
+                    {
+                        <div class="plan-card__cycle">
+                            <div class="plan-card__cycle-head">
+                                <span>@option.DisplayName</span>
+                                <span>@PlanPresentation.FormatPrice(option.Price, Model.CurrencySymbol)</span>
+                            </div>
+                            <div class="plan-card__cycle-meta">@option.DurationText · @option.ResetText</div>
+                        </div>
+                    }
                 </div>
 
                 <form class="plan-form" action="/user/checkout" method="post">
                     @Html.AntiForgeryToken()
                     <input type="hidden" name="planId" value="@plan.PlanId" />
-                    
+
                     <select name="cycle">
-                        @if (plan.MonthPrice.HasValue) { <option value="month">月付 - @Model.CurrencySymbol@plan.MonthPrice.Value.ToString("0.00")</option> }
-                        @if (plan.QuarterPrice.HasValue) { <option value="quarter">季付 - @Model.CurrencySymbol@plan.QuarterPrice.Value.ToString("0.00")</option> }
-                        @if (plan.HalfYearPrice.HasValue) { <option value="half_year">半年付 - @Model.CurrencySymbol@plan.HalfYearPrice.Value.ToString("0.00")</option> }
-                        @if (plan.YearPrice.HasValue) { <option value="year">年付 - @Model.CurrencySymbol@plan.YearPrice.Value.ToString("0.00")</option> }
-                        @if (plan.OneTimePrice.HasValue) { <option value="one_time">一次性 - @Model.CurrencySymbol@plan.OneTimePrice.Value.ToString("0.00")</option> }
-                        @if (plan.ResetPrice.HasValue) { <option value="reset_price">流量重置包 - @Model.CurrencySymbol@plan.ResetPrice.Value.ToString("0.00")</option> }
+                        @foreach (var option in cycles)
+                        {
+                            <option value="@option.Cycle">@option.DisplayName - @PlanPresentation.FormatPrice(option.Price, Model.CurrencySymbol) / @option.DurationText / @option.ResetText</option>
+                        }
                     </select>
 
                     <button type="submit" class="button button--primary" style="width: 100%;">立即下单</button>
                 </form>
             </div>
         }
+
         @if (Model.Plans.Count == 0)
         {
             <div style="color: var(--admin-muted); grid-column: 1 / -1; text-align: center; padding: 48px;">

@@ -51,6 +51,8 @@ public sealed class PanelMutationService
         entity.GroupIds = request.GroupIds;
         entity.SubscriptionHost = request.SubscriptionHost;
         entity.SubscriptionSni = request.SubscriptionSni;
+        entity.SubscriptionRegion = request.SubscriptionRegion;
+        entity.SubscriptionTags = request.SubscriptionTags;
         entity.SubscriptionAllowInsecure = request.SubscriptionAllowInsecure;
         entity.Config = NormalizeNodeConfig(request.Config);
         entity.DesiredRevision = existing is null ? 1 : NextDesiredRevision(existing.DesiredRevision);
@@ -78,6 +80,9 @@ public sealed class PanelMutationService
         entity.DeviceLimit = Math.Max(0, request.DeviceLimit);
         entity.NodeIds = request.NodeIds;
         entity.PlanName = request.Subscription.PlanName;
+        entity.Cycle = string.IsNullOrWhiteSpace(request.Subscription.Cycle)
+            ? existing?.Cycle ?? string.Empty
+            : request.Subscription.Cycle;
         entity.TransferEnableBytes = request.Subscription.TransferEnableBytes;
         entity.ExpiresAt = request.Subscription.ExpiresAt;
 
@@ -171,15 +176,13 @@ public sealed class PanelMutationService
         
         if (user != null && plan != null)
         {
-            DateTimeOffset? targetExpiresAt = order.Cycle switch
+            if (string.Equals(order.Cycle, "reset_price", StringComparison.Ordinal))
             {
-                "month" => DateTimeOffset.UtcNow.AddDays(31),
-                "quarter" => DateTimeOffset.UtcNow.AddDays(90),
-                "half_year" => DateTimeOffset.UtcNow.AddDays(180),
-                "year" => DateTimeOffset.UtcNow.AddDays(365),
-                "one_time" => null,
-                _ => DateTimeOffset.UtcNow.AddDays(31)
-            };
+                await ResetUserTrafficAsync(user.UserId, cancellationToken).ConfigureAwait(false);
+                return order.ToRecord();
+            }
+
+            var targetExpiresAt = PlanPresentation.CalculateExpiresAt(order.Cycle, user.ExpiresAt);
 
             var request = new UpsertUserRequest
             {

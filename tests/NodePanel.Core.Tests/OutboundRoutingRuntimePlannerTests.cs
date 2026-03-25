@@ -96,7 +96,7 @@ public sealed class OutboundRoutingRuntimePlannerTests
     public void Resolve_selects_handler_by_protocol_of_matched_outbound()
     {
         var fallbackHandler = new TestOutboundHandler(OutboundProtocols.Freedom);
-        var matchedHandler = new TestOutboundHandler("custom");
+        var matchedHandler = new TestOutboundHandler(OutboundProtocols.Trojan);
         var router = new DefaultOutboundRouter(
             [fallbackHandler, matchedHandler],
             new StaticOutboundRuntimePlanProvider(
@@ -112,7 +112,7 @@ public sealed class OutboundRoutingRuntimePlannerTests
                         new OutboundRuntime
                         {
                             Tag = "proxy",
-                            Protocol = "custom"
+                            Protocol = OutboundProtocols.Trojan
                         }
                     ],
                     RoutingRules =
@@ -330,6 +330,100 @@ public sealed class OutboundRoutingRuntimePlannerTests
         Assert.Contains("port matcher", error, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void TryBuild_normalizes_strategy_outbound_settings()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("backup", true, OutboundProtocols.Freedom),
+                new TestStrategyOutboundDefinition(
+                    "auto",
+                    true,
+                    "url-test",
+                    [" direct ", "backup", "direct"],
+                    selectedTag: " backup ",
+                    probeUrl: " https://probe.example/test ",
+                    probeIntervalSeconds: 30,
+                    probeTimeoutSeconds: 7,
+                    toleranceMilliseconds: 80)
+            ],
+            Array.Empty<IRoutingRuleDefinition>(),
+            [OutboundProtocols.Freedom, OutboundProtocols.UrlTest],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.True(plan.TryGetOutbound("auto", out var outbound));
+        Assert.Equal(OutboundProtocols.UrlTest, outbound.Protocol);
+        Assert.Equal(["direct", "backup"], outbound.CandidateTags);
+        Assert.Equal("backup", outbound.SelectedTag);
+        Assert.Equal("https://probe.example/test", outbound.ProbeUrl);
+        Assert.Equal(30, outbound.ProbeIntervalSeconds);
+        Assert.Equal(7, outbound.ProbeTimeoutSeconds);
+        Assert.Equal(80, outbound.ToleranceMilliseconds);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_strategy_selected_tag_outside_candidates()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestStrategyOutboundDefinition(
+                    "auto",
+                    true,
+                    OutboundProtocols.Selector,
+                    ["direct"],
+                    selectedTag: "backup")
+            ],
+            Array.Empty<IRoutingRuleDefinition>(),
+            [OutboundProtocols.Freedom, OutboundProtocols.Selector],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("selected tag", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_unknown_strategy_candidate_tag()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestStrategyOutboundDefinition(
+                    "auto",
+                    true,
+                    OutboundProtocols.Selector,
+                    ["missing"])
+            ],
+            Array.Empty<IRoutingRuleDefinition>(),
+            [OutboundProtocols.Freedom, OutboundProtocols.Selector],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("unknown candidate outbound tag", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_strategy_outbound_cycle()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestStrategyOutboundDefinition("first", true, OutboundProtocols.Selector, ["second"]),
+                new TestStrategyOutboundDefinition("second", true, OutboundProtocols.Selector, ["first"])
+            ],
+            Array.Empty<IRoutingRuleDefinition>(),
+            [OutboundProtocols.Selector],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("cycle", error, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed record TestOutboundDefinition(string Tag, bool Enabled, string Protocol) : IOutboundDefinition;
 
     private sealed class TestRoutingRuleDefinition : IRoutingRuleDefinition
@@ -405,6 +499,31 @@ public sealed class OutboundRoutingRuntimePlannerTests
     {
         public static TestMultiplexDefinition Disabled { get; } =
             new(false, 0, 0, OutboundXudpProxyModes.Reject);
+    }
+
+    private sealed record TestStrategyOutboundDefinition(
+        string Tag,
+        bool Enabled,
+        string Protocol,
+        IReadOnlyList<string> candidateTags,
+        string selectedTag = "",
+        string probeUrl = "",
+        int probeIntervalSeconds = 0,
+        int probeTimeoutSeconds = 0,
+        int toleranceMilliseconds = 0)
+        : IOutboundDefinition, IStrategyOutboundDefinition
+    {
+        public IReadOnlyList<string> CandidateTags { get; } = candidateTags;
+
+        public string SelectedTag { get; } = selectedTag;
+
+        public string ProbeUrl { get; } = probeUrl;
+
+        public int ProbeIntervalSeconds { get; } = probeIntervalSeconds;
+
+        public int ProbeTimeoutSeconds { get; } = probeTimeoutSeconds;
+
+        public int ToleranceMilliseconds { get; } = toleranceMilliseconds;
     }
 
     private sealed class StaticOutboundRuntimePlanProvider : IOutboundRuntimePlanProvider

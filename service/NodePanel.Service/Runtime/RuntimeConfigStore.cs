@@ -6,6 +6,7 @@ namespace NodePanel.Service.Runtime;
 public sealed class RuntimeConfigStore
     : IOutboundRuntimePlanProvider,
       ITrojanOutboundSettingsProvider,
+      IStrategyOutboundSettingsProvider,
       IOutboundCommonSettingsProvider,
       IDnsRuntimeSettingsProvider
 {
@@ -109,6 +110,39 @@ public sealed class RuntimeConfigStore
             ConnectTimeoutSeconds = outbound.ConnectTimeoutSeconds,
             HandshakeTimeoutSeconds = outbound.HandshakeTimeoutSeconds,
             SkipCertificateValidation = outbound.SkipCertificateValidation
+        };
+        return true;
+    }
+
+    public bool TryResolve(DispatchContext context, out StrategyOutboundSettings settings)
+    {
+        if (!TryResolveOutbound(context, out var outbound))
+        {
+            settings = default!;
+            return false;
+        }
+
+        var protocol = OutboundProtocols.Normalize(outbound.Protocol);
+        if (protocol is not (
+            OutboundProtocols.Selector or
+            OutboundProtocols.UrlTest or
+            OutboundProtocols.Fallback or
+            OutboundProtocols.LoadBalance))
+        {
+            settings = default!;
+            return false;
+        }
+
+        settings = new StrategyOutboundSettings
+        {
+            Tag = outbound.Tag,
+            Protocol = protocol,
+            CandidateTags = outbound.CandidateTags.ToArray(),
+            SelectedTag = outbound.SelectedTag,
+            ProbeUrl = outbound.ProbeUrl,
+            ProbeIntervalSeconds = outbound.ProbeIntervalSeconds,
+            ProbeTimeoutSeconds = outbound.ProbeTimeoutSeconds,
+            ToleranceMilliseconds = outbound.ToleranceMilliseconds
         };
         return true;
     }

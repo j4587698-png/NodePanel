@@ -64,8 +64,24 @@ public sealed record InboundConfig : ITrojanInboundDefinition, ITrojanInboundSco
     public bool GetReceiveOriginalDestination() => ReceiveOriginalDestination;
 }
 
+public sealed record LocalInboundConfig
+{
+    public string Tag { get; init; } = string.Empty;
+
+    public bool Enabled { get; init; } = true;
+
+    public string Protocol { get; init; } = LocalInboundProtocols.Socks;
+
+    public string ListenAddress { get; init; } = "127.0.0.1";
+
+    public int Port { get; init; } = 10808;
+
+    public int HandshakeTimeoutSeconds { get; init; } = 10;
+}
+
 public sealed record OutboundConfig : IOutboundDefinition
     , IOutboundSenderDefinition
+    , IStrategyOutboundDefinition
 {
     public string Tag { get; init; } = "direct";
 
@@ -108,6 +124,18 @@ public sealed record OutboundConfig : IOutboundDefinition
     public int HandshakeTimeoutSeconds { get; init; }
 
     public bool SkipCertificateValidation { get; init; }
+
+    public IReadOnlyList<string> CandidateTags { get; init; } = Array.Empty<string>();
+
+    public string SelectedTag { get; init; } = string.Empty;
+
+    public string ProbeUrl { get; init; } = StrategyOutboundDefaults.ProbeUrl;
+
+    public int ProbeIntervalSeconds { get; init; } = StrategyOutboundDefaults.ProbeIntervalSeconds;
+
+    public int ProbeTimeoutSeconds { get; init; } = StrategyOutboundDefaults.ProbeTimeoutSeconds;
+
+    public int ToleranceMilliseconds { get; init; } = StrategyOutboundDefaults.ToleranceMilliseconds;
 
     public IOutboundMultiplexDefinition GetMultiplexSettings() => MultiplexSettings;
 }

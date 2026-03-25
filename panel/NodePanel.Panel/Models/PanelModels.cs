@@ -110,6 +110,10 @@ public sealed record PanelNodeRecord
 
     public string SubscriptionSni { get; init; } = string.Empty;
 
+    public string SubscriptionRegion { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> SubscriptionTags { get; init; } = Array.Empty<string>();
+
     public bool SubscriptionAllowInsecure { get; init; }
 
     public NodeServiceConfig Config { get; init; } = new();
@@ -161,6 +165,10 @@ public sealed record UpsertNodeRequest
     public string SubscriptionHost { get; init; } = string.Empty;
 
     public string SubscriptionSni { get; init; } = string.Empty;
+
+    public string SubscriptionRegion { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> SubscriptionTags { get; init; } = Array.Empty<string>();
 
     public bool SubscriptionAllowInsecure { get; init; }
 

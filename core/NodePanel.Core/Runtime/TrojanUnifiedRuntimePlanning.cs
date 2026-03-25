@@ -30,11 +30,25 @@ public static class OutboundProtocols
 {
     public const string Freedom = "freedom";
     public const string Trojan = "trojan";
+    public const string Selector = "selector";
+    public const string UrlTest = "urltest";
+    public const string Fallback = "fallback";
+    public const string LoadBalance = "loadbalance";
 
     public static string Normalize(string? value)
         => string.IsNullOrWhiteSpace(value)
             ? Freedom
-            : value.Trim().ToLowerInvariant();
+            : value.Trim().ToLowerInvariant() switch
+            {
+                Selector => Selector,
+                "url-test" => UrlTest,
+                UrlTest => UrlTest,
+                Fallback => Fallback,
+                "load-balance" => LoadBalance,
+                LoadBalance => LoadBalance,
+                Trojan => Trojan,
+                _ => Freedom
+            };
 }
 
 public static class RoutingNetworks

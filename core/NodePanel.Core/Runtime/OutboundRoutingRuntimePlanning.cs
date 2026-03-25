@@ -31,6 +31,18 @@ public sealed record OutboundRuntime
     public string ProxyOutboundTag { get; init; } = string.Empty;
 
     public OutboundMultiplexRuntime MultiplexSettings { get; init; } = OutboundMultiplexRuntime.Disabled;
+
+    public IReadOnlyList<string> CandidateTags { get; init; } = Array.Empty<string>();
+
+    public string SelectedTag { get; init; } = string.Empty;
+
+    public string ProbeUrl { get; init; } = StrategyOutboundDefaults.ProbeUrl;
+
+    public int ProbeIntervalSeconds { get; init; } = StrategyOutboundDefaults.ProbeIntervalSeconds;
+
+    public int ProbeTimeoutSeconds { get; init; } = StrategyOutboundDefaults.ProbeTimeoutSeconds;
+
+    public int ToleranceMilliseconds { get; init; } = StrategyOutboundDefaults.ToleranceMilliseconds;
 }
 
 public sealed record RoutingRuleRuntime
@@ -702,6 +714,7 @@ public static class OutboundRuntimePlanner
             }
 
             var sender = outbound as IOutboundSenderDefinition;
+            var strategy = outbound as IStrategyOutboundDefinition;
             var via = NormalizeTag(sender?.Via);
             var viaCidr = NormalizeCidr(sender?.ViaCidr);
             var targetStrategy = sender is null
@@ -711,6 +724,14 @@ public static class OutboundRuntimePlanner
             var multiplexSettings = sender is null
                 ? OutboundMultiplexRuntime.Disabled
                 : NormalizeMultiplexSettings(sender.GetMultiplexSettings());
+            var candidateTags = strategy is null
+                ? Array.Empty<string>()
+                : NormalizeValues(strategy.CandidateTags, NormalizeTag);
+            var selectedTag = NormalizeTag(strategy?.SelectedTag);
+            var probeUrl = NormalizeProbeUrl(strategy?.ProbeUrl);
+            var probeIntervalSeconds = NormalizeProbeIntervalSeconds(strategy?.ProbeIntervalSeconds ?? 0);
+            var probeTimeoutSeconds = NormalizeProbeTimeoutSeconds(strategy?.ProbeTimeoutSeconds ?? 0);
+            var toleranceMilliseconds = NormalizeToleranceMilliseconds(strategy?.ToleranceMilliseconds ?? 0);
 
             if (!IsValidVia(via))
             {
@@ -730,6 +751,18 @@ public static class OutboundRuntimePlanner
                 return null;
             }
 
+            if (IsStrategyProtocol(protocol) && candidateTags.Count == 0)
+            {
+                error = $"Strategy outbound '{tag}' requires at least one candidate tag.";
+                return null;
+            }
+
+            if (selectedTag.Length > 0 && !candidateTags.Contains(selectedTag, StringComparer.OrdinalIgnoreCase))
+            {
+                error = $"Strategy outbound '{tag}' selected tag '{selectedTag}' is not present in candidate tags.";
+                return null;
+            }
+
             normalized.Add(new OutboundRuntime
             {
                 Tag = tag,
@@ -738,7 +771,13 @@ public static class OutboundRuntimePlanner
                 ViaCidr = viaCidr,
                 TargetStrategy = targetStrategy,
                 ProxyOutboundTag = proxyOutboundTag,
-                MultiplexSettings = multiplexSettings
+                MultiplexSettings = multiplexSettings,
+                CandidateTags = candidateTags,
+                SelectedTag = selectedTag,
+                ProbeUrl = probeUrl,
+                ProbeIntervalSeconds = probeIntervalSeconds,
+                ProbeTimeoutSeconds = probeTimeoutSeconds,
+                ToleranceMilliseconds = toleranceMilliseconds
             });
         }
 
@@ -748,7 +787,7 @@ public static class OutboundRuntimePlanner
             return null;
         }
 
-        if (!ValidateProxyOutboundGraph(normalized, out error))
+        if (!ValidateOutboundDependencyGraph(normalized, out error))
         {
             return null;
         }
@@ -955,7 +994,7 @@ public static class OutboundRuntimePlanner
         return matchers;
     }
 
-    private static bool ValidateProxyOutboundGraph(
+    private static bool ValidateOutboundDependencyGraph(
         IReadOnlyList<OutboundRuntime> outbounds,
         out string? error)
     {
@@ -968,37 +1007,75 @@ public static class OutboundRuntimePlanner
 
         foreach (var outbound in outbounds)
         {
-            if (string.IsNullOrWhiteSpace(outbound.ProxyOutboundTag))
-            {
-                continue;
-            }
-
-            if (!knownTags.Contains(outbound.ProxyOutboundTag))
+            if (!string.IsNullOrWhiteSpace(outbound.ProxyOutboundTag) &&
+                !knownTags.Contains(outbound.ProxyOutboundTag))
             {
                 error = $"Outbound '{outbound.Tag}' references unknown proxy outbound tag: {outbound.ProxyOutboundTag}.";
                 return false;
+            }
+
+            foreach (var candidateTag in outbound.CandidateTags)
+            {
+                if (!knownTags.Contains(candidateTag))
+                {
+                    error = $"Outbound '{outbound.Tag}' references unknown candidate outbound tag: {candidateTag}.";
+                    return false;
+                }
             }
         }
 
         foreach (var outbound in outbounds)
         {
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var current = outbound;
-
-            while (!string.IsNullOrWhiteSpace(current.ProxyOutboundTag))
+            if (!HasDependencyCycle(outbound.Tag, byTag, new HashSet<string>(StringComparer.OrdinalIgnoreCase)))
             {
-                if (!visited.Add(current.Tag))
-                {
-                    error = $"Outbound proxy chain contains a cycle at tag '{current.Tag}'.";
-                    return false;
-                }
-
-                current = byTag[current.ProxyOutboundTag];
+                continue;
             }
+
+            error = $"Outbound dependency graph contains a cycle at tag '{outbound.Tag}'.";
+            return false;
         }
 
         error = null;
         return true;
+    }
+
+    private static bool HasDependencyCycle(
+        string tag,
+        IReadOnlyDictionary<string, OutboundRuntime> byTag,
+        ISet<string> stack)
+    {
+        if (!byTag.TryGetValue(tag, out var outbound))
+        {
+            return false;
+        }
+
+        if (!stack.Add(tag))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(outbound.ProxyOutboundTag) &&
+                HasDependencyCycle(outbound.ProxyOutboundTag, byTag, stack))
+            {
+                return true;
+            }
+
+            foreach (var candidateTag in outbound.CandidateTags)
+            {
+                if (HasDependencyCycle(candidateTag, byTag, stack))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            stack.Remove(tag);
+        }
     }
 
     private static OutboundMultiplexRuntime NormalizeMultiplexSettings(IOutboundMultiplexDefinition definition)
@@ -1060,4 +1137,25 @@ public static class OutboundRuntimePlanner
 
         return int.TryParse(value, out var prefixLength) && prefixLength is >= 0 and <= 128;
     }
+
+    private static bool IsStrategyProtocol(string protocol)
+        => protocol is
+            OutboundProtocols.Selector or
+            OutboundProtocols.UrlTest or
+            OutboundProtocols.Fallback or
+            OutboundProtocols.LoadBalance;
+
+    private static string NormalizeProbeUrl(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? StrategyOutboundDefaults.ProbeUrl
+            : value.Trim();
+
+    private static int NormalizeProbeIntervalSeconds(int value)
+        => value > 0 ? value : StrategyOutboundDefaults.ProbeIntervalSeconds;
+
+    private static int NormalizeProbeTimeoutSeconds(int value)
+        => value > 0 ? value : StrategyOutboundDefaults.ProbeTimeoutSeconds;
+
+    private static int NormalizeToleranceMilliseconds(int value)
+        => value >= 0 ? value : StrategyOutboundDefaults.ToleranceMilliseconds;
 }

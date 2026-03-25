@@ -11,6 +11,7 @@ namespace NodePanel.Service.Runtime;
 [JsonSerializable(typeof(NodeServiceConfig))]
 [JsonSerializable(typeof(InboundConfig))]
 [JsonSerializable(typeof(InboundSniffingConfig))]
+[JsonSerializable(typeof(LocalInboundConfig))]
 [JsonSerializable(typeof(OutboundConfig))]
 [JsonSerializable(typeof(OutboundMultiplexConfig))]
 [JsonSerializable(typeof(RoutingRuleConfig))]

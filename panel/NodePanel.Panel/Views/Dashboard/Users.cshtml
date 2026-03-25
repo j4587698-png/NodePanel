@@ -8,7 +8,7 @@
     <div>
         <p class="eyebrow">Users</p>
         <h2>用户管理</h2>
-        <p class="muted">管理用户的订阅信息、流量用量与套餐分配。</p>
+        <p class="muted">管理用户的订阅信息、流量用量和套餐分配。</p>
     </div>
     <div class="page-actions">
         <a class="button button--primary" asp-action="NewUser">新建用户</a>
@@ -46,6 +46,13 @@
             <tbody>
             @foreach (var user in Model.State.Users)
             {
+                var summary = Model.State.TrafficSummaries.GetValueOrDefault(user.UserId);
+                var usedBytes = Math.Max(0L, summary?.TotalBytes ?? 0L);
+                var totalBytes = Math.Max(0L, user.Subscription.TransferEnableBytes);
+                var cycleText = string.IsNullOrWhiteSpace(user.Subscription.Cycle)
+                    ? string.Empty
+                    : $"{PlanPresentation.GetCycleDisplayName(user.Subscription.Cycle)} · {PlanPresentation.GetCycleSummaryText(user.Subscription.Cycle)}";
+
                 <tr>
                     <td>
                         <strong>@user.DisplayName</strong>
@@ -60,19 +67,17 @@
                     <td>@(user.DeviceLimit > 0 ? user.DeviceLimit.ToString() : "不限")</td>
                     <td>
                         <div>@(string.IsNullOrWhiteSpace(user.Subscription.PlanName) ? "-" : user.Subscription.PlanName)</div>
-                        <div class="muted">
-                            @(user.Subscription.ExpiresAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "长期有效")
-                        </div>
+                        @if (!string.IsNullOrWhiteSpace(cycleText))
+                        {
+                            <div class="muted">@cycleText</div>
+                        }
+                        <div class="muted">到期：@(user.Subscription.ExpiresAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "长期有效")</div>
                     </td>
                     <td>
-                        @{
-                            var summary = Model.State.TrafficSummaries.GetValueOrDefault(user.UserId);
-                            var usedGb = (summary?.TotalBytes ?? 0) / (1024.0 * 1024.0 * 1024.0);
-                            var totalGb = user.Subscription.TransferEnableBytes / (1024.0 * 1024.0 * 1024.0);
-                            <div>@usedGb.ToString("0.00") GB @(totalGb > 0 ? $" / {totalGb.ToString("0.00")} GB" : "")</div>
-                            @if (totalGb > 0 && usedGb >= totalGb) {
-                                <div class="inline-alert inline-alert--error" style="margin-top:4px;">流量耗尽</div>
-                            }
+                        <div>@PlanPresentation.FormatTraffic(usedBytes)@(totalBytes > 0 ? $" / {PlanPresentation.FormatTraffic(totalBytes)}" : string.Empty)</div>
+                        @if (totalBytes > 0 && usedBytes >= totalBytes)
+                        {
+                            <div class="inline-alert inline-alert--error" style="margin-top:4px;">流量耗尽</div>
                         }
                     </td>
                     <td>@(user.NodeIds.Count == 0 ? "全部节点" : string.Join(", ", user.NodeIds))</td>

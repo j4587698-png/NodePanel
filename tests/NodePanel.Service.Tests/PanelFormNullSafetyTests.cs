@@ -154,6 +154,41 @@ public sealed class PanelFormNullSafetyTests
         Assert.Equal(string.Empty, request.Name);
     }
 
+    [Theory]
+    [InlineData(512d, PlanPresentation.TrafficUnitMb, 536870912L)]
+    [InlineData(500d, PlanPresentation.TrafficUnitGb, 536870912000L)]
+    [InlineData(2d, PlanPresentation.TrafficUnitTb, 2199023255552L)]
+    public void PlanFormInput_to_request_converts_traffic_units_to_bytes(decimal value, string unit, long expectedBytes)
+    {
+        var form = new PlanFormInput
+        {
+            PlanId = "plan-a",
+            TransferEnableValue = value,
+            TransferEnableUnit = unit
+        };
+
+        var request = form.ToRequest();
+
+        Assert.Equal(expectedBytes, request.TransferEnableBytes);
+    }
+
+    [Theory]
+    [InlineData(536870912L, 512d, PlanPresentation.TrafficUnitMb)]
+    [InlineData(536870912000L, 500d, PlanPresentation.TrafficUnitGb)]
+    [InlineData(2199023255552L, 2d, PlanPresentation.TrafficUnitTb)]
+    public void PlanFormInput_from_record_maps_bytes_to_value_and_unit(long bytes, decimal expectedValue, string expectedUnit)
+    {
+        var form = PlanFormInput.FromRecord(
+            new PanelPlanRecord
+            {
+                PlanId = "plan-a",
+                TransferEnableBytes = bytes
+            });
+
+        Assert.Equal(expectedValue, form.TransferEnableValue);
+        Assert.Equal(expectedUnit, form.TransferEnableUnit);
+    }
+
     [Fact]
     public void TrojanFallbackFormInput_to_config_accepts_null_text_fields()
     {

@@ -3,14 +3,17 @@
 @{
     ViewData["Title"] = "订阅套餐";
     var currency = Model.State.Settings.GetValueOrDefault("currency_symbol", "¥");
-    if (string.IsNullOrWhiteSpace(currency)) currency = "¥";
+    if (string.IsNullOrWhiteSpace(currency))
+    {
+        currency = "¥";
+    }
 }
 
 <section class="page-header">
     <div>
         <p class="eyebrow">Plans</p>
         <h2>订阅套餐</h2>
-        <p class="muted">管理提供给用户的订阅套餐及其定价、流量配额与周期。</p>
+        <p class="muted">管理提供给用户的套餐定价、流量额度和可售周期。</p>
     </div>
     <div class="page-actions">
         <a class="button button--primary" asp-action="NewPlan">新建套餐</a>
@@ -37,26 +40,55 @@
                     <th>套餐 ID</th>
                     <th>名称</th>
                     <th>价格</th>
-                    <th>配额</th>
-                    <th>周期</th>
+                    <th>流量</th>
+                    <th>周期说明</th>
                     <th></th>
                 </tr>
             </thead>
             <tbody>
             @foreach (var plan in Model.State.Plans)
             {
+                var cycles = PlanPresentation.GetAvailableCycles(plan);
+                var resetSummary = PlanPresentation.GetResetSummary(plan);
+
                 <tr>
                     <td><strong>@plan.PlanId</strong></td>
                     <td>@plan.Name</td>
                     <td>
-                        @if (plan.MonthPrice.HasValue) { <div>月: @currency@plan.MonthPrice.Value.ToString("0.00")</div> }
-                        @if (plan.YearPrice.HasValue) { <div>年: @currency@plan.YearPrice.Value.ToString("0.00")</div> }
+                        @if (cycles.Count == 0)
+                        {
+                            <span class="muted">未配置</span>
+                        }
+                        else
+                        {
+                            @foreach (var option in cycles)
+                            {
+                                <div>@option.DisplayName: @PlanPresentation.FormatPrice(option.Price, currency)</div>
+                            }
+                        }
                     </td>
-                    <td>@(plan.TransferEnableBytes / (1024.0 * 1024.0 * 1024.0)) GB</td>
                     <td>
-                        @if (plan.QuarterPrice.HasValue) { <span class="badge badge--idle">季</span> }
-                        @if (plan.HalfYearPrice.HasValue) { <span class="badge badge--idle">半年</span> }
-                        @if (plan.OneTimePrice.HasValue) { <span class="badge badge--ok">一次性</span> }
+                        <div>@PlanPresentation.FormatTraffic(plan.TransferEnableBytes)</div>
+                        @if (!string.IsNullOrWhiteSpace(resetSummary))
+                        {
+                            <div class="muted">@resetSummary</div>
+                        }
+                    </td>
+                    <td>
+                        @if (cycles.Count == 0)
+                        {
+                            <span class="muted">暂无可售周期</span>
+                        }
+                        else
+                        {
+                            @foreach (var option in cycles)
+                            {
+                                <div>
+                                    <span class="badge badge--idle">@option.DisplayName</span>
+                                    <span class="muted">@option.DurationText · @option.ResetText</span>
+                                </div>
+                            }
+                        }
                     </td>
                     <td class="table-actions">
                         <a class="button button--small" asp-action="Plan" asp-route-planId="@plan.PlanId">编辑</a>

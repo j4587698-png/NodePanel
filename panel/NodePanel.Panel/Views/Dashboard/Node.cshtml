@@ -360,6 +360,16 @@
                     <span>订阅域名</span>
                     <input asp-for="Form.SubscriptionHost" />
                 </label>
+                <label>
+                    <span>订阅地区</span>
+                    <input asp-for="Form.SubscriptionRegion" placeholder="例如：香港 / 日本 / 美国" />
+                    <small class="muted">用于自动生成地区策略组；为空时会尝试从节点名称推断。</small>
+                </label>
+                <label>
+                    <span>订阅标签</span>
+                    <input asp-for="Form.SubscriptionTags" placeholder="例如：stream, ai, game, netflix" />
+                    <small class="muted">使用 CSV；会自动生成对应业务组，如流媒体、AI、游戏等。</small>
+                </label>
                 <label class="advanced-panel">
                     <span>订阅 SNI</span>
                     <input asp-for="Form.SubscriptionSni" />

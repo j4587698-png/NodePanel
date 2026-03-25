@@ -44,6 +44,92 @@
         </div>
 
         <div style="margin-top: 2rem;">
+            <p class="eyebrow" style="margin-bottom: 1rem;">Subscription</p>
+            <div class="form-grid">
+                <label>
+                    <span>默认订阅 Profile</span>
+                    <select name="settings[subscription_profile_default]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        @if ((s.GetValueOrDefault("subscription_profile_default") ?? "full") == "minimal")
+                        {
+                            <option value="minimal" selected>minimal</option>
+                            <option value="region">region</option>
+                            <option value="full">full</option>
+                            <option value="no-reject">no-reject</option>
+                        }
+                        else if ((s.GetValueOrDefault("subscription_profile_default") ?? "full") == "region")
+                        {
+                            <option value="minimal">minimal</option>
+                            <option value="region" selected>region</option>
+                            <option value="full">full</option>
+                            <option value="no-reject">no-reject</option>
+                        }
+                        else if ((s.GetValueOrDefault("subscription_profile_default") ?? "full") == "no-reject")
+                        {
+                            <option value="minimal">minimal</option>
+                            <option value="region">region</option>
+                            <option value="full">full</option>
+                            <option value="no-reject" selected>no-reject</option>
+                        }
+                        else
+                        {
+                            <option value="minimal">minimal</option>
+                            <option value="region">region</option>
+                            <option value="full" selected>full</option>
+                            <option value="no-reject">no-reject</option>
+                        }
+                    </select>
+                    <small class="muted">`full` 会生成自动选择、故障转移、负载均衡、地区组和标签业务组。</small>
+                </label>
+                <label>
+                    <span>测速 URL</span>
+                    <input name="settings[subscription_test_url]" value="@(s.GetValueOrDefault("subscription_test_url") ?? "http://www.gstatic.com/generate_204")" placeholder="http://www.gstatic.com/generate_204" />
+                </label>
+                <label>
+                    <span>测速间隔（秒）</span>
+                    <input name="settings[subscription_test_interval_seconds]" value="@(s.GetValueOrDefault("subscription_test_interval_seconds") ?? "300")" placeholder="300" />
+                </label>
+                <label>
+                    <span>GLOBAL 组包含 REJECT</span>
+                    <select name="settings[subscription_enable_reject_groups]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        @if (s.GetValueOrDefault("subscription_enable_reject_groups") == "true")
+                        {
+                            <option value="true" selected>是</option>
+                            <option value="false">否</option>
+                        }
+                        else
+                        {
+                            <option value="true">是</option>
+                            <option value="false" selected>否</option>
+                        }
+                    </select>
+                    <small class="muted">只在 `GLOBAL` 组注入 `DIRECT` / `REJECT`，普通节点组不再混入。</small>
+                </label>
+                <label class="form-grid__span-2">
+                    <span>自定义订阅组 JSON</span>
+                    <textarea name="settings[subscription_custom_groups_json]" rows="10" placeholder='[
+  {
+    "name": "Streaming Mix",
+    "type": "select",
+    "matchTags": ["stream", "netflix", "disney"],
+    "matchRegions": ["香港", "日本", "美国"],
+    "includeGroups": ["Auto"],
+    "includeInProxySelector": true
+  }
+]'>@s.GetValueOrDefault("subscription_custom_groups_json")</textarea>
+                    <small class="muted">支持 `select`、`url-test`、`fallback`、`load-balance`。可按标签、地区、关键词组装节点，也可以引用已有组。</small>
+                </label>
+                <label class="form-grid__span-2">
+                    <span>自定义订阅规则</span>
+                    <textarea name="settings[subscription_custom_rules_text]" rows="10" placeholder='DOMAIN-SUFFIX,openai.com,AI
+DOMAIN-SUFFIX,claude.ai,AI
+DOMAIN-KEYWORD,netflix,Netflix
+DOMAIN-KEYWORD,steam,游戏'>@s.GetValueOrDefault("subscription_custom_rules_text")</textarea>
+                    <small class="muted">每行一条规则，格式与 Clash / Surge 接近。若目标组不存在，该规则会被忽略。</small>
+                </label>
+            </div>
+        </div>
+
+        <div style="margin-top: 2rem;">
             <p class="eyebrow" style="margin-bottom: 1rem;">Payment Gateway</p>
             <div class="form-grid">
                 <label>

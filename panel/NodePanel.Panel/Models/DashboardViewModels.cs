@@ -66,6 +66,10 @@ public sealed class NodeFormInput
 
     public string SubscriptionSni { get; set; } = string.Empty;
 
+    public string SubscriptionRegion { get; set; } = string.Empty;
+
+    public string SubscriptionTags { get; set; } = string.Empty;
+
     public bool SubscriptionAllowInsecure { get; set; }
 
     public List<TrojanInboundFormInput> Inbounds { get; set; } =
@@ -270,6 +274,8 @@ public sealed class NodeFormInput
             Enabled = Enabled,
             SubscriptionHost = NodeFormValueCodec.TrimOrEmpty(SubscriptionHost),
             SubscriptionSni = NodeFormValueCodec.TrimOrEmpty(SubscriptionSni),
+            SubscriptionRegion = NodeFormValueCodec.TrimOrEmpty(SubscriptionRegion),
+            SubscriptionTags = NodeFormValueCodec.ParseCsv(SubscriptionTags),
             SubscriptionAllowInsecure = SubscriptionAllowInsecure,
             Config = config
         };
@@ -304,6 +310,8 @@ public sealed class NodeFormInput
             Enabled = record.Enabled,
             SubscriptionHost = record.SubscriptionHost,
             SubscriptionSni = record.SubscriptionSni,
+            SubscriptionRegion = record.SubscriptionRegion,
+            SubscriptionTags = NodeFormValueCodec.JoinCsv(record.SubscriptionTags),
             SubscriptionAllowInsecure = record.SubscriptionAllowInsecure,
             Inbounds =
             [
@@ -338,9 +346,12 @@ public sealed class NodeFormInput
             DownlinkOnlySeconds = Math.Clamp(record.Config.Limits.DownlinkOnlySeconds, 1, 3600),
             TelemetryFlushIntervalSeconds = Math.Clamp(record.Config.Telemetry.FlushIntervalSeconds, 1, 3600),
             Dns = DnsFormInput.FromConfig(record.Config.Dns),
-            Outbounds = record.Config.Outbounds.Select(OutboundFormInput.FromConfig).ToList(),
+            Outbounds = record.Config.Outbounds
+                .Where(static outbound => !IsAdvancedOnlyOutbound(outbound))
+                .Select(OutboundFormInput.FromConfig)
+                .ToList(),
             RoutingRules = record.Config.RoutingRules.Select(RoutingRuleFormInput.FromConfig).ToList(),
-            AdvancedConfigJson = string.Empty
+            AdvancedConfigJson = NodeAdvancedConfigInput.Serialize(NodeAdvancedConfigInput.FromConfig(record.Protocol, record.Config))
         };
     }
 
@@ -521,9 +532,10 @@ public sealed class NodeFormInput
             Dns = HasConfiguredDns(config.Dns) || advancedConfig.Dns is null
                 ? config.Dns
                 : advancedConfig.Dns,
-            Outbounds = config.Outbounds.Count > 0
-                ? config.Outbounds
-                : advancedConfig.Outbounds ?? Array.Empty<OutboundConfig>(),
+            LocalInbounds = config.LocalInbounds.Count > 0
+                ? config.LocalInbounds
+                : advancedConfig.LocalInbounds ?? Array.Empty<LocalInboundConfig>(),
+            Outbounds = MergeAdvancedOutbounds(config.Outbounds, advancedConfig.Outbounds),
             RoutingRules = config.RoutingRules.Count > 0
                 ? config.RoutingRules
                 : advancedConfig.RoutingRules ?? Array.Empty<RoutingRuleConfig>()
@@ -568,6 +580,46 @@ public sealed class NodeFormInput
             .ToArray();
     }
 
+    private static IReadOnlyList<OutboundConfig> MergeAdvancedOutbounds(
+        IReadOnlyList<OutboundConfig> outbounds,
+        IReadOnlyList<OutboundConfig>? advancedOutbounds)
+    {
+        if (advancedOutbounds is null || advancedOutbounds.Count == 0)
+        {
+            return outbounds;
+        }
+
+        if (outbounds.Count == 0)
+        {
+            return advancedOutbounds;
+        }
+
+        var merged = new List<OutboundConfig>(outbounds.Count + advancedOutbounds.Count);
+        var seenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var outbound in outbounds)
+        {
+            if (string.IsNullOrWhiteSpace(outbound.Tag) || !seenTags.Add(outbound.Tag))
+            {
+                continue;
+            }
+
+            merged.Add(outbound);
+        }
+
+        foreach (var outbound in advancedOutbounds)
+        {
+            if (string.IsNullOrWhiteSpace(outbound.Tag) || !seenTags.Add(outbound.Tag))
+            {
+                continue;
+            }
+
+            merged.Add(outbound);
+        }
+
+        return merged;
+    }
+
     private static bool HasConfiguredClientHelloPolicy(TlsClientHelloPolicyConfig policy)
         => policy.Enabled ||
            policy.AllowedServerNames.Count > 0 ||
@@ -595,6 +647,13 @@ public sealed class NodeFormInput
 
     private static string NormalizeInboundProtocol(string? value)
         => InboundProtocols.Normalize(value);
+
+    private static bool IsAdvancedOnlyOutbound(OutboundConfig outbound)
+        => OutboundProtocols.Normalize(outbound.Protocol) is
+            OutboundProtocols.Selector or
+            OutboundProtocols.UrlTest or
+            OutboundProtocols.Fallback or
+            OutboundProtocols.LoadBalance;
 }
 
 public sealed record NodeAdvancedConfigInput
@@ -612,6 +671,8 @@ public sealed record NodeAdvancedConfigInput
     public DnsOptions? Dns { get; init; }
 
     public IReadOnlyList<AdvancedInboundConfigInput>? Inbounds { get; init; }
+
+    public IReadOnlyList<LocalInboundConfig>? LocalInbounds { get; init; }
 
     public IReadOnlyList<OutboundConfig>? Outbounds { get; init; }
 
@@ -663,38 +724,15 @@ public sealed record NodeAdvancedConfigInput
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        var normalizedProtocol = InboundProtocols.Normalize(protocol);
-        var advancedInbounds = config.Inbounds
-            .Where(inbound => string.Equals(InboundProtocols.Normalize(inbound.Protocol), normalizedProtocol, StringComparison.Ordinal))
-            .Select(CreateAdvancedInbound)
-            .Where(static inbound => inbound is not null)
-            .Cast<AdvancedInboundConfigInput>()
-            .OrderBy(static inbound => inbound.Transport, StringComparer.Ordinal)
-            .ToArray();
-
         return new NodeAdvancedConfigInput
         {
-            Certificate = HasAdvancedCertificate(config.Certificate)
-                ? new AdvancedCertificateConfigInput
-                {
-                    RejectUnknownSni = config.Certificate.RejectUnknownSni,
-                    ClientHelloPolicy = HasClientHelloPolicy(config.Certificate.ClientHelloPolicy)
-                        ? config.Certificate.ClientHelloPolicy
-                        : null
-                }
-                : null,
-            Limits = HasAdvancedLimits(config.Limits)
-                ? new AdvancedLimitConfigInput
-                {
-                    ConnectionIdleSeconds = config.Limits.ConnectionIdleSeconds,
-                    UplinkOnlySeconds = config.Limits.UplinkOnlySeconds,
-                    DownlinkOnlySeconds = config.Limits.DownlinkOnlySeconds
-                }
-                : null,
-            Dns = HasAdvancedDns(config.Dns) ? config.Dns : null,
-            Inbounds = advancedInbounds.Length > 0 ? advancedInbounds : null,
-            Outbounds = config.Outbounds.Count > 0 ? config.Outbounds : null,
-            RoutingRules = config.RoutingRules.Count > 0 ? config.RoutingRules : null
+            Certificate = null,
+            Limits = null,
+            Dns = null,
+            Inbounds = null,
+            LocalInbounds = config.LocalInbounds.Count > 0 ? config.LocalInbounds : null,
+            Outbounds = CreateAdvancedOutbounds(config.Outbounds),
+            RoutingRules = null
         };
     }
 
@@ -703,6 +741,7 @@ public sealed record NodeAdvancedConfigInput
            Limits is null &&
            Dns is null &&
            (Inbounds is null || Inbounds.Count == 0) &&
+           (LocalInbounds is null || LocalInbounds.Count == 0) &&
            (Outbounds is null || Outbounds.Count == 0) &&
            (RoutingRules is null || RoutingRules.Count == 0);
 
@@ -724,6 +763,22 @@ public sealed record NodeAdvancedConfigInput
             Fallbacks = fallbacks
         };
     }
+
+    private static IReadOnlyList<OutboundConfig>? CreateAdvancedOutbounds(IReadOnlyList<OutboundConfig> outbounds)
+    {
+        var advancedOutbounds = outbounds
+            .Where(RequiresAdvancedOutbound)
+            .ToArray();
+
+        return advancedOutbounds.Length == 0 ? null : advancedOutbounds;
+    }
+
+    private static bool RequiresAdvancedOutbound(OutboundConfig outbound)
+        => OutboundProtocols.Normalize(outbound.Protocol) is
+            OutboundProtocols.Selector or
+            OutboundProtocols.UrlTest or
+            OutboundProtocols.Fallback or
+            OutboundProtocols.LoadBalance;
 
     private static bool TryNormalizeInbounds(
         IReadOnlyList<AdvancedInboundConfigInput>? inbounds,
@@ -999,6 +1054,9 @@ public sealed class UserFormInput
     [Range(0, long.MaxValue, ErrorMessage = "总流量不能小于 0。")]
     public long TransferEnableBytes { get; set; }
 
+    [Range(typeof(decimal), "0", "79228162514264337593543950335", ErrorMessage = "å¥—é¤æ€»æµé‡ä¸èƒ½å°äºŽ 0ã€‚")]
+    public decimal TransferEnableValue { get; set; }
+
     public string ExpiresAt { get; set; } = string.Empty;
 
     public string PurchaseUrl { get; set; } = string.Empty;
@@ -1103,6 +1161,11 @@ public sealed class PlanFormInput
     [Range(0, long.MaxValue, ErrorMessage = "套餐总流量不能小于 0。")]
     public long TransferEnableBytes { get; set; }
 
+    [Range(typeof(decimal), "0", "79228162514264337593543950335", ErrorMessage = "套餐总流量不能小于 0。")]
+    public decimal TransferEnableValue { get; set; }
+
+    public string TransferEnableUnit { get; set; } = PlanPresentation.TrafficUnitGb;
+
     public decimal? MonthPrice { get; set; }
     public decimal? QuarterPrice { get; set; }
     public decimal? HalfYearPrice { get; set; }
@@ -1115,7 +1178,7 @@ public sealed class PlanFormInput
         {
             Name = NodeFormValueCodec.TrimOrEmpty(Name),
             GroupId = GroupId,
-            TransferEnableBytes = Math.Max(0, TransferEnableBytes),
+            TransferEnableBytes = PlanPresentation.ToTrafficBytes(TransferEnableValue, TransferEnableUnit),
             MonthPrice = MonthPrice,
             QuarterPrice = QuarterPrice,
             HalfYearPrice = HalfYearPrice,
@@ -1125,12 +1188,18 @@ public sealed class PlanFormInput
         };
 
     public static PlanFormInput FromRecord(PanelPlanRecord record)
-        => new()
+    {
+        var bytes = Math.Max(0L, record.TransferEnableBytes);
+        var (amount, unit) = PlanPresentation.ToEditableTraffic(bytes);
+
+        return new PlanFormInput
         {
             PlanId = record.PlanId,
             Name = record.Name,
             GroupId = Math.Max(0, record.GroupId),
-            TransferEnableBytes = Math.Max(0L, record.TransferEnableBytes),
+            TransferEnableBytes = bytes,
+            TransferEnableValue = amount,
+            TransferEnableUnit = unit,
             MonthPrice = record.MonthPrice,
             QuarterPrice = record.QuarterPrice,
             HalfYearPrice = record.HalfYearPrice,
@@ -1138,6 +1207,7 @@ public sealed class PlanFormInput
             OneTimePrice = record.OneTimePrice,
             ResetPrice = record.ResetPrice
         };
+    }
 }
 
 public sealed class TicketViewModel

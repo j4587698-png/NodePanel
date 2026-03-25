@@ -130,6 +130,11 @@ public class NodeEntity
 
     public string SubscriptionSni { get; set; } = string.Empty;
 
+    public string SubscriptionRegion { get; set; } = string.Empty;
+
+    [Column(DbType = "varchar(1024)")]
+    public string SubscriptionTagsCsv { get; set; } = string.Empty;
+
     public bool SubscriptionAllowInsecure { get; set; }
 
     [Column(StringLength = -1)]
@@ -153,6 +158,13 @@ public class NodeEntity
         set => GroupIdsJson = JsonSerializer.Serialize(value ?? Array.Empty<int>());
     }
 
+    [NotMapped]
+    public IReadOnlyList<string> SubscriptionTags
+    {
+        get => NodeFormValueCodec.ParseCsv(SubscriptionTagsCsv);
+        set => SubscriptionTagsCsv = NodeFormValueCodec.JoinCsv(value);
+    }
+
     public PanelNodeRecord ToRecord() => new PanelNodeRecord
     {
         NodeId = NodeId,
@@ -165,6 +177,8 @@ public class NodeEntity
         DisplayName = DisplayName,
         SubscriptionHost = SubscriptionHost,
         SubscriptionSni = SubscriptionSni,
+        SubscriptionRegion = SubscriptionRegion,
+        SubscriptionTags = SubscriptionTags,
         SubscriptionAllowInsecure = SubscriptionAllowInsecure
     };
 
@@ -179,6 +193,8 @@ public class NodeEntity
         DisplayName = record.DisplayName;
         SubscriptionHost = record.SubscriptionHost;
         SubscriptionSni = record.SubscriptionSni;
+        SubscriptionRegion = record.SubscriptionRegion;
+        SubscriptionTags = record.SubscriptionTags;
         SubscriptionAllowInsecure = record.SubscriptionAllowInsecure;
     }
 }

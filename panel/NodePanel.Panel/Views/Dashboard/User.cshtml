@@ -1,6 +1,16 @@
+@using NodePanel.Panel.Models
 @model NodePanel.Panel.Models.UserEditorViewModel
 @{
     ViewData["Title"] = Model.IsEditMode ? "编辑用户" : "新建用户";
+    var cycleOptions = new[]
+    {
+        new { Value = "month", Label = "月付 (31 天 / 每月重置)" },
+        new { Value = "quarter", Label = "季付 (90 天 / 每月重置)" },
+        new { Value = "half_year", Label = "半年付 (180 天 / 每月重置)" },
+        new { Value = "year", Label = "年付 (365 天 / 每月重置)" },
+        new { Value = "one_time", Label = "一次性 (长期有效 / 不重置)" },
+        new { Value = "reset_price", Label = "流量重置包 (立即重置一次)" }
+    };
 }
 
 <section class="page-header">
@@ -55,7 +65,7 @@
             <label>
                 <span>权限组 (Group ID)</span>
                 <select asp-for="Form.GroupId">
-                    @if(Model.AvailableGroups.Count == 0)
+                    @if (Model.AvailableGroups.Count == 0)
                     {
                         <option value="0">暂无配置，请前往权限组管理添加</option>
                     }
@@ -70,7 +80,7 @@
             </label>
             <label><span>订阅令牌</span><input asp-for="Form.SubscriptionToken" /></label>
             <label><span>Trojan 密码</span><input asp-for="Form.TrojanPassword" /></label>
-            <label><span>上级推介人 User ID</span><input asp-for="Form.InviteUserId" /></label>
+            <label><span>上级推荐人 User ID</span><input asp-for="Form.InviteUserId" /></label>
             <label><span>返利余额 (Commission)</span><input asp-for="Form.CommissionBalance" type="number" step="0.01" /></label>
             <label><span>返利比例 (Commission Rate %)</span><input asp-for="Form.CommissionRate" type="number" /></label>
             <label><span>限速 (B/s)</span><input asp-for="Form.BytesPerSecond" /></label>
@@ -105,29 +115,29 @@
                 <h3>快捷操作 (需先保存基本信息)</h3>
             </div>
         </div>
-        
+
         <div class="form-grid" style="align-items: flex-end;">
-            <form asp-action="ApplyPlanToUser" asp-route-userId="@Model.Form.UserId" method="post" style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;" onsubmit="return confirm('确定要此套餐吗？这会重置原有的流量上限、修改到期时间并启用该用户。');">
+            <form asp-action="ApplyPlanToUser" asp-route-userId="@Model.Form.UserId" method="post" style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;" onsubmit="return confirm('确定要应用这个套餐吗？这会覆盖当前用户的套餐信息；如果选择流量重置包，则在支付完成后仅重置流量。');">
                 @Html.AntiForgeryToken()
-                <label style="flex: 1; margin: 0; min-width: 150px;">
+                <label style="flex: 1; margin: 0; min-width: 190px;">
                     <span style="display: block; margin-bottom: 4px; font-weight: 500;">分配基础套餐</span>
                     <select name="planId" required style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
                         <option value="">-- 选择套餐 --</option>
                         @foreach (var plan in Model.Plans)
                         {
-                            <option value="@plan.PlanId">@plan.Name (@(plan.TransferEnableBytes / 1073741824.0)GB)</option>
+                            <option value="@plan.PlanId">@plan.Name (@PlanPresentation.FormatTraffic(plan.TransferEnableBytes))</option>
                         }
                     </select>
                 </label>
-                <label style="flex: 1; margin: 0; min-width: 100px;">
+                <label style="flex: 1; margin: 0; min-width: 240px;">
                     <span style="display: block; margin-bottom: 4px; font-weight: 500;">周期</span>
                     <select name="cycle" required style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
-                        <option value="month">月付 (31天)</option>
-                        <option value="quarter">季付 (90天)</option>
-                        <option value="half_year">半年付 (180天)</option>
-                        <option value="year">年付 (365天)</option>
-                        <option value="one_time">一次性 (不限时)</option>
+                        @foreach (var option in cycleOptions)
+                        {
+                            <option value="@option.Value">@option.Label</option>
+                        }
                     </select>
+                    <small class="muted" style="display:block; margin-top: 6px;">只允许选择套餐里已配置价格的周期，0 元周期会直接成功。</small>
                 </label>
                 <button type="submit" class="button button--primary" style="height: 38px;">应用</button>
             </form>
