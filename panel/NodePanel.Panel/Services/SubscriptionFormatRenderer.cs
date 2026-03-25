@@ -5,12 +5,6 @@ namespace NodePanel.Panel.Services;
 
 public static class SubscriptionFormatRenderer
 {
-    private static readonly HashSet<string> BuiltinTargets = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "DIRECT",
-        "REJECT"
-    };
-
     private static readonly HashSet<string> RuleOptions = new(StringComparer.OrdinalIgnoreCase)
     {
         "no-resolve"
@@ -40,45 +34,32 @@ public static class SubscriptionFormatRenderer
         string format,
         string appName)
     {
-        var proxyNames = plan.Proxies
-            .Select(static proxy => proxy.Name)
-            .Distinct(StringComparer.Ordinal)
-            .ToHashSet(StringComparer.Ordinal);
-        var proxyProviders = BuildProxyProviders(plan, proxyNames);
-        var ruleProviders = BuildRuleProviders(plan.Rules);
-
         var builder = new StringBuilder();
         builder.AppendLine("mixed-port: 7890");
         builder.AppendLine("allow-lan: false");
         builder.AppendLine("mode: rule");
-        builder.AppendLine("proxies: []");
 
-        if (proxyProviders.Count > 0)
+        if (plan.Proxies.Count == 0)
         {
-            builder.AppendLine("proxy-providers:");
-            foreach (var provider in proxyProviders.Values)
+            builder.AppendLine("proxies: []");
+        }
+        else
+        {
+            builder.AppendLine("proxies:");
+            foreach (var proxy in plan.Proxies)
             {
-                AppendClashProxyProvider(builder, catalog.User, provider, plan.Request.Settings);
+                AppendClashProxy(builder, catalog.User, proxy, indentLevel: 1);
             }
         }
 
         builder.AppendLine("proxy-groups:");
         foreach (var group in plan.Groups)
         {
-            AppendClashGroup(builder, group, proxyNames, proxyProviders);
-        }
-
-        if (ruleProviders.Count > 0)
-        {
-            builder.AppendLine("rule-providers:");
-            foreach (var provider in ruleProviders)
-            {
-                AppendClashRuleProvider(builder, provider);
-            }
+            AppendClashGroup(builder, group);
         }
 
         builder.AppendLine("rules:");
-        foreach (var rule in BuildClashRuleReferences(plan.Rules, ruleProviders))
+        foreach (var rule in plan.Rules)
         {
             builder.AppendLine($"  - {rule}");
         }
@@ -180,147 +161,6 @@ public static class SubscriptionFormatRenderer
         };
     }
 
-    private static Dictionary<string, ClashProxyProvider> BuildProxyProviders(
-        SubscriptionRenderPlan plan,
-        ISet<string> proxyNames)
-    {
-        var providers = new Dictionary<string, ClashProxyProvider>(StringComparer.Ordinal);
-        if (plan.Proxies.Count == 0)
-        {
-            return providers;
-        }
-
-        var allProviderId = "all-nodes";
-        providers[allProviderId] = new ClashProxyProvider
-        {
-            Id = allProviderId,
-            Proxies = plan.Proxies
-        };
-
-        foreach (var group in plan.Groups)
-        {
-            var actualProxies = group.Proxies
-                .Where(proxyNames.Contains)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            if (actualProxies.Length == 0)
-            {
-                continue;
-            }
-
-            var useAllNodes = actualProxies.Length == proxyNames.Count && actualProxies.All(proxyNames.Contains);
-            if (useAllNodes)
-            {
-                continue;
-            }
-
-            var providerId = $"group-{SanitizeIdentifier(group.Name)}";
-            providers[providerId] = new ClashProxyProvider
-            {
-                Id = providerId,
-                Proxies = plan.Proxies
-                    .Where(proxy => actualProxies.Contains(proxy.Name, StringComparer.Ordinal))
-                    .ToArray()
-            };
-        }
-
-        return providers;
-    }
-
-    private static IReadOnlyList<ClashRuleProvider> BuildRuleProviders(IReadOnlyList<string> rules)
-    {
-        var providersByTarget = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var rule in rules)
-        {
-            var parsed = ParseRule(rule);
-            if (parsed.Kind is RuleKind.Final or RuleKind.Builtin || string.IsNullOrWhiteSpace(parsed.Target))
-            {
-                continue;
-            }
-
-            if (!providersByTarget.TryGetValue(parsed.Target, out var payload))
-            {
-                payload = [];
-                providersByTarget[parsed.Target] = payload;
-            }
-
-            payload.Add(parsed.Payload);
-        }
-
-        return providersByTarget
-            .Select(static pair => new ClashRuleProvider
-            {
-                Id = $"rule-{SanitizeIdentifier(pair.Key)}",
-                Target = pair.Key,
-                Payload = pair.Value.Distinct(StringComparer.Ordinal).ToArray()
-            })
-            .ToArray();
-    }
-
-    private static IReadOnlyList<string> BuildClashRuleReferences(
-        IReadOnlyList<string> rules,
-        IReadOnlyList<ClashRuleProvider> ruleProviders)
-    {
-        var references = new List<string>();
-        var seenRuleSetTargets = new HashSet<string>(StringComparer.Ordinal);
-        var providersByTarget = ruleProviders.ToDictionary(static provider => provider.Target, StringComparer.Ordinal);
-
-        foreach (var rule in rules)
-        {
-            var parsed = ParseRule(rule);
-            if (parsed.Kind == RuleKind.Final)
-            {
-                references.Add(rule);
-                continue;
-            }
-
-            if (parsed.Kind == RuleKind.Builtin || string.IsNullOrWhiteSpace(parsed.Target))
-            {
-                references.Add(rule);
-                continue;
-            }
-
-            if (providersByTarget.TryGetValue(parsed.Target, out var provider) &&
-                seenRuleSetTargets.Add(parsed.Target))
-            {
-                references.Add($"RULE-SET,{provider.Id},{provider.Target}");
-            }
-        }
-
-        return references;
-    }
-
-    private static void AppendClashProxyProvider(
-        StringBuilder builder,
-        PanelUserRecord user,
-        ClashProxyProvider provider,
-        SubscriptionRenderSettings settings)
-    {
-        builder.AppendLine($"  {provider.Id}:");
-        builder.AppendLine("    type: inline");
-        builder.AppendLine("    health-check:");
-        builder.AppendLine("      enable: true");
-        builder.AppendLine($"      url: {YamlString(settings.TestUrl)}");
-        builder.AppendLine($"      interval: {Math.Max(60, settings.TestIntervalSeconds)}");
-        builder.AppendLine("    payload:");
-        foreach (var proxy in provider.Proxies)
-        {
-            AppendClashProxy(builder, user, proxy, indentLevel: 3);
-        }
-    }
-
-    private static void AppendClashRuleProvider(StringBuilder builder, ClashRuleProvider provider)
-    {
-        builder.AppendLine($"  {provider.Id}:");
-        builder.AppendLine("    type: inline");
-        builder.AppendLine("    behavior: classical");
-        builder.AppendLine("    payload:");
-        foreach (var rule in provider.Payload)
-        {
-            builder.AppendLine($"      - {rule}");
-        }
-    }
-
     private static void AppendClashProxy(
         StringBuilder builder,
         PanelUserRecord user,
@@ -388,13 +228,10 @@ public static class SubscriptionFormatRenderer
 
     private static void AppendClashGroup(
         StringBuilder builder,
-        SubscriptionProxyGroup group,
-        ISet<string> proxyNames,
-        IReadOnlyDictionary<string, ClashProxyProvider> providers)
+        SubscriptionProxyGroup group)
     {
-        var providerId = ResolveProviderId(group, proxyNames, providers);
-        var explicitMembers = group.Proxies
-            .Where(proxyName => !proxyNames.Contains(proxyName))
+        var members = group.Proxies
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
 
         builder.AppendLine($"  - name: {YamlString(group.Name)}");
@@ -414,45 +251,14 @@ public static class SubscriptionFormatRenderer
             builder.AppendLine($"    strategy: {group.Strategy}");
         }
 
-        if (providerId is not null)
-        {
-            builder.AppendLine("    use:");
-            builder.AppendLine($"      - {providerId}");
-        }
-
-        if (explicitMembers.Length > 0 || providerId is null)
+        if (members.Length > 0)
         {
             builder.AppendLine("    proxies:");
-            foreach (var proxyName in explicitMembers.Length > 0 ? explicitMembers : group.Proxies)
+            foreach (var proxyName in members)
             {
                 builder.AppendLine($"      - {YamlString(proxyName)}");
             }
         }
-    }
-
-    private static string? ResolveProviderId(
-        SubscriptionProxyGroup group,
-        ISet<string> proxyNames,
-        IReadOnlyDictionary<string, ClashProxyProvider> providers)
-    {
-        var actualProxyNames = group.Proxies
-            .Where(proxyNames.Contains)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (actualProxyNames.Length == 0)
-        {
-            return null;
-        }
-
-        if (actualProxyNames.Length == proxyNames.Count &&
-            actualProxyNames.All(proxyNames.Contains) &&
-            providers.ContainsKey("all-nodes"))
-        {
-            return "all-nodes";
-        }
-
-        var groupProviderId = $"group-{SanitizeIdentifier(group.Name)}";
-        return providers.ContainsKey(groupProviderId) ? groupProviderId : null;
     }
 
     private static string BuildSurgeProxyLine(PanelUserRecord user, SubscriptionRenderProxy proxy)
@@ -689,58 +495,6 @@ public static class SubscriptionFormatRenderer
         return string.Join(", ", valueParts);
     }
 
-    private static ParsedRule ParseRule(string rule)
-    {
-        var parts = rule
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length < 2)
-        {
-            return new ParsedRule
-            {
-                Kind = RuleKind.Invalid,
-                Original = rule
-            };
-        }
-
-        if (string.Equals(parts[0], "MATCH", StringComparison.OrdinalIgnoreCase))
-        {
-            return new ParsedRule
-            {
-                Kind = RuleKind.Final,
-                Original = rule,
-                Target = parts[1]
-            };
-        }
-
-        var targetIndex = parts.Length - 1;
-        while (targetIndex > 1 && RuleOptions.Contains(parts[targetIndex]))
-        {
-            targetIndex--;
-        }
-
-        if (targetIndex <= 0)
-        {
-            return new ParsedRule
-            {
-                Kind = RuleKind.Invalid,
-                Original = rule
-            };
-        }
-
-        var target = parts[targetIndex];
-        var payloadParts = parts
-            .Where((_, index) => index != targetIndex)
-            .ToArray();
-
-        return new ParsedRule
-        {
-            Kind = BuiltinTargets.Contains(target) ? RuleKind.Builtin : RuleKind.Group,
-            Original = rule,
-            Target = target,
-            Payload = string.Join(",", payloadParts)
-        };
-    }
-
     private static string ResolveProtocolUuid(PanelUserRecord user)
     {
         if (Guid.TryParse(user.V2rayUuid, out var configured))
@@ -786,23 +540,6 @@ public static class SubscriptionFormatRenderer
         return $"{(string.IsNullOrWhiteSpace(sanitized) ? "nodepanel" : sanitized)}.{extension}";
     }
 
-    private static string SanitizeIdentifier(string value)
-    {
-        var sanitized = new string(
-            value
-                .Trim()
-                .ToLowerInvariant()
-                .Select(static ch => char.IsLetterOrDigit(ch) ? ch : '-')
-                .ToArray());
-        while (sanitized.Contains("--", StringComparison.Ordinal))
-        {
-            sanitized = sanitized.Replace("--", "-", StringComparison.Ordinal);
-        }
-
-        sanitized = sanitized.Trim('-');
-        return string.IsNullOrWhiteSpace(sanitized) ? "default" : sanitized;
-    }
-
     private static string YamlString(string value)
         => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 
@@ -812,38 +549,4 @@ public static class SubscriptionFormatRenderer
     private static string EscapeSurge(string value)
         => value.Replace(",", "\\,", StringComparison.Ordinal);
 
-    private sealed class ClashProxyProvider
-    {
-        public required string Id { get; init; }
-
-        public required IReadOnlyList<SubscriptionRenderProxy> Proxies { get; init; }
-    }
-
-    private sealed class ClashRuleProvider
-    {
-        public required string Id { get; init; }
-
-        public required string Target { get; init; }
-
-        public required IReadOnlyList<string> Payload { get; init; }
-    }
-
-    private sealed class ParsedRule
-    {
-        public RuleKind Kind { get; init; }
-
-        public string Original { get; init; } = string.Empty;
-
-        public string Target { get; init; } = string.Empty;
-
-        public string Payload { get; init; } = string.Empty;
-    }
-
-    private enum RuleKind
-    {
-        Invalid,
-        Builtin,
-        Group,
-        Final
-    }
 }

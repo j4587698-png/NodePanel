@@ -83,9 +83,15 @@ public sealed class SubscriptionRenderingTests
         var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
 
         Assert.Equal("text/yaml", rendered.ContentType);
-        Assert.Contains("proxy-providers:", rendered.Content, StringComparison.Ordinal);
-        Assert.Contains("rule-providers:", rendered.Content, StringComparison.Ordinal);
-        Assert.Contains("type: inline", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("proxies:", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("proxies: []", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("proxy-providers:", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("rule-providers:", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("type: inline", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("use:", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("  - name: 'HK-AI-Stream-tcp'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("  - name: 'JP-Game-wss'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("  - name: 'US-Netflix-tcp'", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("type: trojan", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("type: vmess", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("type: vless", rendered.Content, StringComparison.Ordinal);
@@ -93,9 +99,10 @@ public sealed class SubscriptionRenderingTests
         Assert.Contains("uuid: '11111111-1111-1111-1111-111111111111'", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("name: 'GLOBAL'", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("strategy: round-robin", rendered.Content, StringComparison.Ordinal);
-        Assert.Contains("use:", rendered.Content, StringComparison.Ordinal);
-        Assert.Contains("RULE-SET,rule-ai,AI", rendered.Content, StringComparison.Ordinal);
-        Assert.Contains("MATCH,GLOBAL", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("      - 'HK-AI-Stream-tcp'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("      - 'DIRECT'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("  - DOMAIN-SUFFIX,openai.com,AI", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("  - MATCH,GLOBAL", rendered.Content, StringComparison.Ordinal);
     }
 
     [Fact]
