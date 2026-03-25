@@ -1,5 +1,7 @@
+using System.Net;
 using System.Net.Security;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using FreeSql;
 using Microsoft.AspNetCore.Http;
@@ -13,6 +15,7 @@ public sealed class PanelHttpsRuntime : IDisposable
     private readonly object _sync = new();
     private readonly PanelOptions _options;
     private X509Certificate2? _currentCertificate;
+    private X509Certificate2? _fallbackCertificate;
     private PanelHttpsRuntimeSnapshot _snapshot = new();
     private bool _listenerConfigured;
     private int _activeHttpsPort = 443;
@@ -34,7 +37,7 @@ public sealed class PanelHttpsRuntime : IDisposable
     {
         lock (_sync)
         {
-            _listenerConfigured = snapshot.Enabled;
+            _listenerConfigured = true;
             _activeHttpsPort = snapshot.Port is > 0 and <= 65535 ? snapshot.Port : 443;
         }
     }
@@ -69,7 +72,6 @@ public sealed class PanelHttpsRuntime : IDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var snapshot = GetSnapshot();
         var activePort = GetActiveHttpsPort();
         var builder = new UriBuilder(Uri.UriSchemeHttps, request.Host.Host)
         {
@@ -82,19 +84,11 @@ public sealed class PanelHttpsRuntime : IDisposable
     }
 
     public SslServerAuthenticationOptions CreateAuthenticationOptions()
-    {
-        var certificate = GetCurrentCertificate();
-        if (certificate is null)
+        => new()
         {
-            throw new InvalidOperationException("Panel HTTPS 已启用，但当前没有可用证书。");
-        }
-
-        return new SslServerAuthenticationOptions
-        {
-            ServerCertificate = certificate,
+            ServerCertificate = GetOrCreateServerCertificate(),
             EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
         };
-    }
 
     public void Dispose()
     {
@@ -102,14 +96,22 @@ public sealed class PanelHttpsRuntime : IDisposable
         {
             _currentCertificate?.Dispose();
             _currentCertificate = null;
+            _fallbackCertificate?.Dispose();
+            _fallbackCertificate = null;
         }
     }
 
-    private X509Certificate2? GetCurrentCertificate()
+    private X509Certificate2 GetOrCreateServerCertificate()
     {
         lock (_sync)
         {
-            return _currentCertificate;
+            if (_currentCertificate is not null)
+            {
+                return _currentCertificate;
+            }
+
+            _fallbackCertificate ??= CreateFallbackCertificate(_snapshot);
+            return _fallbackCertificate;
         }
     }
 
@@ -134,17 +136,25 @@ public sealed class PanelHttpsRuntime : IDisposable
         lock (_sync)
         {
             var previous = _currentCertificate;
+            var previousFallback = _fallbackCertificate;
             _snapshot = snapshot;
             _currentCertificate = snapshot.Certificate;
+            _fallbackCertificate = null;
             previous?.Dispose();
+            previousFallback?.Dispose();
         }
     }
 
     private PanelHttpsRuntimeSnapshot ReadSnapshot()
     {
+        var defaultSnapshot = new PanelHttpsRuntimeSnapshot
+        {
+            Enabled = true
+        };
+
         if (string.IsNullOrWhiteSpace(_options.DbType) || string.IsNullOrWhiteSpace(_options.DbConnectionString))
         {
-            return new PanelHttpsRuntimeSnapshot();
+            return defaultSnapshot;
         }
 
         try
@@ -155,21 +165,9 @@ public sealed class PanelHttpsRuntime : IDisposable
                 .ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
 
             var form = PanelHttpsSettingsFormInput.FromSettings(settings);
-            if (!form.Enabled)
-            {
-                return new PanelHttpsRuntimeSnapshot
-                {
-                    Enabled = false,
-                    ListenAddress = form.ListenAddress,
-                    Port = form.Port,
-                    RedirectHttpToHttps = form.RedirectHttpToHttps,
-                    CertificateId = form.CertificateId
-                };
-            }
-
             var snapshot = new PanelHttpsRuntimeSnapshot
             {
-                Enabled = true,
+                Enabled = form.Enabled,
                 ListenAddress = string.IsNullOrWhiteSpace(form.ListenAddress) ? "0.0.0.0" : NodeFormValueCodec.TrimOrEmpty(form.ListenAddress),
                 Port = form.Port is > 0 and <= 65535 ? form.Port : 443,
                 RedirectHttpToHttps = form.RedirectHttpToHttps,
@@ -178,10 +176,7 @@ public sealed class PanelHttpsRuntime : IDisposable
 
             if (string.IsNullOrWhiteSpace(snapshot.CertificateId))
             {
-                return snapshot with
-                {
-                    LastError = "Panel HTTPS 已启用，但未选择证书。"
-                };
+                return snapshot;
             }
 
             var certificate = fsql.Select<PanelCertificateEntity>()
@@ -196,11 +191,16 @@ public sealed class PanelHttpsRuntime : IDisposable
                 };
             }
 
+            snapshot = snapshot with
+            {
+                FallbackServerNames = BuildFallbackServerNames(certificate)
+            };
+
             if (string.IsNullOrWhiteSpace(certificate.PfxBase64))
             {
                 return snapshot with
                 {
-                    LastError = $"证书 {snapshot.CertificateId} 当前还没有可用的 PFX 资产。"
+                    LastError = $"证书 {snapshot.CertificateId} 当前还没有可用的 PFX 资产，将临时使用自签证书。"
                 };
             }
 
@@ -217,10 +217,105 @@ public sealed class PanelHttpsRuntime : IDisposable
         }
         catch (Exception ex)
         {
-            return new PanelHttpsRuntimeSnapshot
+            return defaultSnapshot with
             {
                 LastError = ex.Message
             };
+        }
+    }
+
+    private static IReadOnlyList<string> BuildFallbackServerNames(PanelCertificateEntity certificate)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+
+        return certificate.AltNames
+            .Prepend(certificate.Domain)
+            .Where(static item => !string.IsNullOrWhiteSpace(item))
+            .Select(static item => item.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static X509Certificate2 CreateFallbackCertificate(PanelHttpsRuntimeSnapshot snapshot)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            "CN=NodePanel Temporary TLS",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        request.CertificateExtensions.Add(
+            new X509KeyUsageExtension(
+                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+                critical: false));
+        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+
+        var enhancedKeyUsages = new OidCollection
+        {
+            new("1.3.6.1.5.5.7.3.1")
+        };
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(enhancedKeyUsages, false));
+
+        var sanBuilder = new SubjectAlternativeNameBuilder();
+        sanBuilder.AddDnsName("localhost");
+        sanBuilder.AddIpAddress(IPAddress.Loopback);
+        sanBuilder.AddIpAddress(IPAddress.IPv6Loopback);
+
+        foreach (var serverName in snapshot.FallbackServerNames)
+        {
+            TryAddSubjectAlternativeName(sanBuilder, serverName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.ListenAddress))
+        {
+            TryAddSubjectAlternativeName(sanBuilder, snapshot.ListenAddress);
+        }
+
+        request.CertificateExtensions.Add(sanBuilder.Build());
+
+        var notBefore = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var notAfter = notBefore.AddYears(10);
+        using var certificate = request.CreateSelfSigned(notBefore, notAfter);
+        var exported = certificate.Export(X509ContentType.Pfx, string.Empty);
+
+        return X509CertificateLoader.LoadPkcs12(
+            exported,
+            string.Empty,
+            X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+    }
+
+    private static void TryAddSubjectAlternativeName(SubjectAlternativeNameBuilder sanBuilder, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        var normalized = value.Trim();
+        if (IPAddress.TryParse(normalized, out var address))
+        {
+            if (!IPAddress.Any.Equals(address) && !IPAddress.IPv6Any.Equals(address))
+            {
+                sanBuilder.AddIpAddress(address);
+            }
+
+            return;
+        }
+
+        if (string.Equals(normalized, "0.0.0.0", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "::", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            sanBuilder.AddDnsName(normalized);
+        }
+        catch (ArgumentException)
+        {
         }
     }
 
@@ -250,6 +345,8 @@ public sealed record PanelHttpsRuntimeSnapshot
     public string CertificateId { get; init; } = string.Empty;
 
     public X509Certificate2? Certificate { get; init; }
+
+    public IReadOnlyList<string> FallbackServerNames { get; init; } = Array.Empty<string>();
 
     public string LastError { get; init; } = string.Empty;
 }

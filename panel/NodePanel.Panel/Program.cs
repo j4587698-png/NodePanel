@@ -20,15 +20,11 @@ builder.Configuration.AddEnvironmentVariables();
 var bootstrapPanelOptions = builder.Configuration.GetSection(PanelOptions.SectionName).Get<PanelOptions>() ?? new PanelOptions();
 var panelHttpsRuntime = new PanelHttpsRuntime(bootstrapPanelOptions);
 var panelHttpsSnapshot = panelHttpsRuntime.LoadSnapshot();
-
-if (panelHttpsSnapshot.Enabled)
+panelHttpsRuntime.MarkListenerConfigured(panelHttpsSnapshot);
+builder.WebHost.ConfigureKestrel(options =>
 {
-    panelHttpsRuntime.MarkListenerConfigured(panelHttpsSnapshot);
-    builder.WebHost.ConfigureKestrel(options =>
-    {
-        ConfigurePanelHttpsListener(options, panelHttpsSnapshot, panelHttpsRuntime);
-    });
-}
+    ConfigurePanelHttpsListener(options, panelHttpsSnapshot, panelHttpsRuntime);
+});
 
 builder.Services
     .AddOptions<PanelOptions>()

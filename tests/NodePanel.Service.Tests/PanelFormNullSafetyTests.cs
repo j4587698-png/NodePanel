@@ -452,6 +452,59 @@ public sealed class PanelFormNullSafetyTests
         Assert.Equal(0L, form.TransferEnableBytes);
     }
 
+    [Fact]
+    public void PanelHttpsSettingsFormInput_requires_restart_only_for_listener_changes()
+    {
+        var previous = new PanelHttpsSettingsFormInput
+        {
+            Enabled = false,
+            CertificateId = string.Empty,
+            ListenAddress = "0.0.0.0",
+            Port = 443,
+            RedirectHttpToHttps = false
+        };
+
+        Assert.False(
+            new PanelHttpsSettingsFormInput
+            {
+                Enabled = true,
+                CertificateId = string.Empty,
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                RedirectHttpToHttps = true
+            }.RequiresProcessRestart(previous));
+
+        Assert.False(
+            new PanelHttpsSettingsFormInput
+            {
+                Enabled = false,
+                CertificateId = "panel-cert",
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                RedirectHttpToHttps = false
+            }.RequiresProcessRestart(previous));
+
+        Assert.True(
+            new PanelHttpsSettingsFormInput
+            {
+                Enabled = false,
+                CertificateId = string.Empty,
+                ListenAddress = "127.0.0.1",
+                Port = 443,
+                RedirectHttpToHttps = false
+            }.RequiresProcessRestart(previous));
+
+        Assert.True(
+            new PanelHttpsSettingsFormInput
+            {
+                Enabled = false,
+                CertificateId = string.Empty,
+                ListenAddress = "0.0.0.0",
+                Port = 8443,
+                RedirectHttpToHttps = false
+            }.RequiresProcessRestart(previous));
+    }
+
     private static NodeFormInput CreateBaseForm()
         => new()
         {

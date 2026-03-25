@@ -1,3 +1,4 @@
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -403,6 +404,71 @@ public sealed class PanelMutationServiceTests
         Assert.Equal(0L, traffic.DownloadBytes);
     }
 
+    [Fact]
+    public async Task PanelHttpsRuntime_returns_self_signed_certificate_when_no_formal_certificate_is_bound()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePanelHttpsSettingsAsync(
+            new PanelHttpsSettingsFormInput
+            {
+                Enabled = true,
+                CertificateId = string.Empty,
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                RedirectHttpToHttps = false
+            },
+            CancellationToken.None);
+
+        var snapshot = harness.GetPanelHttpsSnapshot();
+        var options = harness.CreatePanelHttpsAuthenticationOptions();
+
+        Assert.Null(snapshot.Certificate);
+        Assert.NotNull(options.ServerCertificate);
+        Assert.Contains("CN=NodePanel Temporary TLS", options.ServerCertificate!.Subject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PanelHttpsRuntime_falls_back_to_self_signed_certificate_when_selected_certificate_has_no_pfx()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.DatabaseService.FSql.InsertOrUpdate<PanelCertificateEntity>()
+            .SetSource(
+                new PanelCertificateEntity
+                {
+                    CertificateId = "panel-cert",
+                    DisplayName = "Panel Certificate",
+                    Domain = "panel.example.com",
+                    AltNames = ["alt.example.com"],
+                    PfxBase64 = string.Empty,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        await harness.MutationService.SavePanelHttpsSettingsAsync(
+            new PanelHttpsSettingsFormInput
+            {
+                Enabled = true,
+                CertificateId = "panel-cert",
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                RedirectHttpToHttps = false
+            },
+            CancellationToken.None);
+
+        var snapshot = harness.GetPanelHttpsSnapshot();
+        var options = harness.CreatePanelHttpsAuthenticationOptions();
+
+        Assert.Null(snapshot.Certificate);
+        Assert.Contains("panel.example.com", snapshot.FallbackServerNames);
+        Assert.Contains("alt.example.com", snapshot.FallbackServerNames);
+        Assert.Contains("自签证书", snapshot.LastError, StringComparison.Ordinal);
+        Assert.NotNull(options.ServerCertificate);
+        Assert.Contains("CN=NodePanel Temporary TLS", options.ServerCertificate!.Subject, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static UpsertUserRequest CreateUserRequest(IReadOnlyList<string> nodeIds)
         => new()
         {
@@ -485,6 +551,12 @@ public sealed class PanelMutationServiceTests
         public DatabaseService DatabaseService { get; }
 
         public PanelMutationService MutationService { get; }
+
+        public PanelHttpsRuntimeSnapshot GetPanelHttpsSnapshot()
+            => _panelHttpsRuntime.GetSnapshot();
+
+        public SslServerAuthenticationOptions CreatePanelHttpsAuthenticationOptions()
+            => _panelHttpsRuntime.CreateAuthenticationOptions();
 
         public async Task CreateNodeAsync(string nodeId)
         {

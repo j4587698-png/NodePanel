@@ -623,7 +623,7 @@ public sealed class PanelCertificateFormInput
 
 public sealed class PanelHttpsSettingsFormInput
 {
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
 
     public string CertificateId { get; set; } = string.Empty;
 
@@ -650,16 +650,6 @@ public sealed class PanelHttpsSettingsFormInput
 
         var current = Normalize();
         var before = previous.Normalize();
-        if (current.Enabled != before.Enabled)
-        {
-            return true;
-        }
-
-        if (!current.Enabled)
-        {
-            return false;
-        }
-
         return !string.Equals(current.ListenAddress, before.ListenAddress, StringComparison.OrdinalIgnoreCase) ||
                current.Port != before.Port;
     }
@@ -667,7 +657,7 @@ public sealed class PanelHttpsSettingsFormInput
     public static PanelHttpsSettingsFormInput FromSettings(IReadOnlyDictionary<string, string> settings)
         => new()
         {
-            Enabled = bool.TryParse(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsEnabled), out var enabled) && enabled,
+            Enabled = !bool.TryParse(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsEnabled), out var enabled) || enabled,
             CertificateId = settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsCertificateId) ?? string.Empty,
             ListenAddress = string.IsNullOrWhiteSpace(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsListenAddress))
                 ? "0.0.0.0"

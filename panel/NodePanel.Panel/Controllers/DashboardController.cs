@@ -191,31 +191,22 @@ public sealed class DashboardController : Controller
     public async Task<IActionResult> SavePanelHttpsSettings(PanelHttpsSettingsFormInput panelHttps, CancellationToken cancellationToken)
     {
         var normalizedPanelHttps = panelHttps.Normalize();
-        if (normalizedPanelHttps.Enabled)
+        PanelCertificateRecord? selectedCertificate = null;
+        var usingTemporaryCertificate = string.IsNullOrWhiteSpace(normalizedPanelHttps.CertificateId);
+        if (!string.IsNullOrWhiteSpace(normalizedPanelHttps.CertificateId))
         {
-            if (string.IsNullOrWhiteSpace(normalizedPanelHttps.CertificateId))
+            selectedCertificate = await _panelQueryService
+                .FindCertificateAsync(normalizedPanelHttps.CertificateId, cancellationToken)
+                .ConfigureAwait(false);
+            if (selectedCertificate is null)
             {
-                ModelState.AddModelError(nameof(panelHttps.CertificateId), "启用 Panel HTTPS 时必须选择一张证书。");
+                ModelState.AddModelError(
+                    nameof(panelHttps.CertificateId),
+                    $"证书 {normalizedPanelHttps.CertificateId} 不存在。");
             }
-            else
-            {
-                var certificate = await _panelQueryService
-                    .FindCertificateAsync(normalizedPanelHttps.CertificateId, cancellationToken)
-                    .ConfigureAwait(false);
 
-                if (certificate is null)
-                {
-                    ModelState.AddModelError(
-                        nameof(panelHttps.CertificateId),
-                        $"证书 {normalizedPanelHttps.CertificateId} 不存在。");
-                }
-                else if (string.IsNullOrWhiteSpace(certificate.PfxBase64))
-                {
-                    ModelState.AddModelError(
-                        nameof(panelHttps.CertificateId),
-                        $"证书 {normalizedPanelHttps.CertificateId} 还没有可用的 PFX 资产，请先完成签发/续签。");
-                }
-            }
+            usingTemporaryCertificate = selectedCertificate is null ||
+                                        string.IsNullOrWhiteSpace(selectedCertificate.PfxBase64);
         }
 
         if (!ModelState.IsValid)
@@ -242,13 +233,21 @@ public sealed class DashboardController : Controller
                 new PanelRestartingViewModel
                 {
                     Title = "正在重启面板",
-                    Message = "Panel HTTPS 监听配置已保存，面板进程正在重启以应用 80/443 直连监听。几秒后会自动返回证书页面。",
+                    Message = usingTemporaryCertificate
+                        ? "Panel HTTPS 监听地址或端口已保存，面板进程正在重启以应用新的监听配置。当前没有可用的正式证书，重启后会先返回临时自签证书。几秒后会自动返回证书页面。"
+                        : "Panel HTTPS 监听地址或端口已保存，面板进程正在重启以应用新的监听配置。几秒后会自动返回证书页面。",
                     RedirectUrl = Url.Action(nameof(Certificates)) ?? "/admin/certificates"
                 });
         }
-        TempData["StatusMessage"] = requiresRestart
-            ? "Panel HTTPS 设置已保存。首次启用或修改监听地址/端口需要重启面板进程。"
-            : "Panel HTTPS 设置已保存。证书切换和 HTTP 跳转规则已立即生效。";
+        var statusMessage = "Panel HTTPS 设置已保存。证书切换和 HTTP 跳转规则已立即生效。";
+        if (usingTemporaryCertificate)
+        {
+            statusMessage += string.IsNullOrWhiteSpace(normalizedPanelHttps.CertificateId)
+                ? " 当前未绑定正式证书，面板会继续使用临时自签证书。"
+                : $" 证书 {normalizedPanelHttps.CertificateId} 暂无可用 PFX，面板会先使用临时自签证书。";
+        }
+
+        TempData["StatusMessage"] = statusMessage;
         return RedirectToAction(nameof(Certificates));
     }
 

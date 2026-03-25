@@ -50,16 +50,16 @@
         <div asp-validation-summary="All" class="error-box"></div>
             <div class="form-grid">
                 <div class="checkbox-field">
-                    <span>启用 HTTPS</span>
+                    <span>HTTPS 主入口</span>
                     <label class="switch">
                         <input asp-for="PanelHttps.Enabled" type="checkbox" />
                         <span class="switch-slider"></span>
                     </label>
                 </div>
                 <label>
-                    <span>证书</span>
+                    <span>正式证书</span>
                     <select asp-for="PanelHttps.CertificateId">
-                        <option value="">请选择</option>
+                        <option value="">不绑定正式证书（使用自签）</option>
                         @foreach (var certificate in Model.Certificates)
                         {
                             <option value="@certificate.Definition.CertificateId">@certificate.Definition.DisplayName (@certificate.Definition.Domain)</option>
@@ -82,6 +82,7 @@
                     </label>
                 </div>
             </div>
+            <p class="muted">TLS 监听会始终启动。未绑定可用正式证书时，面板会临时返回自签证书；只有修改监听地址或端口才需要重启。</p>
             <div class="page-actions">
                 <button type="submit" class="button button--primary">保存 HTTPS 设置</button>
             </div>
@@ -99,7 +100,7 @@
             <p class="muted">节点 `acme-managed` 继续由节点自己跑 `http-01`。</p>
             <p class="muted">节点 `panel-distributed` 只消费面板下发的 PFX，续签后会自动重新推送快照。</p>
             <p class="muted">泛域名请使用 `dns-01`，并在证书配置里填写 DNS hook 命令。</p>
-            <p class="muted">Panel HTTPS 的证书切换可热更新；首次启用或修改监听地址和端口仍需要重启进程。</p>
+            <p class="muted">Panel HTTPS 的证书切换和续签可热更新；只有修改监听地址或端口才需要重启进程。</p>
         </div>
     </section>
 </div>
