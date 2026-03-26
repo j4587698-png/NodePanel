@@ -50,8 +50,10 @@ public sealed class SubscriptionRenderer
         CancellationToken cancellationToken)
     {
         var settings = await _panelQueryService.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
-        var request = _subscriptionProfileResolver.ResolveRequest(flag, profile, userAgent, settings);
+        var effectiveSettings = BuildEffectiveSettings(settings);
+        var request = _subscriptionProfileResolver.ResolveRequest(flag, profile, userAgent, effectiveSettings);
         var headers = await BuildHeadersAsync(catalog, SubscriptionFormats.IsStructured(request.Format), cancellationToken);
+        var appName = ResolveAppName(request.Settings);
 
         var rendered = request.Format switch
         {
@@ -59,10 +61,10 @@ public sealed class SubscriptionRenderer
                 SubscriptionFormatRenderer.Render(
                     catalog,
                     _subscriptionProfileResolver.BuildPlan(catalog, request),
-                    ResolveAppName()),
-            SubscriptionFormats.Shadowrocket => RenderGeneral(catalog, SubscriptionFormats.Shadowrocket, raw: false),
-            SubscriptionFormats.RawTrojan => RenderGeneral(catalog, SubscriptionFormats.RawTrojan, raw: true),
-            _ => RenderGeneral(catalog, SubscriptionFormats.General, raw: false)
+                    appName),
+            SubscriptionFormats.Shadowrocket => RenderGeneral(catalog, SubscriptionFormats.Shadowrocket, appName, raw: false),
+            SubscriptionFormats.RawTrojan => RenderGeneral(catalog, SubscriptionFormats.RawTrojan, appName, raw: true),
+            _ => RenderGeneral(catalog, SubscriptionFormats.General, appName, raw: false)
         };
 
         return rendered with { Headers = headers };
@@ -71,7 +73,7 @@ public sealed class SubscriptionRenderer
     public string RenderRawList(SubscriptionCatalog catalog)
         => string.Join("\n", catalog.Endpoints.Select(endpoint => _subscriptionCatalogService.BuildUri(catalog.User, endpoint)));
 
-    private RenderedSubscription RenderGeneral(SubscriptionCatalog catalog, string format, bool raw)
+    private RenderedSubscription RenderGeneral(SubscriptionCatalog catalog, string format, string appName, bool raw)
     {
         var payload = RenderRawList(catalog);
         var content = raw ? payload : Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
@@ -80,7 +82,7 @@ public sealed class SubscriptionRenderer
             Format = format,
             Content = content,
             ContentType = "text/plain",
-            FileName = BuildFileName("txt")
+            FileName = BuildFileName(appName, "txt")
         };
     }
 
@@ -108,12 +110,30 @@ public sealed class SubscriptionRenderer
         return headers;
     }
 
-    private string ResolveAppName()
-        => string.IsNullOrWhiteSpace(_options.AppName) ? "nodepanel" : _options.AppName;
-
-    private string BuildFileName(string extension)
+    private IReadOnlyDictionary<string, string> BuildEffectiveSettings(IReadOnlyDictionary<string, string> settings)
     {
-        var appName = ResolveAppName();
+        if (!string.IsNullOrWhiteSpace(settings.GetValueOrDefault(SubscriptionSettingKeys.SiteName)))
+        {
+            return settings;
+        }
+
+        var effective = new Dictionary<string, string>(settings, StringComparer.Ordinal)
+        {
+            [SubscriptionSettingKeys.SiteName] = ResolveFallbackAppName()
+        };
+        return effective;
+    }
+
+    private string ResolveAppName(SubscriptionRenderSettings settings)
+        => string.IsNullOrWhiteSpace(settings.SiteName)
+            ? ResolveFallbackAppName()
+            : settings.SiteName.Trim();
+
+    private string ResolveFallbackAppName()
+        => string.IsNullOrWhiteSpace(_options.AppName) ? "nodepanel" : _options.AppName.Trim();
+
+    private static string BuildFileName(string appName, string extension)
+    {
         var sanitized = string.Concat(
             appName
                 .Where(ch => !Path.GetInvalidFileNameChars().Contains(ch))

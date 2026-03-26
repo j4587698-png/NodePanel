@@ -19,6 +19,7 @@ public static class SubscriptionFormats
 
 public static class SubscriptionProfileNames
 {
+    public const string Managed = "managed";
     public const string Minimal = "minimal";
     public const string Region = "region";
     public const string Full = "full";
@@ -29,16 +30,19 @@ public static class SubscriptionProfileNames
         var normalized = value?.Trim().ToLowerInvariant();
         return normalized switch
         {
+            Managed => Managed,
             Minimal => Minimal,
             Region => Region,
             NoReject => NoReject,
-            _ => Full
+            Full => Full,
+            _ => Managed
         };
     }
 }
 
 public static class SubscriptionSettingKeys
 {
+    public const string SiteName = "site_name";
     public const string DefaultProfile = "subscription_profile_default";
     public const string TestUrl = "subscription_test_url";
     public const string TestIntervalSeconds = "subscription_test_interval_seconds";
@@ -49,7 +53,9 @@ public static class SubscriptionSettingKeys
 
 public sealed record SubscriptionRenderSettings
 {
-    public string DefaultProfile { get; init; } = SubscriptionProfileNames.Full;
+    public string SiteName { get; init; } = "NodePanel";
+
+    public string DefaultProfile { get; init; } = SubscriptionProfileNames.Managed;
 
     public string TestUrl { get; init; } = "http://www.gstatic.com/generate_204";
 
@@ -64,6 +70,7 @@ public sealed record SubscriptionRenderSettings
     public static SubscriptionRenderSettings FromSettings(IReadOnlyDictionary<string, string>? settings)
     {
         var source = settings ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var siteName = NormalizeSiteName(source.GetValueOrDefault(SubscriptionSettingKeys.SiteName));
         var defaultProfile = SubscriptionProfileNames.Normalize(
             source.GetValueOrDefault(SubscriptionSettingKeys.DefaultProfile));
         var testUrl = NormalizeTestUrl(source.GetValueOrDefault(SubscriptionSettingKeys.TestUrl));
@@ -83,6 +90,7 @@ public sealed record SubscriptionRenderSettings
 
         return new SubscriptionRenderSettings
         {
+            SiteName = siteName,
             DefaultProfile = defaultProfile,
             TestUrl = testUrl,
             TestIntervalSeconds = interval,
@@ -90,6 +98,14 @@ public sealed record SubscriptionRenderSettings
             CustomGroups = customGroups,
             CustomRules = customRules
         };
+    }
+
+    private static string NormalizeSiteName(string? value)
+    {
+        var candidate = value?.Trim();
+        return string.IsNullOrWhiteSpace(candidate)
+            ? "NodePanel"
+            : candidate;
     }
 
     private static string NormalizeTestUrl(string? value)

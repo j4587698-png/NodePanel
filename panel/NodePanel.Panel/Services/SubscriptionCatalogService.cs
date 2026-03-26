@@ -153,6 +153,7 @@ public sealed class SubscriptionCatalogService
         var host = ResolveSubscriptionHost(node);
         if (string.IsNullOrWhiteSpace(host)) yield break;
 
+        var displayName = ResolveSubscriptionDisplayName(node, host);
         var sni = string.IsNullOrWhiteSpace(node.SubscriptionSni) ? host : node.SubscriptionSni;
         var normalizedProtocol = InboundProtocols.Normalize(node.Protocol);
         var tcpTls = NodeServiceConfigInbounds.GetProtocolTransportInbound(node.Config, normalizedProtocol, InboundTransports.Tls);
@@ -161,11 +162,11 @@ public sealed class SubscriptionCatalogService
             yield return new SubscriptionEndpoint
             {
                 NodeId = node.NodeId,
-                DisplayName = node.DisplayName,
+                DisplayName = displayName,
                 Host = host,
                 Port = tcpTls.Port,
                 Sni = sni,
-                Label = $"{node.DisplayName}-tcp",
+                Label = $"{displayName}-tcp",
                 Protocol = node.Protocol,
                 SkipCertificateVerification = node.SubscriptionAllowInsecure
             };
@@ -177,11 +178,11 @@ public sealed class SubscriptionCatalogService
             yield return new SubscriptionEndpoint
             {
                 NodeId = node.NodeId,
-                DisplayName = node.DisplayName,
+                DisplayName = displayName,
                 Host = host,
                 Port = wss.Port,
                 Sni = sni,
-                Label = $"{node.DisplayName}-wss",
+                Label = $"{displayName}-wss",
                 Protocol = node.Protocol,
                 Transport = "ws",
                 Path = wss.Path,
@@ -202,6 +203,21 @@ public sealed class SubscriptionCatalogService
         if (IsUsableAddress(wss.ListenAddress)) return wss.ListenAddress;
 
         return null;
+    }
+
+    private static string ResolveSubscriptionDisplayName(PanelNodeRecord node, string host)
+    {
+        if (!string.IsNullOrWhiteSpace(node.DisplayName))
+        {
+            return node.DisplayName.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(node.NodeId))
+        {
+            return node.NodeId.Trim();
+        }
+
+        return host.Trim();
     }
 
     private static string ResolveProtocolUuid(PanelUserRecord user)

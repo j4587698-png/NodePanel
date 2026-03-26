@@ -4,18 +4,6 @@ namespace NodePanel.Panel.Services;
 
 public sealed class SubscriptionProfileResolver
 {
-    private static readonly string[] ReservedGroupNames =
-    [
-        "Proxy",
-        "GLOBAL",
-        "Auto",
-        "Fallback",
-        "Load Balance",
-        "All Nodes",
-        "DIRECT",
-        "REJECT"
-    ];
-
     private static readonly IReadOnlyDictionary<string, string> RegionAliases =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -105,21 +93,24 @@ public sealed class SubscriptionProfileResolver
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(request);
 
+        var profile = ResolveProfileDefinition(request);
         var proxies = BuildProxies(catalog, request.Format);
+        var resolvedProfile = ResolveFixedGroupNames(profile, proxies);
         if (!SubscriptionFormats.IsStructured(request.Format))
         {
             return new SubscriptionRenderPlan
             {
                 Request = request,
                 Proxies = proxies,
-                FinalGroupName = "Proxy"
+                FinalGroupName = resolvedProfile.ProxyGroupName
             };
         }
 
-        var groups = BuildStructuredGroups(proxies, request);
-        var finalGroupName = groups.Any(group => string.Equals(group.Name, "GLOBAL", StringComparison.Ordinal))
-            ? "GLOBAL"
-            : "Proxy";
+        var groups = BuildStructuredGroups(proxies, request, resolvedProfile);
+        var finalGroupName = resolvedProfile.IncludeGlobalGroup &&
+                             groups.Any(group => string.Equals(group.Name, resolvedProfile.GlobalGroupName, StringComparison.Ordinal))
+            ? resolvedProfile.GlobalGroupName
+            : resolvedProfile.ProxyGroupName;
         var rules = BuildRules(groups, request, finalGroupName);
 
         return new SubscriptionRenderPlan
@@ -164,9 +155,9 @@ public sealed class SubscriptionProfileResolver
 
     private static IReadOnlyList<SubscriptionProxyGroup> BuildStructuredGroups(
         IReadOnlyList<SubscriptionRenderProxy> proxies,
-        SubscriptionRequestContext request)
+        SubscriptionRequestContext request,
+        SubscriptionProfileDefinition profile)
     {
-        var profile = ResolveProfileDefinition(request);
         var allProxyNames = proxies
             .Select(static proxy => proxy.Name)
             .Distinct(StringComparer.Ordinal)
@@ -178,7 +169,7 @@ public sealed class SubscriptionProfileResolver
             {
                 new()
                 {
-                    Name = "Proxy",
+                    Name = profile.ProxyGroupName,
                     Type = "select",
                     Proxies = ["DIRECT"]
                 }
@@ -189,11 +180,11 @@ public sealed class SubscriptionProfileResolver
                 emptyGroups.Add(
                     new SubscriptionProxyGroup
                     {
-                        Name = "GLOBAL",
+                        Name = profile.GlobalGroupName,
                         Type = "select",
                         Proxies = profile.IncludeRejectInGlobalGroup
-                            ? ["Proxy", "DIRECT", "REJECT"]
-                            : ["Proxy", "DIRECT"]
+                            ? [profile.ProxyGroupName, "DIRECT", "REJECT"]
+                            : [profile.ProxyGroupName, "DIRECT"]
                     });
             }
 
@@ -201,45 +192,47 @@ public sealed class SubscriptionProfileResolver
         }
 
         var groups = new List<SubscriptionProxyGroup>();
-        var existingNames = new HashSet<string>(ReservedGroupNames, StringComparer.OrdinalIgnoreCase);
+        var existingNames = new HashSet<string>(
+            GetReservedGroupNames(profile).Concat(allProxyNames),
+            StringComparer.OrdinalIgnoreCase);
         var proxySelectorTargets = new List<string>();
 
         if (profile.IncludeAutoGroup && allProxyNames.Length > 1)
         {
             groups.Add(new SubscriptionProxyGroup
             {
-                Name = "Auto",
+                Name = profile.AutoGroupName,
                 Type = "url-test",
                 Proxies = allProxyNames,
                 Url = request.Settings.TestUrl,
                 IntervalSeconds = request.Settings.TestIntervalSeconds
             });
-            proxySelectorTargets.Add("Auto");
+            proxySelectorTargets.Add(profile.AutoGroupName);
         }
 
         if (profile.IncludeFallbackGroup && allProxyNames.Length > 1)
         {
             groups.Add(new SubscriptionProxyGroup
             {
-                Name = "Fallback",
+                Name = profile.FallbackGroupName,
                 Type = "fallback",
                 Proxies = allProxyNames,
                 Url = request.Settings.TestUrl,
                 IntervalSeconds = request.Settings.TestIntervalSeconds
             });
-            proxySelectorTargets.Add("Fallback");
+            proxySelectorTargets.Add(profile.FallbackGroupName);
         }
 
         if (profile.IncludeLoadBalanceGroup && allProxyNames.Length > 1)
         {
             groups.Add(new SubscriptionProxyGroup
             {
-                Name = "Load Balance",
+                Name = profile.LoadBalanceGroupName,
                 Type = "load-balance",
                 Proxies = allProxyNames,
                 Strategy = "round-robin"
             });
-            proxySelectorTargets.Add("Load Balance");
+            proxySelectorTargets.Add(profile.LoadBalanceGroupName);
         }
 
         if (profile.IncludeRegionGroups)
@@ -300,24 +293,30 @@ public sealed class SubscriptionProfileResolver
 
         AddCustomGroups(groups, proxies, request, existingNames, proxySelectorTargets);
 
-        var allNodesGroup = new SubscriptionProxyGroup
+        if (profile.IncludeAllNodesGroup)
         {
-            Name = "All Nodes",
-            Type = "select",
-            Proxies = allProxyNames
-        };
-        groups.Add(allNodesGroup);
-        proxySelectorTargets.Add(allNodesGroup.Name);
+            var allNodesGroup = new SubscriptionProxyGroup
+            {
+                Name = profile.AllNodesGroupName,
+                Type = "select",
+                Proxies = allProxyNames
+            };
+            groups.Add(allNodesGroup);
+            proxySelectorTargets.Add(allNodesGroup.Name);
+        }
+
+        if (profile.IncludeProxyNodesDirectly || proxySelectorTargets.Count == 0)
+        {
+            proxySelectorTargets.AddRange(allProxyNames);
+        }
 
         groups.Insert(
             0,
             new SubscriptionProxyGroup
             {
-                Name = "Proxy",
+                Name = profile.ProxyGroupName,
                 Type = "select",
-                Proxies = proxySelectorTargets.Count == 0
-                    ? allProxyNames
-                    : proxySelectorTargets.Distinct(StringComparer.Ordinal).ToArray()
+                Proxies = proxySelectorTargets.Distinct(StringComparer.Ordinal).ToArray()
             });
 
         if (profile.IncludeGlobalGroup)
@@ -326,11 +325,11 @@ public sealed class SubscriptionProfileResolver
                 1,
                 new SubscriptionProxyGroup
                 {
-                    Name = "GLOBAL",
+                    Name = profile.GlobalGroupName,
                     Type = "select",
                     Proxies = profile.IncludeRejectInGlobalGroup
-                        ? ["Proxy", "DIRECT", "REJECT"]
-                        : ["Proxy", "DIRECT"]
+                        ? [profile.ProxyGroupName, "DIRECT", "REJECT"]
+                        : [profile.ProxyGroupName, "DIRECT"]
                 });
         }
 
@@ -568,31 +567,135 @@ public sealed class SubscriptionProfileResolver
 
         return request.ProfileName switch
         {
-            SubscriptionProfileNames.Minimal => new SubscriptionProfileDefinition(
-                IncludeAutoGroup: false,
-                IncludeFallbackGroup: false,
-                IncludeLoadBalanceGroup: false,
-                IncludeRegionGroups: false,
-                IncludeTagGroups: false,
-                IncludeGlobalGroup: true,
-                IncludeRejectInGlobalGroup: includeReject),
-            SubscriptionProfileNames.Region => new SubscriptionProfileDefinition(
-                IncludeAutoGroup: true,
-                IncludeFallbackGroup: true,
-                IncludeLoadBalanceGroup: true,
-                IncludeRegionGroups: true,
-                IncludeTagGroups: false,
-                IncludeGlobalGroup: true,
-                IncludeRejectInGlobalGroup: includeReject),
-            _ => new SubscriptionProfileDefinition(
-                IncludeAutoGroup: true,
-                IncludeFallbackGroup: true,
-                IncludeLoadBalanceGroup: true,
-                IncludeRegionGroups: true,
-                IncludeTagGroups: true,
-                IncludeGlobalGroup: true,
-                IncludeRejectInGlobalGroup: includeReject)
+            SubscriptionProfileNames.Managed => CreateManagedProfileDefinition(request.Settings.SiteName),
+            SubscriptionProfileNames.Minimal => CreateLegacyProfileDefinition(
+                includeAutoGroup: false,
+                includeFallbackGroup: false,
+                includeLoadBalanceGroup: false,
+                includeRegionGroups: false,
+                includeTagGroups: false,
+                includeGlobalGroup: true,
+                includeRejectInGlobalGroup: includeReject,
+                includeAllNodesGroup: false),
+            SubscriptionProfileNames.Region => CreateLegacyProfileDefinition(
+                includeAutoGroup: true,
+                includeFallbackGroup: true,
+                includeLoadBalanceGroup: true,
+                includeRegionGroups: true,
+                includeTagGroups: false,
+                includeGlobalGroup: true,
+                includeRejectInGlobalGroup: includeReject,
+                includeAllNodesGroup: true),
+            _ => CreateLegacyProfileDefinition(
+                includeAutoGroup: true,
+                includeFallbackGroup: true,
+                includeLoadBalanceGroup: true,
+                includeRegionGroups: true,
+                includeTagGroups: true,
+                includeGlobalGroup: true,
+                includeRejectInGlobalGroup: includeReject,
+                includeAllNodesGroup: true)
         };
+    }
+
+    private static SubscriptionProfileDefinition CreateManagedProfileDefinition(string siteName)
+        => new(
+            ProxyGroupName: NormalizePrimaryGroupName(siteName),
+            AutoGroupName: "Auto",
+            FallbackGroupName: "Fallback",
+            LoadBalanceGroupName: "Load Balance",
+            AllNodesGroupName: "All Nodes",
+            GlobalGroupName: "GLOBAL",
+            IncludeAutoGroup: true,
+            IncludeFallbackGroup: true,
+            IncludeLoadBalanceGroup: false,
+            IncludeRegionGroups: false,
+            IncludeTagGroups: false,
+            IncludeGlobalGroup: false,
+            IncludeRejectInGlobalGroup: false,
+            IncludeAllNodesGroup: false,
+            IncludeProxyNodesDirectly: true);
+
+    private static SubscriptionProfileDefinition CreateLegacyProfileDefinition(
+        bool includeAutoGroup,
+        bool includeFallbackGroup,
+        bool includeLoadBalanceGroup,
+        bool includeRegionGroups,
+        bool includeTagGroups,
+        bool includeGlobalGroup,
+        bool includeRejectInGlobalGroup,
+        bool includeAllNodesGroup)
+        => new(
+            ProxyGroupName: "Proxy",
+            AutoGroupName: "Auto",
+            FallbackGroupName: "Fallback",
+            LoadBalanceGroupName: "Load Balance",
+            AllNodesGroupName: "All Nodes",
+            GlobalGroupName: "GLOBAL",
+            IncludeAutoGroup: includeAutoGroup,
+            IncludeFallbackGroup: includeFallbackGroup,
+            IncludeLoadBalanceGroup: includeLoadBalanceGroup,
+            IncludeRegionGroups: includeRegionGroups,
+            IncludeTagGroups: includeTagGroups,
+            IncludeGlobalGroup: includeGlobalGroup,
+            IncludeRejectInGlobalGroup: includeRejectInGlobalGroup,
+            IncludeAllNodesGroup: includeAllNodesGroup,
+            IncludeProxyNodesDirectly: false);
+
+    private static string NormalizePrimaryGroupName(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? "NodePanel"
+            : value.Trim();
+
+    private static IEnumerable<string> GetReservedGroupNames(SubscriptionProfileDefinition profile)
+    {
+        yield return profile.ProxyGroupName;
+        yield return profile.AutoGroupName;
+        yield return profile.FallbackGroupName;
+        yield return profile.LoadBalanceGroupName;
+        yield return profile.AllNodesGroupName;
+        yield return profile.GlobalGroupName;
+        yield return "DIRECT";
+        yield return "REJECT";
+    }
+
+    private static SubscriptionProfileDefinition ResolveFixedGroupNames(
+        SubscriptionProfileDefinition profile,
+        IReadOnlyList<SubscriptionRenderProxy> proxies)
+    {
+        var existingNames = proxies
+            .Select(static proxy => proxy.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return profile with
+        {
+            ProxyGroupName = EnsureUniqueFixedGroupName(profile.ProxyGroupName, existingNames),
+            AutoGroupName = EnsureUniqueFixedGroupName(profile.AutoGroupName, existingNames),
+            FallbackGroupName = EnsureUniqueFixedGroupName(profile.FallbackGroupName, existingNames),
+            LoadBalanceGroupName = EnsureUniqueFixedGroupName(profile.LoadBalanceGroupName, existingNames),
+            AllNodesGroupName = EnsureUniqueFixedGroupName(profile.AllNodesGroupName, existingNames),
+            GlobalGroupName = EnsureUniqueFixedGroupName(profile.GlobalGroupName, existingNames)
+        };
+    }
+
+    private static string EnsureUniqueFixedGroupName(string preferredName, ISet<string> existingNames)
+    {
+        var normalized = preferredName.Trim();
+        if (existingNames.Add(normalized))
+        {
+            return normalized;
+        }
+
+        var candidate = $"{normalized}-group";
+        var index = 2;
+        while (!existingNames.Add(candidate))
+        {
+            candidate = $"{normalized}-group-{index}";
+            index++;
+        }
+
+        return candidate;
     }
 
     private static string ResolveRegion(
@@ -610,13 +713,12 @@ public sealed class SubscriptionProfileResolver
         {
             node?.DisplayName,
             endpoint.DisplayName,
-            endpoint.Label,
             string.Join(",", tags)
         };
 
         foreach (var candidate in candidates)
         {
-            var inferred = NormalizeRegion(candidate);
+            var inferred = InferRegion(candidate);
             if (!string.IsNullOrWhiteSpace(inferred))
             {
                 return inferred;
@@ -733,6 +835,33 @@ public sealed class SubscriptionProfileResolver
         }
 
         return candidate;
+    }
+
+    private static string InferRegion(string? value)
+    {
+        var candidate = value?.Trim();
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return string.Empty;
+        }
+
+        if (RegionAliases.TryGetValue(candidate, out var alias))
+        {
+            return alias;
+        }
+
+        foreach (var pair in RegionAliases)
+        {
+            var matched = pair.Key.Length <= 2
+                ? ContainsToken(candidate, pair.Key)
+                : candidate.Contains(pair.Key, StringComparison.OrdinalIgnoreCase);
+            if (matched)
+            {
+                return pair.Value;
+            }
+        }
+
+        return string.Empty;
     }
 
     private static bool ContainsToken(string? source, string token)
@@ -906,11 +1035,19 @@ public sealed class SubscriptionProfileResolver
     }
 
     private sealed record SubscriptionProfileDefinition(
+        string ProxyGroupName,
+        string AutoGroupName,
+        string FallbackGroupName,
+        string LoadBalanceGroupName,
+        string AllNodesGroupName,
+        string GlobalGroupName,
         bool IncludeAutoGroup,
         bool IncludeFallbackGroup,
         bool IncludeLoadBalanceGroup,
         bool IncludeRegionGroups,
         bool IncludeTagGroups,
         bool IncludeGlobalGroup,
-        bool IncludeRejectInGlobalGroup);
+        bool IncludeRejectInGlobalGroup,
+        bool IncludeAllNodesGroup,
+        bool IncludeProxyNodesDirectly);
 }

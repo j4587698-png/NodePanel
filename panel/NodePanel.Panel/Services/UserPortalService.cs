@@ -140,9 +140,9 @@ public sealed class UserPortalService
         {
             new PortalClientLinkViewModel { Title = "Shadowrocket", Description = "iOS 一键导入", Url = $"shadowrocket://add/sub://{ToSafeBase64(_publicUrlBuilder.BuildSubscriptionUrl(token, "shadowrocket", request))}?remark={remark}" },
             new PortalClientLinkViewModel { Title = "Quantumult X", Description = "配置远程资源", Url = BuildQuantumultXScheme(_publicUrlBuilder.BuildSubscriptionUrl(token, "quantumultx", request), title) },
-            new PortalClientLinkViewModel { Title = "Clash", Description = "Clash 系列订阅", Url = $"clash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "clash", request, SubscriptionProfileNames.Full))}&name={remark}" },
-            new PortalClientLinkViewModel { Title = "Stash", Description = "Stash YAML 订阅", Url = $"stash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "stash", request, SubscriptionProfileNames.Full))}&name={remark}" },
-            new PortalClientLinkViewModel { Title = "Surge", Description = "Surge 配置导入", Url = $"surge:///install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "surge", request, SubscriptionProfileNames.Full))}&name={remark}" }
+            new PortalClientLinkViewModel { Title = "Clash", Description = "Clash 系列订阅", Url = $"clash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "clash", request, SubscriptionProfileNames.Managed))}&name={remark}" },
+            new PortalClientLinkViewModel { Title = "Stash", Description = "Stash YAML 订阅", Url = $"stash://install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "stash", request, SubscriptionProfileNames.Managed))}&name={remark}" },
+            new PortalClientLinkViewModel { Title = "Surge", Description = "Surge 配置导入", Url = $"surge:///install-config?url={Uri.EscapeDataString(_publicUrlBuilder.BuildSubscriptionUrl(token, "surge", request, SubscriptionProfileNames.Managed))}&name={remark}" }
         };
     }
 

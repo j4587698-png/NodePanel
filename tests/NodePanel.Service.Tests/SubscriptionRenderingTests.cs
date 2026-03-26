@@ -69,6 +69,41 @@ public sealed class SubscriptionRenderingTests
     }
 
     [Fact]
+    public void BuildPlan_default_profile_uses_site_name_as_primary_group()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            null,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SubscriptionSettingKeys.SiteName] = "内部专用"
+            });
+
+        var plan = resolver.BuildPlan(CreateCatalog(), request);
+        var groupNames = plan.Groups.Select(static group => group.Name).ToArray();
+
+        Assert.Equal(SubscriptionProfileNames.Managed, request.ProfileName);
+        Assert.Contains("内部专用", groupNames);
+        Assert.Contains("Auto", groupNames);
+        Assert.Contains("Fallback", groupNames);
+        Assert.DoesNotContain("GLOBAL", groupNames);
+        Assert.DoesNotContain("All Nodes", groupNames);
+        Assert.DoesNotContain("香港", groupNames);
+        Assert.DoesNotContain("AI", groupNames);
+
+        var proxyGroup = Assert.Single(plan.Groups, static group => group.Name == "内部专用");
+        Assert.Contains("Auto", proxyGroup.Proxies);
+        Assert.Contains("Fallback", proxyGroup.Proxies);
+        Assert.Contains("HK-AI-Stream-tcp", proxyGroup.Proxies);
+        Assert.Contains("US-Netflix-tcp", proxyGroup.Proxies);
+        Assert.DoesNotContain("DIRECT", proxyGroup.Proxies);
+        Assert.Equal("内部专用", plan.FinalGroupName);
+        Assert.Contains("MATCH,内部专用", plan.Rules);
+    }
+
+    [Fact]
     public void RenderClash_outputs_protocol_specific_proxy_definitions()
     {
         var resolver = new SubscriptionProfileResolver();
@@ -103,6 +138,30 @@ public sealed class SubscriptionRenderingTests
         Assert.Contains("      - 'DIRECT'", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("  - DOMAIN-SUFFIX,openai.com,AI", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("  - MATCH,GLOBAL", rendered.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderClash_managed_profile_uses_site_name_primary_group()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            null,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SubscriptionSettingKeys.SiteName] = "内部专用"
+            });
+        var catalog = CreateCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "内部专用");
+
+        Assert.Contains("  - name: '内部专用'", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("name: 'GLOBAL'", rendered.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("name: 'All Nodes'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("      - 'HK-AI-Stream-tcp'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("  - MATCH,内部专用", rendered.Content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -199,6 +258,161 @@ public sealed class SubscriptionRenderingTests
         Assert.Contains("static=GLOBAL", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("final,GLOBAL", rendered.Content, StringComparison.Ordinal);
         Assert.Contains("host-suffix, openai.com, AI", rendered.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildPlan_does_not_infer_region_group_from_endpoint_label()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+
+        var catalog = new SubscriptionCatalog
+        {
+            User = new PanelUserRecord
+            {
+                UserId = "user-a",
+                TrojanPassword = "trojan-secret",
+                Subscription = new PanelUserSubscriptionProfile()
+            },
+            AssignedNodes =
+            [
+                new PanelNodeRecord
+                {
+                    NodeId = "node-a",
+                    DisplayName = string.Empty,
+                    Protocol = "trojan"
+                }
+            ],
+            Endpoints =
+            [
+                new SubscriptionEndpoint
+                {
+                    NodeId = "node-a",
+                    DisplayName = string.Empty,
+                    Host = "node-a.example.com",
+                    Port = 443,
+                    Sni = "node-a.example.com",
+                    Label = "-wss",
+                    Protocol = "trojan",
+                    Transport = "ws",
+                    Path = "/ws",
+                    WsHost = "node-a.example.com"
+                }
+            ]
+        };
+
+        var plan = resolver.BuildPlan(catalog, request);
+
+        Assert.DoesNotContain(plan.Groups, static group => group.Name == "-wss");
+    }
+
+    [Fact]
+    public void BuildPlan_does_not_infer_region_group_from_plain_display_name()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+
+        var catalog = new SubscriptionCatalog
+        {
+            User = new PanelUserRecord
+            {
+                UserId = "user-a",
+                TrojanPassword = "trojan-secret",
+                Subscription = new PanelUserSubscriptionProfile()
+            },
+            AssignedNodes =
+            [
+                new PanelNodeRecord
+                {
+                    NodeId = "node-a",
+                    DisplayName = "www",
+                    Protocol = "trojan"
+                }
+            ],
+            Endpoints =
+            [
+                new SubscriptionEndpoint
+                {
+                    NodeId = "node-a",
+                    DisplayName = "www",
+                    Host = "node-a.example.com",
+                    Port = 443,
+                    Sni = "node-a.example.com",
+                    Label = "www-wss",
+                    Protocol = "trojan",
+                    Transport = "ws",
+                    Path = "/ws",
+                    WsHost = "node-a.example.com"
+                }
+            ]
+        };
+
+        var plan = resolver.BuildPlan(catalog, request);
+
+        Assert.DoesNotContain(plan.Groups, static group => group.Name == "www");
+    }
+
+    [Fact]
+    public void BuildPlan_avoids_group_name_collisions_with_proxy_names()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+
+        var catalog = new SubscriptionCatalog
+        {
+            User = new PanelUserRecord
+            {
+                UserId = "user-a",
+                TrojanPassword = "trojan-secret",
+                Subscription = new PanelUserSubscriptionProfile()
+            },
+            AssignedNodes =
+            [
+                new PanelNodeRecord
+                {
+                    NodeId = "node-a",
+                    DisplayName = "proxy-a",
+                    Protocol = "trojan",
+                    SubscriptionRegion = "HK"
+                }
+            ],
+            Endpoints =
+            [
+                new SubscriptionEndpoint
+                {
+                    NodeId = "node-a",
+                    DisplayName = "proxy-a",
+                    Host = "node-a.example.com",
+                    Port = 443,
+                    Sni = "node-a.example.com",
+                    Label = "香港",
+                    Protocol = "trojan"
+                }
+            ]
+        };
+
+        var plan = resolver.BuildPlan(catalog, request);
+        var derivedGroup = Assert.Single(
+            plan.Groups,
+            static group =>
+                !string.Equals(group.Name, "Proxy", StringComparison.Ordinal) &&
+                !string.Equals(group.Name, "GLOBAL", StringComparison.Ordinal) &&
+                !string.Equals(group.Name, "All Nodes", StringComparison.Ordinal));
+
+        Assert.NotEqual("香港", derivedGroup.Name);
+        Assert.Equal(["香港"], derivedGroup.Proxies);
     }
 
     private static string GetLine(string content, string prefix)
