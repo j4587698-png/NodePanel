@@ -22,6 +22,8 @@ public sealed class NodeEditorViewModel
 
     public NodeRuntimeSnapshot Runtime { get; init; } = new();
 
+    public bool ShowRuntimeDetails { get; init; }
+
     public string StatusMessage { get; init; } = string.Empty;
 
     public IReadOnlyList<ServerGroupViewModel> AvailableGroups { get; init; } = Array.Empty<ServerGroupViewModel>();
@@ -34,6 +36,8 @@ public sealed class UserEditorViewModel
     public required UserFormInput Form { get; init; }
 
     public required bool IsEditMode { get; init; }
+
+    public bool HasPortalPassword { get; init; }
 
     public string PortalUrl { get; init; } = string.Empty;
 
@@ -1023,7 +1027,12 @@ public sealed class UserFormInput
     [Required(ErrorMessage = "用户 ID 不能为空。")]
     public string UserId { get; set; } = string.Empty;
 
+    [EmailAddress(ErrorMessage = "邮箱格式不正确。")]
+    public string Email { get; set; } = string.Empty;
+
     public string DisplayName { get; set; } = string.Empty;
+
+    public string LoginPassword { get; set; } = string.Empty;
 
     public string SubscriptionToken { get; set; } = string.Empty;
 
@@ -1044,12 +1053,16 @@ public sealed class UserFormInput
     public bool Enabled { get; set; } = true;
 
     [Range(0, long.MaxValue, ErrorMessage = "限速不能小于 0。")]
-    public long BytesPerSecond { get; set; }
+    public decimal SpeedLimitValue { get; set; }
+
+    public string SpeedLimitUnit { get; set; } = PlanPresentation.RateUnitMbPerSecond;
 
     [Range(0, int.MaxValue, ErrorMessage = "设备限制不能小于 0。")]
     public int DeviceLimit { get; set; }
 
     public string PlanName { get; set; } = string.Empty;
+
+    public string SubscriptionCycle { get; set; } = string.Empty;
 
     [Range(0, long.MaxValue, ErrorMessage = "总流量不能小于 0。")]
     public long TransferEnableBytes { get; set; }
@@ -1068,6 +1081,8 @@ public sealed class UserFormInput
     public UpsertUserRequest ToRequest()
         => new()
         {
+            Email = NodeFormValueCodec.TrimOrEmpty(Email),
+            LoginPassword = NodeFormValueCodec.TrimOrEmpty(LoginPassword),
             DisplayName = NodeFormValueCodec.TrimOrEmpty(DisplayName),
             SubscriptionToken = NodeFormValueCodec.TrimOrEmpty(SubscriptionToken),
             TrojanPassword = NodeFormValueCodec.TrimOrEmpty(TrojanPassword),
@@ -1077,11 +1092,12 @@ public sealed class UserFormInput
             CommissionRate = CommissionRate,
             GroupId = GroupId,
             Enabled = Enabled,
-            BytesPerSecond = BytesPerSecond,
+            BytesPerSecond = PlanPresentation.ToRateBytesPerSecond(SpeedLimitValue, SpeedLimitUnit),
             DeviceLimit = Math.Max(0, DeviceLimit),
             Subscription = new PanelUserSubscriptionProfile
             {
                 PlanName = NodeFormValueCodec.TrimOrEmpty(PlanName),
+                Cycle = NodeFormValueCodec.TrimOrEmpty(SubscriptionCycle),
                 TransferEnableBytes = Math.Max(0, TransferEnableBytes),
                 ExpiresAt = ParseOptionalDateTimeOffset(ExpiresAt),
                 PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(PurchaseUrl),
@@ -1091,9 +1107,13 @@ public sealed class UserFormInput
         };
 
     public static UserFormInput FromRecord(PanelUserRecord record)
-        => new()
+    {
+        var (speedLimitValue, speedLimitUnit) = PlanPresentation.ToEditableRate(record.BytesPerSecond);
+
+        return new UserFormInput
         {
             UserId = record.UserId,
+            Email = record.Email,
             DisplayName = record.DisplayName,
             SubscriptionToken = record.SubscriptionToken,
             TrojanPassword = record.TrojanPassword,
@@ -1103,15 +1123,18 @@ public sealed class UserFormInput
             CommissionRate = Math.Clamp(record.CommissionRate, 0, 100),
             GroupId = Math.Max(0, record.GroupId),
             Enabled = record.Enabled,
-            BytesPerSecond = Math.Max(0L, record.BytesPerSecond),
+            SpeedLimitValue = speedLimitValue,
+            SpeedLimitUnit = speedLimitUnit,
             DeviceLimit = Math.Max(0, record.DeviceLimit),
             PlanName = record.Subscription.PlanName,
+            SubscriptionCycle = record.Subscription.Cycle,
             TransferEnableBytes = Math.Max(0L, record.Subscription.TransferEnableBytes),
             ExpiresAt = FormatOptionalDateTimeOffset(record.Subscription.ExpiresAt),
             PurchaseUrl = record.Subscription.PurchaseUrl,
             PortalNotice = record.Subscription.PortalNotice,
             NodeIds = string.Join(", ", record.NodeIds)
         };
+    }
 
     private static string FormatOptionalDateTimeOffset(DateTimeOffset? value)
         => value?.ToLocalTime().ToString("yyyy-MM-ddTHH:mm", CultureInfo.InvariantCulture) ?? string.Empty;

@@ -128,7 +128,9 @@ public sealed class PanelStateStore
                 var next = new PanelUserRecord
                 {
                     UserId = payload.UserId,
+                    Email = payload.Request.Email.Trim(),
                     DisplayName = string.IsNullOrWhiteSpace(payload.Request.DisplayName) ? payload.UserId : payload.Request.DisplayName.Trim(),
+                    HasPortalPassword = !string.IsNullOrWhiteSpace(payload.Request.LoginPassword) || current?.HasPortalPassword == true,
                     SubscriptionToken = NormalizeSecret(payload.Request.SubscriptionToken, current?.SubscriptionToken),
                     TrojanPassword = NormalizeSecret(payload.Request.TrojanPassword, current?.TrojanPassword),
                     V2rayUuid = NormalizeUuid(payload.Request.V2rayUuid, current?.V2rayUuid),
@@ -590,6 +592,7 @@ public sealed class PanelStateStore
             Users = state.Users
                 .Select(user => user with
                 {
+                    Email = user.Email.Trim(),
                     DisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.UserId : user.DisplayName.Trim(),
                     SubscriptionToken = user.SubscriptionToken.Trim(),
                     TrojanPassword = user.TrojanPassword.Trim(),

@@ -3,6 +3,7 @@
 @{
     ViewData["Title"] = "系统设置";
     var s = Model.State.Settings;
+    var authSettings = PanelAuthSettings.FromSettings(s);
 }
 
 <section class="page-header">
@@ -41,6 +42,111 @@
                 <span>门户默认公告 (支持基础 HTML)</span>
                 <textarea name="settings[portal_notice]" rows="4" placeholder="用户登录门户时默认看到的公告信息...">@s.GetValueOrDefault("portal_notice")</textarea>
             </label>
+        </div>
+
+        <div style="margin-top: 2rem;">
+            <p class="eyebrow" style="margin-bottom: 1rem;">Authentication</p>
+            <div class="form-grid">
+                <label>
+                    <span>允许用户注册</span>
+                    <select name="settings[@PanelAuthSettingKeys.AllowRegistration]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="true" selected="@(authSettings.AllowRegistration ? "selected" : null)">启用</option>
+                        <option value="false" selected="@(authSettings.AllowRegistration ? null : "selected")">禁用</option>
+                    </select>
+                </label>
+                <label>
+                    <span>仅允许通过邀请码注册</span>
+                    <select name="settings[@PanelAuthSettingKeys.RequireInviteCodeForRegistration]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="true" selected="@(authSettings.RequireInviteCodeForRegistration ? "selected" : null)">启用</option>
+                        <option value="false" selected="@(authSettings.RequireInviteCodeForRegistration ? null : "selected")">禁用</option>
+                    </select>
+                </label>
+                <label>
+                    <span>注册时需要邮箱验证码</span>
+                    <select name="settings[@PanelAuthSettingKeys.RequireRegisterEmailVerification]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="true" selected="@(authSettings.RequireRegisterEmailVerification ? "selected" : null)">启用</option>
+                        <option value="false" selected="@(authSettings.RequireRegisterEmailVerification ? null : "selected")">禁用</option>
+                    </select>
+                </label>
+                <label>
+                    <span>允许忘记密码验证码重置</span>
+                    <select name="settings[@PanelAuthSettingKeys.AllowPasswordResetByEmail]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="true" selected="@(authSettings.AllowPasswordResetByEmail ? "selected" : null)">启用</option>
+                        <option value="false" selected="@(authSettings.AllowPasswordResetByEmail ? null : "selected")">禁用</option>
+                    </select>
+                </label>
+                <label>
+                    <span>每个用户最多邀请码数量</span>
+                    <input name="settings[@PanelAuthSettingKeys.MaxInviteCodesPerUser]" value="@authSettings.MaxInviteCodesPerUser" placeholder="1" />
+                    <small>`0` 表示不限制；注册成功自动生成的邀请码也会计入这个数量。</small>
+                </label>
+            </div>
+        </div>
+
+        <div style="margin-top: 2rem;">
+            <p class="eyebrow" style="margin-bottom: 1rem;">SMTP</p>
+            <div class="form-grid">
+                <label>
+                    <span>SMTP 服务器</span>
+                    <input name="settings[@PanelAuthSettingKeys.SmtpHost]" value="@authSettings.SmtpHost" placeholder="smtp.example.com" />
+                </label>
+                <label>
+                    <span>SMTP 端口</span>
+                    <input name="settings[@PanelAuthSettingKeys.SmtpPort]" value="@authSettings.SmtpPort" placeholder="465" />
+                </label>
+                <label>
+                    <span>SMTP 用户名</span>
+                    <input name="settings[@PanelAuthSettingKeys.SmtpUsername]" value="@authSettings.SmtpUsername" placeholder="mailer@example.com" />
+                </label>
+                <label>
+                    <span>SMTP 密码</span>
+                    <input name="settings[@PanelAuthSettingKeys.SmtpPassword]" value="@authSettings.SmtpPassword" type="password" placeholder="SMTP 授权密码" />
+                </label>
+                <label>
+                    <span>发件邮箱</span>
+                    <input name="settings[@PanelAuthSettingKeys.SmtpFromAddress]" value="@authSettings.SmtpFromAddress" placeholder="mailer@example.com" />
+                </label>
+                <label>
+                    <span>发件人名称</span>
+                    <input name="settings[@PanelAuthSettingKeys.SmtpFromName]" value="@authSettings.SmtpFromName" placeholder="NodePanel" />
+                </label>
+                <label>
+                    <span>SMTP SSL</span>
+                    <select name="settings[@PanelAuthSettingKeys.SmtpEnableSsl]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="true" selected="@(authSettings.SmtpEnableSsl ? "selected" : null)">启用</option>
+                        <option value="false" selected="@(authSettings.SmtpEnableSsl ? null : "selected")">禁用</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+
+        <div style="margin-top: 2rem;">
+            <p class="eyebrow" style="margin-bottom: 1rem;">POP</p>
+            <div class="form-grid">
+                <label>
+                    <span>POP 服务器</span>
+                    <input name="settings[@PanelAuthSettingKeys.PopHost]" value="@authSettings.PopHost" placeholder="pop.example.com" />
+                </label>
+                <label>
+                    <span>POP 端口</span>
+                    <input name="settings[@PanelAuthSettingKeys.PopPort]" value="@authSettings.PopPort" placeholder="995" />
+                </label>
+                <label>
+                    <span>POP 用户名</span>
+                    <input name="settings[@PanelAuthSettingKeys.PopUsername]" value="@authSettings.PopUsername" placeholder="mailer@example.com" />
+                </label>
+                <label>
+                    <span>POP 密码</span>
+                    <input name="settings[@PanelAuthSettingKeys.PopPassword]" value="@authSettings.PopPassword" type="password" placeholder="POP 授权密码" />
+                </label>
+                <label>
+                    <span>POP SSL</span>
+                    <select name="settings[@PanelAuthSettingKeys.PopEnableSsl]" style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
+                        <option value="true" selected="@(authSettings.PopEnableSsl ? "selected" : null)">启用</option>
+                        <option value="false" selected="@(authSettings.PopEnableSsl ? null : "selected")">禁用</option>
+                    </select>
+                </label>
+            </div>
         </div>
 
         <div style="margin-top: 2rem;">

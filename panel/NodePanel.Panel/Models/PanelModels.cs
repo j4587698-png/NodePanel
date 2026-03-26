@@ -123,7 +123,11 @@ public sealed record PanelUserRecord
 {
     public string UserId { get; init; } = string.Empty;
 
+    public string Email { get; init; } = string.Empty;
+
     public string DisplayName { get; init; } = string.Empty;
+
+    public bool HasPortalPassword { get; init; }
 
     public string SubscriptionToken { get; init; } = string.Empty;
 
@@ -177,6 +181,10 @@ public sealed record UpsertNodeRequest
 
 public sealed record UpsertUserRequest
 {
+    public string Email { get; init; } = string.Empty;
+
+    public string LoginPassword { get; init; } = string.Empty;
+
     public string DisplayName { get; init; } = string.Empty;
 
     public string SubscriptionToken { get; init; } = string.Empty;

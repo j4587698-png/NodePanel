@@ -58,6 +58,9 @@ public class UserEntity
     [Column(DbType = "varchar(64)")]
     public string InviteUserId { get; set; } = string.Empty;
 
+    [Column(DbType = "varchar(64)")]
+    public string AppliedInviteCode { get; set; } = string.Empty;
+
     [Column(DbType = "decimal(10,2)")]
     public decimal CommissionBalance { get; set; } = 0m;
 
@@ -73,7 +76,9 @@ public class UserEntity
     public PanelUserRecord ToRecord() => new PanelUserRecord
     {
         UserId = UserId,
+        Email = NodeFormValueCodec.TrimOrEmpty(Email),
         DisplayName = NodeFormValueCodec.TrimOrEmpty(DisplayName),
+        HasPortalPassword = !string.IsNullOrWhiteSpace(PasswordHash),
         SubscriptionToken = NodeFormValueCodec.TrimOrEmpty(SubscriptionToken),
         TrojanPassword = NodeFormValueCodec.TrimOrEmpty(TrojanPassword),
         V2rayUuid = NodeFormValueCodec.TrimOrEmpty(V2rayUuid),
@@ -98,6 +103,7 @@ public class UserEntity
 
     public void ApplyRecord(PanelUserRecord record)
     {
+        Email = record.Email;
         DisplayName = record.DisplayName;
         SubscriptionToken = record.SubscriptionToken;
         TrojanPassword = record.TrojanPassword;
@@ -399,6 +405,48 @@ public class InviteCodeEntity
     public string UserId { get; set; } = string.Empty;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+[Table(Name = "np_email_verification_codes")]
+public class EmailVerificationCodeEntity
+{
+    [Column(IsPrimary = true)]
+    public string VerificationId { get; set; } = string.Empty;
+
+    public string Email { get; set; } = string.Empty;
+
+    public string Purpose { get; set; } = string.Empty;
+
+    public string Code { get; set; } = string.Empty;
+
+    public long ExpiresAtUnixMilliseconds { get; set; }
+
+    public long CreatedAtUnixMilliseconds { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    public long? UsedAtUnixMilliseconds { get; set; }
+
+    [NotMapped]
+    public DateTimeOffset ExpiresAt
+    {
+        get => DateTimeOffset.FromUnixTimeMilliseconds(ExpiresAtUnixMilliseconds);
+        set => ExpiresAtUnixMilliseconds = value.ToUnixTimeMilliseconds();
+    }
+
+    [NotMapped]
+    public DateTimeOffset CreatedAt
+    {
+        get => DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtUnixMilliseconds);
+        set => CreatedAtUnixMilliseconds = value.ToUnixTimeMilliseconds();
+    }
+
+    [NotMapped]
+    public DateTimeOffset? UsedAt
+    {
+        get => UsedAtUnixMilliseconds.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(UsedAtUnixMilliseconds.Value)
+            : null;
+        set => UsedAtUnixMilliseconds = value?.ToUnixTimeMilliseconds();
+    }
 }
 
 [Table(Name = "np_commission_logs")]

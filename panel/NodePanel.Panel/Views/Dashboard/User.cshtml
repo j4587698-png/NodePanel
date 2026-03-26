@@ -11,16 +11,35 @@
         new { Value = "one_time", Label = "一次性 (长期有效 / 不重置)" },
         new { Value = "reset_price", Label = "流量重置包 (立即重置一次)" }
     };
+    var speedUnitOptions = new[]
+    {
+        PlanPresentation.RateUnitKbPerSecond,
+        PlanPresentation.RateUnitMbPerSecond,
+        PlanPresentation.RateUnitGbPerSecond
+    };
+    var currentPlanName = string.IsNullOrWhiteSpace(Model.Form.PlanName) ? "未分配套餐" : Model.Form.PlanName;
+    var currentTrafficText = Model.Form.TransferEnableBytes > 0 ? PlanPresentation.FormatTraffic(Model.Form.TransferEnableBytes) : "未限制";
+    var currentCycleText = string.IsNullOrWhiteSpace(Model.Form.SubscriptionCycle)
+        ? "未设置"
+        : $"{PlanPresentation.GetCycleDisplayName(Model.Form.SubscriptionCycle)} · {PlanPresentation.GetCycleSummaryText(Model.Form.SubscriptionCycle)}";
+    var currentExpiresAtText = string.IsNullOrWhiteSpace(Model.Form.ExpiresAt)
+        ? "长期有效"
+        : Model.Form.ExpiresAt.Replace("T", " ");
+    var portalLoginStatus = string.IsNullOrWhiteSpace(Model.Form.Email)
+        ? "未配置邮箱登录"
+        : Model.HasPortalPassword
+            ? "已设置密码"
+            : "待设置密码";
 }
 
 <section class="page-header">
     <div>
         <p class="eyebrow">User Editor</p>
         <h2>@ViewData["Title"]</h2>
-        <p class="muted">管理 Trojan 凭据、订阅令牌、用户门户地址，以及面向套餐系统的商业信息。</p>
+        <p class="muted">只保留管理员真正需要处理的资料：用户名、登录邮箱、登录密码、权限组、限速和套餐操作。订阅令牌、Trojan 密码、用户 ID 这类系统字段统一后台生成。</p>
     </div>
     <div class="page-actions">
-        <a class="button" asp-action="Index">返回总览</a>
+        <a class="button" asp-action="Users">返回用户列表</a>
     </div>
 </section>
 
@@ -29,75 +48,157 @@
     <div class="notice">@Model.StatusMessage</div>
 }
 
-<section class="card">
-    <div class="card__header">
-        <div>
-            <p class="eyebrow">Portal</p>
-            <h3>订阅入口</h3>
+@if (Model.IsEditMode)
+{
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Portal</p>
+                <h3>订阅入口</h3>
+            </div>
+            <div class="page-actions">
+                @if (!string.IsNullOrWhiteSpace(Model.PortalUrl))
+                {
+                    <a class="button" href="@Model.PortalUrl" target="_blank" rel="noreferrer">打开门户</a>
+                }
+                <form asp-action="ResetUserSubscriptionToken" asp-route-userId="@Model.Form.UserId" method="post" class="inline-form" onsubmit="return confirm('确定要重置订阅令牌吗？旧链接会立即失效。');">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="button">重置订阅令牌</button>
+                </form>
+            </div>
         </div>
-    </div>
-    <div class="stats">
-        <div>
-            <dt>用户门户 URL</dt>
-            <dd class="mono">@(string.IsNullOrWhiteSpace(Model.PortalUrl) ? "-" : Model.PortalUrl)</dd>
+        <div class="stats">
+            <div>
+                <dt>用户 ID</dt>
+                <dd class="mono">@Model.Form.UserId</dd>
+            </div>
+            <div>
+                <dt>前台登录</dt>
+                <dd>@portalLoginStatus</dd>
+            </div>
+            <div>
+                <dt>登录邮箱</dt>
+                <dd>@(string.IsNullOrWhiteSpace(Model.Form.Email) ? "-" : Model.Form.Email)</dd>
+            </div>
+            <div>
+                <dt>标准订阅 URL</dt>
+                <dd class="mono">@(string.IsNullOrWhiteSpace(Model.SubscriptionUrl) ? "-" : Model.SubscriptionUrl)</dd>
+            </div>
+            <div>
+                <dt>用户门户 URL</dt>
+                <dd class="mono">@(string.IsNullOrWhiteSpace(Model.PortalUrl) ? "-" : Model.PortalUrl)</dd>
+            </div>
+            <div>
+                <dt>当前套餐</dt>
+                <dd>@currentPlanName</dd>
+            </div>
         </div>
-        <div>
-            <dt>标准订阅 URL</dt>
-            <dd class="mono">@(string.IsNullOrWhiteSpace(Model.SubscriptionUrl) ? "-" : Model.SubscriptionUrl)</dd>
-        </div>
-    </div>
-</section>
+    </section>
+}
 
 <section class="card">
     <div class="card__header">
         <div>
-            <p class="eyebrow">Save</p>
-            <h3>保存用户</h3>
+            <p class="eyebrow">Account</p>
+            <h3>基础资料</h3>
         </div>
     </div>
     <form asp-action="SaveUser" method="post" class="form">
         @Html.AntiForgeryToken()
         <div asp-validation-summary="All" class="error-box"></div>
 
+        <input asp-for="Form.UserId" type="hidden" />
+        <input asp-for="Form.SubscriptionToken" type="hidden" />
+        <input asp-for="Form.TrojanPassword" type="hidden" />
+        <input asp-for="Form.V2rayUuid" type="hidden" />
+        <input asp-for="Form.PlanName" type="hidden" />
+        <input asp-for="Form.SubscriptionCycle" type="hidden" />
+        <input asp-for="Form.TransferEnableBytes" type="hidden" />
+        <input asp-for="Form.NodeIds" type="hidden" />
+
         <div class="form-grid">
-            <label><span>用户 ID</span><input asp-for="Form.UserId" /></label>
-            <label><span>显示名</span><input asp-for="Form.DisplayName" /></label>
             <label>
-                <span>权限组 (Group ID)</span>
+                <span>用户名</span>
+                <input asp-for="Form.DisplayName" placeholder="例如：Alice / VIP-001" />
+            </label>
+            <label>
+                <span>登录邮箱</span>
+                <input asp-for="Form.Email" type="email" placeholder="user@example.com" />
+            </label>
+            <label>
+                <span>登录密码</span>
+                <input asp-for="Form.LoginPassword" type="password" placeholder="@(Model.IsEditMode ? "留空则不修改密码" : "留空则暂不启用邮箱密码登录")" />
+            </label>
+            <label>
+                <span>权限组</span>
                 <select asp-for="Form.GroupId">
                     @if (Model.AvailableGroups.Count == 0)
                     {
-                        <option value="0">暂无配置，请前往权限组管理添加</option>
+                        <option value="0">暂无权限组，请先创建</option>
                     }
                     else
                     {
-                        @foreach (var g in Model.AvailableGroups)
+                        @foreach (var group in Model.AvailableGroups)
                         {
-                            <option value="@g.GroupId">@g.Name (@g.GroupId)</option>
+                            <option value="@group.GroupId">@group.Name (@group.GroupId)</option>
                         }
                     }
                 </select>
             </label>
-            <label><span>订阅令牌</span><input asp-for="Form.SubscriptionToken" /></label>
-            <label><span>Trojan 密码</span><input asp-for="Form.TrojanPassword" /></label>
-            <label><span>上级推荐人 User ID</span><input asp-for="Form.InviteUserId" /></label>
-            <label><span>返利余额 (Commission)</span><input asp-for="Form.CommissionBalance" type="number" step="0.01" /></label>
-            <label><span>返利比例 (Commission Rate %)</span><input asp-for="Form.CommissionRate" type="number" /></label>
-            <label><span>限速 (B/s)</span><input asp-for="Form.BytesPerSecond" /></label>
-            <label><span>设备 / 在线 IP 限制 (0=不限)</span><input asp-for="Form.DeviceLimit" type="number" /></label>
-            <label><span>节点范围 (硬性追加, 留空忽略)</span><input asp-for="Form.NodeIds" /></label>
-            <label><span>套餐名称</span><input asp-for="Form.PlanName" /></label>
-            <label><span>套餐总流量 (Bytes)</span><input asp-for="Form.TransferEnableBytes" /></label>
-            <label><span>到期时间</span><input asp-for="Form.ExpiresAt" type="datetime-local" /></label>
-            <label><span>续费/升级地址</span><input asp-for="Form.PurchaseUrl" /></label>
+            <label>
+                <span>限速数值</span>
+                <input asp-for="Form.SpeedLimitValue" type="number" min="0" step="0.01" placeholder="0" />
+                <small class="muted">填 0 表示不限速。</small>
+            </label>
+            <label>
+                <span>限速单位</span>
+                <select asp-for="Form.SpeedLimitUnit">
+                    @foreach (var unit in speedUnitOptions)
+                    {
+                        <option value="@unit">@unit</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>设备 / 在线 IP 限制</span>
+                <input asp-for="Form.DeviceLimit" type="number" min="0" placeholder="0" />
+                <small class="muted">填 0 表示不限制。</small>
+            </label>
+            <label>
+                <span>到期时间</span>
+                <input asp-for="Form.ExpiresAt" type="datetime-local" />
+                <small class="muted">仅调整当前用户的到期时间，不会改动套餐模板。</small>
+            </label>
+            <label class="form-grid__span-2">
+                <span>续费 / 升级地址</span>
+                <input asp-for="Form.PurchaseUrl" placeholder="https://billing.example.com/upgrade" />
+            </label>
             <label class="form-grid__span-2">
                 <span>门户公告</span>
-                <textarea asp-for="Form.PortalNotice" rows="3"></textarea>
+                <textarea asp-for="Form.PortalNotice" rows="3" placeholder="用户在门户首页看到的提示信息。"></textarea>
             </label>
         </div>
 
+        <details>
+            <summary style="cursor: pointer; font-weight: 600;">高级资料</summary>
+            <div class="form-grid" style="margin-top: 1rem;">
+                <label>
+                    <span>上级推荐人 User ID</span>
+                    <input asp-for="Form.InviteUserId" placeholder="留空表示无推荐人" />
+                </label>
+                <label>
+                    <span>返利比例 (%)</span>
+                    <input asp-for="Form.CommissionRate" type="number" min="0" max="100" placeholder="0" />
+                </label>
+                <label>
+                    <span>返利余额</span>
+                    <input asp-for="Form.CommissionBalance" type="number" min="0" step="0.01" placeholder="0.00" />
+                </label>
+            </div>
+        </details>
+
         <div class="checkbox-row">
-            <label><input asp-for="Form.Enabled" /> 用户启用</label>
+            <label><input asp-for="Form.Enabled" /> 启用用户</label>
         </div>
 
         <div class="page-actions">
@@ -106,46 +207,74 @@
     </form>
 </section>
 
-@if (Model.IsEditMode)
-{
-    <section class="card" style="margin-top: 24px;">
-        <div class="card__header">
-            <div>
-                <p class="eyebrow">Quick Actions</p>
-                <h3>快捷操作 (需先保存基本信息)</h3>
+<section class="card">
+    <div class="card__header">
+        <div>
+            <p class="eyebrow">Subscription</p>
+            <h3>套餐与流量</h3>
+        </div>
+    </div>
+    <div class="stats">
+        <div>
+            <dt>当前套餐</dt>
+            <dd>@currentPlanName</dd>
+        </div>
+        <div>
+            <dt>总流量</dt>
+            <dd>@currentTrafficText</dd>
+        </div>
+        <div>
+            <dt>周期</dt>
+            <dd>@currentCycleText</dd>
+        </div>
+        <div>
+            <dt>到期时间</dt>
+            <dd>@currentExpiresAtText</dd>
+        </div>
+        <div>
+            <dt>当前限速</dt>
+            <dd>@PlanPresentation.FormatRate(PlanPresentation.ToRateBytesPerSecond(Model.Form.SpeedLimitValue, Model.Form.SpeedLimitUnit))</dd>
+        </div>
+    </div>
+
+    @if (Model.IsEditMode)
+    {
+        <div class="form" style="margin-top: 24px;">
+            <p class="muted">套餐信息不再手工逐项填写。先保存基础资料，然后直接在这里选择套餐模板和周期；0 元周期会立即生效。</p>
+            <div class="form-grid" style="align-items: end;">
+                <form asp-action="ApplyPlanToUser" asp-route-userId="@Model.Form.UserId" method="post" style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;" onsubmit="return confirm('确定要应用这个套餐吗？这会覆盖当前用户的套餐信息；如果选择流量重置包，则在支付完成后仅重置流量。');">
+                    @Html.AntiForgeryToken()
+                    <label style="flex: 1; margin: 0; min-width: 220px;">
+                        <span>套餐模板</span>
+                        <select name="planId" required>
+                            <option value="">-- 选择套餐 --</option>
+                            @foreach (var plan in Model.Plans)
+                            {
+                                <option value="@plan.PlanId">@plan.Name (@PlanPresentation.FormatTraffic(plan.TransferEnableBytes))</option>
+                            }
+                        </select>
+                    </label>
+                    <label style="flex: 1; margin: 0; min-width: 240px;">
+                        <span>周期</span>
+                        <select name="cycle" required>
+                            @foreach (var option in cycleOptions)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </select>
+                    </label>
+                    <button type="submit" class="button button--primary">应用套餐</button>
+                </form>
+
+                <form asp-action="ResetUserTraffic" asp-route-userId="@Model.Form.UserId" method="post" onsubmit="return confirm('确定要清零该用户的当月流量记录吗？');">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="button">重置已用流量</button>
+                </form>
             </div>
         </div>
-
-        <div class="form-grid" style="align-items: flex-end;">
-            <form asp-action="ApplyPlanToUser" asp-route-userId="@Model.Form.UserId" method="post" style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;" onsubmit="return confirm('确定要应用这个套餐吗？这会覆盖当前用户的套餐信息；如果选择流量重置包，则在支付完成后仅重置流量。');">
-                @Html.AntiForgeryToken()
-                <label style="flex: 1; margin: 0; min-width: 190px;">
-                    <span style="display: block; margin-bottom: 4px; font-weight: 500;">分配基础套餐</span>
-                    <select name="planId" required style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
-                        <option value="">-- 选择套餐 --</option>
-                        @foreach (var plan in Model.Plans)
-                        {
-                            <option value="@plan.PlanId">@plan.Name (@PlanPresentation.FormatTraffic(plan.TransferEnableBytes))</option>
-                        }
-                    </select>
-                </label>
-                <label style="flex: 1; margin: 0; min-width: 240px;">
-                    <span style="display: block; margin-bottom: 4px; font-weight: 500;">周期</span>
-                    <select name="cycle" required style="width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-bg);">
-                        @foreach (var option in cycleOptions)
-                        {
-                            <option value="@option.Value">@option.Label</option>
-                        }
-                    </select>
-                    <small class="muted" style="display:block; margin-top: 6px;">只允许选择套餐里已配置价格的周期，0 元周期会直接成功。</small>
-                </label>
-                <button type="submit" class="button button--primary" style="height: 38px;">应用</button>
-            </form>
-
-            <form asp-action="ResetUserTraffic" asp-route-userId="@Model.Form.UserId" method="post" onsubmit="return confirm('确定要清零该用户的当月流量记录吗？');">
-                @Html.AntiForgeryToken()
-                <button type="submit" class="button" style="color: var(--admin-warn); height: 38px;">重置已用流量</button>
-            </form>
-        </div>
-    </section>
-}
+    }
+    else
+    {
+        <p class="muted" style="margin-top: 24px;">新用户保存成功后，可回到该页面直接选择套餐模板并分配周期。</p>
+    }
+</section>

@@ -18,6 +18,10 @@ namespace NodePanel.ControlPlane.Protocol;
 [JsonSerializable(typeof(NodeStatusPayload))]
 [JsonSerializable(typeof(NodeInboundStatusPayload))]
 [JsonSerializable(typeof(CertificateStatusPayload))]
+[JsonSerializable(typeof(NodeLocalProxyStatusPayload))]
+[JsonSerializable(typeof(NodeStrategyOutboundStatusPayload))]
+[JsonSerializable(typeof(NodeStrategyCandidateProbePayload))]
+[JsonSerializable(typeof(NodeHostResourcePayload))]
 [JsonSerializable(typeof(UserTrafficDelta))]
 [JsonSerializable(typeof(HealthPayload))]
 [JsonSerializable(typeof(NodeServiceConfig))]
@@ -40,6 +44,9 @@ namespace NodePanel.ControlPlane.Protocol;
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(List<UserTrafficDelta>))]
+[JsonSerializable(typeof(List<NodeLocalProxyStatusPayload>))]
+[JsonSerializable(typeof(List<NodeStrategyOutboundStatusPayload>))]
+[JsonSerializable(typeof(List<NodeStrategyCandidateProbePayload>))]
 public partial class ControlPlaneJsonSerializerContext : JsonSerializerContext
 {
 }

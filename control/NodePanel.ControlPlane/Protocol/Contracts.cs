@@ -113,6 +113,12 @@ public sealed record NodeStatusPayload
     public required IReadOnlyList<NodeInboundStatusPayload> Inbounds { get; init; }
 
     public required CertificateStatusPayload Certificate { get; init; }
+
+    public IReadOnlyList<NodeLocalProxyStatusPayload> LocalProxies { get; init; } = Array.Empty<NodeLocalProxyStatusPayload>();
+
+    public IReadOnlyList<NodeStrategyOutboundStatusPayload> OutboundStrategies { get; init; } = Array.Empty<NodeStrategyOutboundStatusPayload>();
+
+    public NodeHostResourcePayload? Host { get; init; }
 }
 
 public sealed record CertificateStatusPayload
@@ -134,6 +140,70 @@ public sealed record CertificateStatusPayload
     public DateTimeOffset? LastAttemptAt { get; init; }
 
     public DateTimeOffset? LastSuccessAt { get; init; }
+
+    public string? Error { get; init; }
+}
+
+public sealed record NodeLocalProxyStatusPayload
+{
+    public string Tag { get; init; } = string.Empty;
+
+    public string Protocol { get; init; } = string.Empty;
+
+    public string ListenAddress { get; init; } = string.Empty;
+
+    public int Port { get; init; }
+
+    public bool Listening { get; init; }
+
+    public DateTimeOffset? LastStartedAt { get; init; }
+
+    public string? Error { get; init; }
+}
+
+public sealed record NodeStrategyOutboundStatusPayload
+{
+    public string Tag { get; init; } = string.Empty;
+
+    public string Protocol { get; init; } = string.Empty;
+
+    public string SelectedTag { get; init; } = string.Empty;
+
+    public string ProbeUrl { get; init; } = string.Empty;
+
+    public IReadOnlyList<NodeStrategyCandidateProbePayload> Candidates { get; init; } = Array.Empty<NodeStrategyCandidateProbePayload>();
+}
+
+public sealed record NodeStrategyCandidateProbePayload
+{
+    public string Tag { get; init; } = string.Empty;
+
+    public bool Success { get; init; }
+
+    public long? LatencyMilliseconds { get; init; }
+
+    public DateTimeOffset? CheckedAt { get; init; }
+}
+
+public sealed record NodeHostResourcePayload
+{
+    public int CpuLogicalCores { get; init; }
+
+    public double? CpuUsagePercent { get; init; }
+
+    public long? TotalMemoryBytes { get; init; }
+
+    public long? AvailableMemoryBytes { get; init; }
+
+    public long? ProcessWorkingSetBytes { get; init; }
+
+    public double? LoadAverage1m { get; init; }
+
+    public double? LoadAverage5m { get; init; }
+
+    public double? LoadAverage15m { get; init; }
+
+    public long? UptimeSeconds { get; init; }
 
     public string? Error { get; init; }
 }

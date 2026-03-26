@@ -17,7 +17,7 @@ public sealed class PanelHttpsRuntime : IDisposable
     private X509Certificate2? _currentCertificate;
     private X509Certificate2? _fallbackCertificate;
     private PanelHttpsRuntimeSnapshot _snapshot = new();
-    private bool _listenerConfigured;
+    private bool _httpsListenerConfigured;
     private int _activeHttpsPort = 443;
 
     public PanelHttpsRuntime(PanelOptions options)
@@ -33,12 +33,12 @@ public sealed class PanelHttpsRuntime : IDisposable
         return snapshot;
     }
 
-    public void MarkListenerConfigured(PanelHttpsRuntimeSnapshot snapshot)
+    public void MarkListenerConfigured(int? httpsPort)
     {
         lock (_sync)
         {
-            _listenerConfigured = true;
-            _activeHttpsPort = snapshot.Port is > 0 and <= 65535 ? snapshot.Port : 443;
+            _httpsListenerConfigured = httpsPort is > 0 and <= 65535;
+            _activeHttpsPort = _httpsListenerConfigured ? httpsPort!.Value : 443;
         }
     }
 
@@ -61,8 +61,7 @@ public sealed class PanelHttpsRuntime : IDisposable
     {
         var snapshot = GetSnapshot();
         var pathValue = requestPath.Value ?? string.Empty;
-        return snapshot.Enabled &&
-               IsListenerConfigured() &&
+        return IsListenerConfigured() &&
                snapshot.RedirectHttpToHttps &&
                !pathValue.StartsWith("/.well-known/acme-challenge", StringComparison.OrdinalIgnoreCase) &&
                !pathValue.StartsWith("/control/ws", StringComparison.OrdinalIgnoreCase);
@@ -119,7 +118,7 @@ public sealed class PanelHttpsRuntime : IDisposable
     {
         lock (_sync)
         {
-            return _listenerConfigured;
+            return _httpsListenerConfigured;
         }
     }
 
@@ -147,10 +146,7 @@ public sealed class PanelHttpsRuntime : IDisposable
 
     private PanelHttpsRuntimeSnapshot ReadSnapshot()
     {
-        var defaultSnapshot = new PanelHttpsRuntimeSnapshot
-        {
-            Enabled = true
-        };
+        var defaultSnapshot = new PanelHttpsRuntimeSnapshot();
 
         if (string.IsNullOrWhiteSpace(_options.DbType) || string.IsNullOrWhiteSpace(_options.DbConnectionString))
         {
@@ -167,9 +163,6 @@ public sealed class PanelHttpsRuntime : IDisposable
             var form = PanelHttpsSettingsFormInput.FromSettings(settings);
             var snapshot = new PanelHttpsRuntimeSnapshot
             {
-                Enabled = form.Enabled,
-                ListenAddress = string.IsNullOrWhiteSpace(form.ListenAddress) ? "0.0.0.0" : NodeFormValueCodec.TrimOrEmpty(form.ListenAddress),
-                Port = form.Port is > 0 and <= 65535 ? form.Port : 443,
                 RedirectHttpToHttps = form.RedirectHttpToHttps,
                 CertificateId = NodeFormValueCodec.TrimOrEmpty(form.CertificateId)
             };
@@ -268,11 +261,6 @@ public sealed class PanelHttpsRuntime : IDisposable
             TryAddSubjectAlternativeName(sanBuilder, serverName);
         }
 
-        if (!string.IsNullOrWhiteSpace(snapshot.ListenAddress))
-        {
-            TryAddSubjectAlternativeName(sanBuilder, snapshot.ListenAddress);
-        }
-
         request.CertificateExtensions.Add(sanBuilder.Build());
 
         var notBefore = DateTimeOffset.UtcNow.AddMinutes(-5);
@@ -334,12 +322,6 @@ public sealed class PanelHttpsRuntime : IDisposable
 
 public sealed record PanelHttpsRuntimeSnapshot
 {
-    public bool Enabled { get; init; }
-
-    public string ListenAddress { get; init; } = "0.0.0.0";
-
-    public int Port { get; init; } = 443;
-
     public bool RedirectHttpToHttps { get; init; }
 
     public string CertificateId { get; init; } = string.Empty;

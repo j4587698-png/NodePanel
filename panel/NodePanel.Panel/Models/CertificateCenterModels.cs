@@ -623,48 +623,21 @@ public sealed class PanelCertificateFormInput
 
 public sealed class PanelHttpsSettingsFormInput
 {
-    public bool Enabled { get; set; } = true;
-
     public string CertificateId { get; set; } = string.Empty;
-
-    public string ListenAddress { get; set; } = "0.0.0.0";
-
-    [Range(1, 65535, ErrorMessage = "Panel HTTPS 端口必须在 1 到 65535 之间。")]
-    public int Port { get; set; } = 443;
 
     public bool RedirectHttpToHttps { get; set; }
 
     public PanelHttpsSettingsFormInput Normalize()
         => new()
         {
-            Enabled = Enabled,
             CertificateId = NodeFormValueCodec.TrimOrEmpty(CertificateId),
-            ListenAddress = string.IsNullOrWhiteSpace(ListenAddress) ? "0.0.0.0" : NodeFormValueCodec.TrimOrEmpty(ListenAddress),
-            Port = Port is > 0 and <= 65535 ? Port : 443,
             RedirectHttpToHttps = RedirectHttpToHttps
         };
-
-    public bool RequiresProcessRestart(PanelHttpsSettingsFormInput previous)
-    {
-        ArgumentNullException.ThrowIfNull(previous);
-
-        var current = Normalize();
-        var before = previous.Normalize();
-        return !string.Equals(current.ListenAddress, before.ListenAddress, StringComparison.OrdinalIgnoreCase) ||
-               current.Port != before.Port;
-    }
 
     public static PanelHttpsSettingsFormInput FromSettings(IReadOnlyDictionary<string, string> settings)
         => new()
         {
-            Enabled = !bool.TryParse(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsEnabled), out var enabled) || enabled,
             CertificateId = settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsCertificateId) ?? string.Empty,
-            ListenAddress = string.IsNullOrWhiteSpace(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsListenAddress))
-                ? "0.0.0.0"
-                : settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsListenAddress)!.Trim(),
-            Port = int.TryParse(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsPort), out var port) && port is > 0 and <= 65535
-                ? port
-                : 443,
             RedirectHttpToHttps = bool.TryParse(settings.GetValueOrDefault(PanelSettingKeys.PanelHttpsRedirectHttp), out var redirect) && redirect
         };
 
@@ -673,10 +646,7 @@ public sealed class PanelHttpsSettingsFormInput
         var normalized = Normalize();
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [PanelSettingKeys.PanelHttpsEnabled] = normalized.Enabled ? "true" : "false",
             [PanelSettingKeys.PanelHttpsCertificateId] = normalized.CertificateId,
-            [PanelSettingKeys.PanelHttpsListenAddress] = normalized.ListenAddress,
-            [PanelSettingKeys.PanelHttpsPort] = normalized.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             [PanelSettingKeys.PanelHttpsRedirectHttp] = normalized.RedirectHttpToHttps ? "true" : "false"
         };
     }

@@ -1,6 +1,8 @@
 using NodePanel.ControlPlane.Configuration;
 using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
+using Microsoft.Extensions.Configuration;
+using NodePanel.Panel.Services;
 
 namespace NodePanel.Service.Tests;
 
@@ -117,7 +119,9 @@ public sealed class PanelFormNullSafetyTests
         var form = new UserFormInput
         {
             UserId = "user-a",
+            Email = null!,
             DisplayName = null!,
+            LoginPassword = null!,
             SubscriptionToken = null!,
             TrojanPassword = null!,
             V2rayUuid = null!,
@@ -131,6 +135,8 @@ public sealed class PanelFormNullSafetyTests
 
         var request = form.ToRequest();
 
+        Assert.Equal(string.Empty, request.Email);
+        Assert.Equal(string.Empty, request.LoginPassword);
         Assert.Equal(string.Empty, request.DisplayName);
         Assert.Equal(string.Empty, request.SubscriptionToken);
         Assert.Equal(string.Empty, request.InviteUserId);
@@ -272,14 +278,13 @@ public sealed class PanelFormNullSafetyTests
     {
         var form = new PanelHttpsSettingsFormInput
         {
-            CertificateId = null!,
-            ListenAddress = null!
+            CertificateId = null!
         };
 
         var normalized = form.Normalize();
 
         Assert.Equal(string.Empty, normalized.CertificateId);
-        Assert.Equal("0.0.0.0", normalized.ListenAddress);
+        Assert.False(normalized.RedirectHttpToHttps);
     }
 
     [Fact]
@@ -432,7 +437,8 @@ public sealed class PanelFormNullSafetyTests
 
         Assert.Equal(100, form.CommissionRate);
         Assert.Equal(0, form.GroupId);
-        Assert.Equal(0L, form.BytesPerSecond);
+        Assert.Equal(0m, form.SpeedLimitValue);
+        Assert.Equal(PlanPresentation.RateUnitMbPerSecond, form.SpeedLimitUnit);
         Assert.Equal(0, form.DeviceLimit);
         Assert.Equal(0L, form.TransferEnableBytes);
     }
@@ -453,56 +459,57 @@ public sealed class PanelFormNullSafetyTests
     }
 
     [Fact]
-    public void PanelHttpsSettingsFormInput_requires_restart_only_for_listener_changes()
+    public void PanelHttpsSettingsFormInput_to_settings_only_persists_certificate_and_redirect()
     {
-        var previous = new PanelHttpsSettingsFormInput
+        var form = new PanelHttpsSettingsFormInput
         {
-            Enabled = false,
-            CertificateId = string.Empty,
-            ListenAddress = "0.0.0.0",
-            Port = 443,
-            RedirectHttpToHttps = false
+            CertificateId = " panel-cert ",
+            RedirectHttpToHttps = true
         };
 
-        Assert.False(
-            new PanelHttpsSettingsFormInput
-            {
-                Enabled = true,
-                CertificateId = string.Empty,
-                ListenAddress = "0.0.0.0",
-                Port = 443,
-                RedirectHttpToHttps = true
-            }.RequiresProcessRestart(previous));
+        var settings = form.ToSettings();
 
-        Assert.False(
-            new PanelHttpsSettingsFormInput
-            {
-                Enabled = false,
-                CertificateId = "panel-cert",
-                ListenAddress = "0.0.0.0",
-                Port = 443,
-                RedirectHttpToHttps = false
-            }.RequiresProcessRestart(previous));
+        Assert.Equal("panel-cert", settings[PanelSettingKeys.PanelHttpsCertificateId]);
+        Assert.Equal("true", settings[PanelSettingKeys.PanelHttpsRedirectHttp]);
+        Assert.DoesNotContain(PanelSettingKeys.PanelHttpsEnabled, settings.Keys);
+        Assert.DoesNotContain(PanelSettingKeys.PanelHttpsListenAddress, settings.Keys);
+        Assert.DoesNotContain(PanelSettingKeys.PanelHttpsPort, settings.Keys);
+    }
 
-        Assert.True(
-            new PanelHttpsSettingsFormInput
-            {
-                Enabled = false,
-                CertificateId = string.Empty,
-                ListenAddress = "127.0.0.1",
-                Port = 443,
-                RedirectHttpToHttps = false
-            }.RequiresProcessRestart(previous));
+    [Fact]
+    public void PanelListenerBindingRules_prefers_explicit_urls_and_extracts_https_port()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["urls"] = "http://+:80;https://+:7443",
+                    ["ASPNETCORE_HTTPS_PORTS"] = "9443"
+                })
+            .Build();
 
-        Assert.True(
-            new PanelHttpsSettingsFormInput
-            {
-                Enabled = false,
-                CertificateId = string.Empty,
-                ListenAddress = "0.0.0.0",
-                Port = 8443,
-                RedirectHttpToHttps = false
-            }.RequiresProcessRestart(previous));
+        var binding = PanelListenerBindingRules.Resolve(configuration);
+
+        Assert.True(binding.HasConfiguredBindings);
+        Assert.Equal(7443, binding.HttpsPort);
+    }
+
+    [Fact]
+    public void PanelListenerBindingRules_reads_https_ports_when_urls_are_missing()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["ASPNETCORE_HTTP_PORTS"] = "7080",
+                    ["ASPNETCORE_HTTPS_PORTS"] = "7443"
+                })
+            .Build();
+
+        var binding = PanelListenerBindingRules.Resolve(configuration);
+
+        Assert.True(binding.HasConfiguredBindings);
+        Assert.Equal(7443, binding.HttpsPort);
     }
 
     private static NodeFormInput CreateBaseForm()

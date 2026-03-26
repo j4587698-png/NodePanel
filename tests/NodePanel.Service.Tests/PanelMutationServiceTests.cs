@@ -1,6 +1,8 @@
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NodePanel.ControlPlane.Configuration;
@@ -305,6 +307,194 @@ public sealed class PanelMutationServiceTests
     }
 
     [Fact]
+    public async Task SaveUserAsync_generates_missing_access_secrets_and_hashes_login_password()
+    {
+        using var harness = new PanelMutationHarness();
+
+        var saved = await harness.MutationService.SaveUserAsync(
+            "user-a",
+            new UpsertUserRequest
+            {
+                Email = "user@example.com",
+                LoginPassword = "Portal#123",
+                DisplayName = "Demo User",
+                Enabled = true,
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    TransferEnableBytes = 1024
+                }
+            },
+            CancellationToken.None);
+
+        var stored = await harness.GetUserAsync("user-a");
+        var hasher = new PasswordHasher<UserEntity>();
+
+        Assert.Equal("user@example.com", saved.Email);
+        Assert.NotEmpty(saved.SubscriptionToken);
+        Assert.NotEmpty(saved.TrojanPassword);
+        Assert.NotEmpty(saved.V2rayUuid);
+        Assert.False(string.IsNullOrWhiteSpace(stored.PasswordHash));
+        Assert.Equal(PasswordVerificationResult.Success, hasher.VerifyHashedPassword(stored, stored.PasswordHash, "Portal#123"));
+    }
+
+    [Fact]
+    public async Task CreateInviteCodeAsync_generates_codes_until_the_user_reaches_the_limit()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with { Email = "user@example.com" },
+            CancellationToken.None);
+
+        var first = await harness.MutationService.CreateInviteCodeAsync("user-a", 2, CancellationToken.None);
+        var second = await harness.MutationService.CreateInviteCodeAsync("user-a", 2, CancellationToken.None);
+        var stored = await harness.DatabaseService.FSql.Select<InviteCodeEntity>()
+            .Where(x => x.UserId == "user-a")
+            .ToListAsync(CancellationToken.None);
+
+        Assert.Equal("user-a", first.UserId);
+        Assert.Equal("user-a", second.UserId);
+        Assert.NotEqual(first.Code, second.Code);
+        Assert.Equal(2, stored.Count);
+    }
+
+    [Fact]
+    public async Task CreateInviteCodeAsync_rejects_generation_when_the_limit_is_reached()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with { Email = "user@example.com" },
+            CancellationToken.None);
+
+        await harness.MutationService.CreateInviteCodeAsync("user-a", 1, CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.MutationService.CreateInviteCodeAsync("user-a", 1, CancellationToken.None));
+
+        Assert.Contains("邀请码", exception.Message);
+    }
+
+    [Fact]
+    public async Task BuildUserReferralCenterAsync_aggregates_invite_codes_invitees_and_commissions()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SaveUserAsync(
+            "inviter",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                Email = "inviter@example.com",
+                DisplayName = "Inviter",
+                CommissionBalance = 6.66m,
+                CommissionRate = 20
+            },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveSettingsAsync(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [PanelAuthSettingKeys.RequireInviteCodeForRegistration] = "true",
+                [PanelAuthSettingKeys.MaxInviteCodesPerUser] = "2"
+            },
+            CancellationToken.None);
+
+        var firstCode = await harness.MutationService.CreateInviteCodeAsync("inviter", 2, CancellationToken.None);
+        var secondCode = await harness.MutationService.CreateInviteCodeAsync("inviter", 2, CancellationToken.None);
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        await harness.DatabaseService.FSql.Insert(
+                new UserEntity
+                {
+                    UserId = "invitee-a",
+                    Email = "invitee@example.com",
+                    PasswordHash = "hash",
+                    DisplayName = "Invitee",
+                    SubscriptionToken = "sub-token",
+                    TrojanPassword = "trojan-password",
+                    V2rayUuid = Guid.NewGuid().ToString("D"),
+                    InviteUserId = "inviter",
+                    AppliedInviteCode = firstCode.Code,
+                    CreatedAt = createdAt
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        await harness.DatabaseService.FSql.Insert(
+                new CommissionLogEntity
+                {
+                    LogId = Guid.NewGuid().ToString("N"),
+                    InviteUserId = "inviter",
+                    OrderId = "order-1",
+                    TradeAmount = 100m,
+                    CommissionAmount = 20m,
+                    CreatedAt = createdAt
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        var queryService = harness.CreateQueryService();
+        var model = await queryService.BuildUserReferralCenterAsync("inviter", CancellationToken.None);
+
+        Assert.True(model.InviteOnlyRegistrationEnabled);
+        Assert.Equal(2, model.MaxInviteCodes);
+        Assert.Equal("2", model.MaxInviteCodesText);
+        Assert.Equal("0", model.RemainingInviteCodesText);
+        Assert.False(model.CanGenerateInviteCode);
+        Assert.Equal(2, model.InviteCodeCount);
+        Assert.Equal(1, model.InvitedUserCount);
+        Assert.Equal(6.66m, model.CommissionBalance);
+        Assert.Equal(20m, model.CommissionTotal);
+        Assert.Equal(20, model.CommissionRate);
+
+        var firstCodeView = Assert.Single(model.InviteCodes, item => item.Code == firstCode.Code);
+        var secondCodeView = Assert.Single(model.InviteCodes, item => item.Code == secondCode.Code);
+        var invitee = Assert.Single(model.Invitees);
+        var commission = Assert.Single(model.CommissionLogs);
+
+        Assert.Equal(1, firstCodeView.UsageCount);
+        Assert.NotEqual("-", firstCodeView.LastUsedAtText);
+        Assert.Equal(0, secondCodeView.UsageCount);
+        Assert.Equal("-", secondCodeView.LastUsedAtText);
+        Assert.Equal("Invitee", invitee.DisplayName);
+        Assert.Equal(firstCode.Code, invitee.AppliedInviteCode);
+        Assert.Equal("order-1", commission.OrderId);
+        Assert.Equal(100m, commission.TradeAmount);
+        Assert.Equal(20m, commission.CommissionAmount);
+    }
+
+    [Fact]
+    public async Task ResetUserSubscriptionTokenAsync_rotates_only_subscription_token()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                Email = "user@example.com",
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    TransferEnableBytes = 1024
+                }
+            },
+            CancellationToken.None);
+
+        var before = await harness.GetUserAsync("user-a");
+        var updated = await harness.MutationService.ResetUserSubscriptionTokenAsync("user-a", CancellationToken.None);
+        var after = await harness.GetUserAsync("user-a");
+
+        Assert.NotEqual(before.SubscriptionToken, updated.SubscriptionToken);
+        Assert.Equal(updated.SubscriptionToken, after.SubscriptionToken);
+        Assert.Equal(before.Email, after.Email);
+        Assert.Equal(before.TrojanPassword, after.TrojanPassword);
+        Assert.Equal(before.V2rayUuid, after.V2rayUuid);
+        Assert.Equal(before.PlanName, after.PlanName);
+    }
+
+    [Fact]
     public async Task SaveUserAsync_persists_cycle_and_preserves_existing_cycle_when_request_omits_it()
     {
         using var harness = new PanelMutationHarness();
@@ -524,10 +714,7 @@ public sealed class PanelMutationServiceTests
         await harness.MutationService.SavePanelHttpsSettingsAsync(
             new PanelHttpsSettingsFormInput
             {
-                Enabled = true,
                 CertificateId = string.Empty,
-                ListenAddress = "0.0.0.0",
-                Port = 443,
                 RedirectHttpToHttps = false
             },
             CancellationToken.None);
@@ -562,10 +749,7 @@ public sealed class PanelMutationServiceTests
         await harness.MutationService.SavePanelHttpsSettingsAsync(
             new PanelHttpsSettingsFormInput
             {
-                Enabled = true,
                 CertificateId = "panel-cert",
-                ListenAddress = "0.0.0.0",
-                Port = 443,
                 RedirectHttpToHttps = false
             },
             CancellationToken.None);
@@ -579,6 +763,33 @@ public sealed class PanelMutationServiceTests
         Assert.Contains("自签证书", snapshot.LastError, StringComparison.Ordinal);
         Assert.NotNull(options.ServerCertificate);
         Assert.Contains("CN=NodePanel Temporary TLS", options.ServerCertificate!.Subject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PanelHttpsRuntime_redirects_http_requests_to_the_configured_https_endpoint()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePanelHttpsSettingsAsync(
+            new PanelHttpsSettingsFormInput
+            {
+                CertificateId = string.Empty,
+                RedirectHttpToHttps = true
+            },
+            CancellationToken.None);
+
+        harness.MarkPanelHttpsListenerConfigured(8443);
+
+        var request = new DefaultHttpContext().Request;
+        request.Scheme = Uri.UriSchemeHttp;
+        request.Host = new HostString("panel.example.com");
+        request.Path = "/admin";
+        request.QueryString = new QueryString("?tab=https");
+
+        Assert.True(harness.ShouldRedirectHttp("/admin"));
+        Assert.False(harness.ShouldRedirectHttp("/.well-known/acme-challenge/token"));
+        Assert.False(harness.ShouldRedirectHttp("/control/ws"));
+        Assert.Equal("https://panel.example.com:8443/admin?tab=https", harness.BuildPanelHttpsRedirectUri(request).ToString());
     }
 
     private static UpsertUserRequest CreateUserRequest(IReadOnlyList<string> nodeIds)
@@ -669,6 +880,18 @@ public sealed class PanelMutationServiceTests
 
         public SslServerAuthenticationOptions CreatePanelHttpsAuthenticationOptions()
             => _panelHttpsRuntime.CreateAuthenticationOptions();
+
+        public PanelQueryService CreateQueryService()
+            => new(DatabaseService, new NodeConnectionRegistry(), new PanelCertificateProgressTracker());
+
+        public void MarkPanelHttpsListenerConfigured(int? httpsPort)
+            => _panelHttpsRuntime.MarkListenerConfigured(httpsPort);
+
+        public bool ShouldRedirectHttp(PathString requestPath)
+            => _panelHttpsRuntime.ShouldRedirectHttp(requestPath);
+
+        public Uri BuildPanelHttpsRedirectUri(HttpRequest request)
+            => _panelHttpsRuntime.BuildRedirectUri(request);
 
         public async Task CreateNodeAsync(string nodeId)
         {

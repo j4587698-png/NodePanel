@@ -57,13 +57,17 @@
                     <td>
                         <strong>@user.DisplayName</strong>
                         <div class="muted mono">@user.UserId</div>
+                        @if (!string.IsNullOrWhiteSpace(user.Email))
+                        {
+                            <div class="muted">@user.Email</div>
+                        }
                     </td>
                     <td>
                         <span class="badge @(user.Enabled ? "badge--ok" : "badge--idle")">
                             @(user.Enabled ? "启用" : "禁用")
                         </span>
                     </td>
-                    <td>@user.BytesPerSecond B/s</td>
+                    <td>@PlanPresentation.FormatRate(user.BytesPerSecond)</td>
                     <td>@(user.DeviceLimit > 0 ? user.DeviceLimit.ToString() : "不限")</td>
                     <td>
                         <div>@(string.IsNullOrWhiteSpace(user.Subscription.PlanName) ? "-" : user.Subscription.PlanName)</div>

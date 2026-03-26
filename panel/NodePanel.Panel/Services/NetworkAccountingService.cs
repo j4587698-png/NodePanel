@@ -132,6 +132,7 @@ public sealed class NetworkAccountingService : BackgroundService
                 var record = userEntity.ToRecord();
                 var req = new UpsertUserRequest
                 {
+                    Email = record.Email,
                     DisplayName = record.DisplayName,
                     SubscriptionToken = record.SubscriptionToken,
                     TrojanPassword = record.TrojanPassword,

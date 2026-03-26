@@ -28,6 +28,11 @@
     <div class="portal-alert portal-alert--error">@Model.ErrorMessage</div>
 }
 
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="portal-alert">@Model.StatusMessage</div>
+}
+
 @if (!Model.IsResolved)
 {
     <section class="portal-card portal-card--compact">
@@ -75,6 +80,17 @@ else
                     </div>
                 </label>
             </div>
+            @if (Model.AllowSubscriptionReset)
+            {
+                <div class="page-actions" style="margin-top: 20px;">
+                    <form asp-controller="Portal" asp-action="ResetSubscriptionToken" method="post" class="inline-form" onsubmit="return confirm('确定要重置订阅令牌吗？旧链接会立即失效。');">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="token" value="@Model.CurrentSubscriptionToken" />
+                        <input type="hidden" name="returnTarget" value="@Model.ResetSubscriptionReturnTarget" />
+                        <button type="submit" class="button">重置订阅令牌</button>
+                    </form>
+                </div>
+            }
         </article>
 
         <article class="portal-card">
@@ -117,6 +133,170 @@ else
                 </div>
             }
         </article>
+    </section>
+
+    <section class="portal-grid">
+        <article class="portal-card">
+            <div class="card__header">
+                <div>
+                    <p class="eyebrow portal-eyebrow">Referral</p>
+                    <h3>推广中心</h3>
+                </div>
+            </div>
+            <div class="portal-stats">
+                <div>
+                    <dt>邀请码数量</dt>
+                    <dd>@Model.Referral.InviteCodeCount</dd>
+                </div>
+                <div>
+                    <dt>邀请用户数</dt>
+                    <dd>@Model.Referral.InvitedUserCount</dd>
+                </div>
+                <div>
+                    <dt>当前返利余额</dt>
+                    <dd>@Model.CurrencySymbol@Model.Referral.CommissionBalance.ToString("N2")</dd>
+                </div>
+                <div>
+                    <dt>累计返利</dt>
+                    <dd>@Model.CurrencySymbol@Model.Referral.CommissionTotal.ToString("N2")</dd>
+                </div>
+                <div>
+                    <dt>返利比例</dt>
+                    <dd>@Model.Referral.CommissionRate%</dd>
+                </div>
+                <div>
+                    <dt>注册模式</dt>
+                    <dd>@(Model.Referral.InviteOnlyRegistrationEnabled ? "仅邀请码注册" : "邀请码选填")</dd>
+                </div>
+            </div>
+        </article>
+
+        <article class="portal-card">
+            <div class="card__header">
+                <div>
+                    <p class="eyebrow portal-eyebrow">Invite Codes</p>
+                    <h3>我的邀请码</h3>
+                </div>
+                <div class="portal-referral-actions">
+                    <span class="portal-inline-muted">上限：@Model.Referral.MaxInviteCodesText</span>
+                    <span class="portal-inline-muted">剩余：@Model.Referral.RemainingInviteCodesText</span>
+                    <form asp-action="GenerateInviteCode" method="post" class="inline-form">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="button button--primary" disabled="@(Model.Referral.CanGenerateInviteCode ? null : "disabled")">生成邀请码</button>
+                    </form>
+                </div>
+            </div>
+            @if (Model.Referral.InviteCodes.Count == 0)
+            {
+                <div class="portal-empty">当前还没有可用邀请码。</div>
+            }
+            else
+            {
+                <div class="portal-code-grid">
+                    @foreach (var inviteCode in Model.Referral.InviteCodes)
+                    {
+                        <article class="portal-code-card">
+                            <div class="portal-code-card__head">
+                                <div id="invite-code-@inviteCode.Code" class="portal-code-card__code">@inviteCode.Code</div>
+                                <button type="button" class="button button--small" data-copy-target="invite-code-@inviteCode.Code">复制</button>
+                            </div>
+                            <dl class="portal-node__meta">
+                                <div>
+                                    <dt>创建时间</dt>
+                                    <dd>@inviteCode.CreatedAtText</dd>
+                                </div>
+                                <div>
+                                    <dt>使用次数</dt>
+                                    <dd>@inviteCode.UsageCount</dd>
+                                </div>
+                                <div>
+                                    <dt>最近使用</dt>
+                                    <dd>@inviteCode.LastUsedAtText</dd>
+                                </div>
+                            </dl>
+                        </article>
+                    }
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="portal-card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow portal-eyebrow">Invitees</p>
+                <h3>邀请记录</h3>
+            </div>
+        </div>
+        @if (Model.Referral.Invitees.Count == 0)
+        {
+            <div class="portal-empty">还没有用户通过你的邀请码注册。</div>
+        }
+        else
+        {
+            <div class="portal-table-wrap">
+                <table class="portal-table">
+                    <thead>
+                        <tr>
+                            <th>用户</th>
+                            <th>邮箱</th>
+                            <th>使用邀请码</th>
+                            <th>注册时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var invitee in Model.Referral.Invitees)
+                        {
+                            <tr>
+                                <td>@invitee.DisplayName</td>
+                                <td class="mono">@invitee.Email</td>
+                                <td class="mono">@invitee.AppliedInviteCode</td>
+                                <td class="mono">@invitee.CreatedAtText</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="portal-card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow portal-eyebrow">Commission</p>
+                <h3>返利流水</h3>
+            </div>
+        </div>
+        @if (Model.Referral.CommissionLogs.Count == 0)
+        {
+            <div class="portal-empty">当前还没有返利流水。</div>
+        }
+        else
+        {
+            <div class="portal-table-wrap">
+                <table class="portal-table">
+                    <thead>
+                        <tr>
+                            <th>订单号</th>
+                            <th>成交金额</th>
+                            <th>返利金额</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var log in Model.Referral.CommissionLogs)
+                        {
+                            <tr>
+                                <td class="mono">@log.OrderId</td>
+                                <td>@Model.CurrencySymbol@log.TradeAmount.ToString("N2")</td>
+                                <td>@Model.CurrencySymbol@log.CommissionAmount.ToString("N2")</td>
+                                <td class="mono">@log.CreatedAtText</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
     </section>
 
     <section class="portal-card">

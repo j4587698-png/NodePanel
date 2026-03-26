@@ -37,25 +37,19 @@
     <div class="inline-alert inline-alert--warn">检测到证书任务正在执行，页面会在未编辑表单时自动刷新。</div>
 }
 
-<div class="grid grid--two">
-    <section class="card">
+<div class="grid grid--two certificates-layout">
+    <section class="card certificates-layout__primary">
         <div class="card__header">
             <div>
                 <p class="eyebrow">Panel HTTPS</p>
                 <h3>面板 HTTPS</h3>
             </div>
+            <p class="muted">如果没有显式传入监听配置，Linux 安装脚本默认会同时开放 `http://0.0.0.0:80` 和 `https://0.0.0.0:443`；本地开发环境则继续遵循 `launchSettings.json`。</p>
         </div>
         <form asp-action="SavePanelHttpsSettings" method="post" class="form">
             @Html.AntiForgeryToken()
-        <div asp-validation-summary="All" class="error-box"></div>
-            <div class="form-grid">
-                <div class="checkbox-field">
-                    <span>HTTPS 主入口</span>
-                    <label class="switch">
-                        <input asp-for="PanelHttps.Enabled" type="checkbox" />
-                        <span class="switch-slider"></span>
-                    </label>
-                </div>
+            <div asp-validation-summary="All" class="error-box"></div>
+            <div class="form-grid certificates-form-grid">
                 <label>
                     <span>正式证书</span>
                     <select asp-for="PanelHttps.CertificateId">
@@ -66,14 +60,6 @@
                         }
                     </select>
                 </label>
-                <label>
-                    <span>监听地址</span>
-                    <input asp-for="PanelHttps.ListenAddress" />
-                </label>
-                <label>
-                    <span>监听端口</span>
-                    <input asp-for="PanelHttps.Port" />
-                </label>
                 <div class="checkbox-field">
                     <span>HTTP 跳转 HTTPS</span>
                     <label class="switch">
@@ -82,7 +68,8 @@
                     </label>
                 </div>
             </div>
-            <p class="muted">TLS 监听会始终启动。未绑定可用正式证书时，面板会临时返回自签证书；只有修改监听地址或端口才需要重启。</p>
+            <p class="muted">TLS 证书选择和 HTTP 跳转规则在保存后立即生效。未绑定可用正式证书时，面板会临时返回自签证书。</p>
+            <p class="muted">监听地址和端口由 `ASPNETCORE_URLS`、`--urls`、`launchSettings.json` 或 Kestrel 端点配置统一控制；这里仅负责绑定面板证书和配置 HTTP 到 HTTPS 的跳转规则。</p>
             <div class="page-actions">
                 <button type="submit" class="button button--primary">保存 HTTPS 设置</button>
             </div>
@@ -100,7 +87,7 @@
             <p class="muted">节点 `acme-managed` 继续由节点自己跑 `http-01`。</p>
             <p class="muted">节点 `panel-distributed` 只消费面板下发的 PFX，续签后会自动重新推送快照。</p>
             <p class="muted">泛域名请使用 `dns-01`，并在证书配置里填写 DNS hook 命令。</p>
-            <p class="muted">Panel HTTPS 的证书切换和续签可热更新；只有修改监听地址或端口才需要重启进程。</p>
+            <p class="muted">Panel HTTPS 的监听地址和端口不再由面板管理；如需调整，请修改 ASP.NET Core 宿主配置后重启进程。</p>
         </div>
     </section>
 </div>

@@ -4,6 +4,8 @@ public sealed class PortalPageViewModel
 {
     public string AppName { get; init; } = string.Empty;
 
+    public string StatusMessage { get; set; } = string.Empty;
+
     public string LookupToken { get; init; } = string.Empty;
 
     public bool IsResolved { get; init; }
@@ -11,6 +13,12 @@ public sealed class PortalPageViewModel
     public string ErrorMessage { get; init; } = string.Empty;
 
     public string DisplayName { get; init; } = string.Empty;
+
+    public string CurrentSubscriptionToken { get; init; } = string.Empty;
+
+    public bool AllowSubscriptionReset { get; init; }
+
+    public string ResetSubscriptionReturnTarget { get; init; } = "portal";
 
     public string PortalUrl { get; init; } = string.Empty;
 
@@ -31,6 +39,10 @@ public sealed class PortalPageViewModel
     public string Notice { get; init; } = string.Empty;
 
     public string PurchaseUrl { get; init; } = string.Empty;
+
+    public string CurrencySymbol { get; init; } = "¥";
+
+    public PortalReferralCenterViewModel Referral { get; init; } = new();
 
     public IReadOnlyList<PortalClientLinkViewModel> ImportLinks { get; init; } = Array.Empty<PortalClientLinkViewModel>();
 
@@ -63,6 +75,70 @@ public sealed record PortalNodeViewModel
     public string Path { get; init; } = string.Empty;
 
     public required string ManualUri { get; init; }
+}
+
+public sealed class PortalReferralCenterViewModel
+{
+    public bool InviteOnlyRegistrationEnabled { get; init; }
+
+    public int MaxInviteCodes { get; init; } = 1;
+
+    public string MaxInviteCodesText { get; init; } = "1";
+
+    public string RemainingInviteCodesText { get; init; } = "0";
+
+    public bool CanGenerateInviteCode { get; init; }
+
+    public int InviteCodeCount { get; init; }
+
+    public int InvitedUserCount { get; init; }
+
+    public decimal CommissionBalance { get; init; }
+
+    public decimal CommissionTotal { get; init; }
+
+    public int CommissionRate { get; init; }
+
+    public IReadOnlyList<PortalInviteCodeViewModel> InviteCodes { get; init; } = Array.Empty<PortalInviteCodeViewModel>();
+
+    public IReadOnlyList<PortalInviteeViewModel> Invitees { get; init; } = Array.Empty<PortalInviteeViewModel>();
+
+    public IReadOnlyList<PortalCommissionLogItemViewModel> CommissionLogs { get; init; } = Array.Empty<PortalCommissionLogItemViewModel>();
+}
+
+public sealed record PortalInviteCodeViewModel
+{
+    public required string Code { get; init; }
+
+    public required string CreatedAtText { get; init; }
+
+    public int UsageCount { get; init; }
+
+    public string LastUsedAtText { get; init; } = "-";
+}
+
+public sealed record PortalInviteeViewModel
+{
+    public required string UserId { get; init; }
+
+    public required string DisplayName { get; init; }
+
+    public required string Email { get; init; }
+
+    public string AppliedInviteCode { get; init; } = "-";
+
+    public required string CreatedAtText { get; init; }
+}
+
+public sealed record PortalCommissionLogItemViewModel
+{
+    public required string OrderId { get; init; }
+
+    public decimal TradeAmount { get; init; }
+
+    public decimal CommissionAmount { get; init; }
+
+    public required string CreatedAtText { get; init; }
 }
 
 public sealed class PortalStoreViewModel

@@ -16,6 +16,9 @@ public sealed class InstallRequest
     public string? DbUser { get; set; } = "root";
     public string? DbPassword { get; set; } = "";
 
+    [Required(ErrorMessage = "管理员用户名不能为空。")]
+    public string AdminDisplayName { get; set; } = string.Empty;
+
     [Required(ErrorMessage = "管理员邮箱不能为空。")]
     public string AdminEmail { get; set; } = string.Empty;
 

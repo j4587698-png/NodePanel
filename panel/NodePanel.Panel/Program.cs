@@ -1,6 +1,4 @@
 using System.Net.WebSockets;
-using System.Net;
-using System.Net.Security;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -11,19 +9,33 @@ using NodePanel.Panel.Configuration;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 
 var bootstrapPanelOptions = builder.Configuration.GetSection(PanelOptions.SectionName).Get<PanelOptions>() ?? new PanelOptions();
 var panelHttpsRuntime = new PanelHttpsRuntime(bootstrapPanelOptions);
-var panelHttpsSnapshot = panelHttpsRuntime.LoadSnapshot();
-panelHttpsRuntime.MarkListenerConfigured(panelHttpsSnapshot);
+panelHttpsRuntime.LoadSnapshot();
+
+var listenerBindings = PanelListenerBindingRules.Resolve(builder.Configuration);
+if (!listenerBindings.HasConfiguredBindings)
+{
+    builder.WebHost.UseUrls(PanelListenerBindingRules.DefaultUrls);
+    listenerBindings = PanelListenerBindingRules.ResolveDefaults();
+}
+
+panelHttpsRuntime.MarkListenerConfigured(listenerBindings.HttpsPort);
 builder.WebHost.ConfigureKestrel(options =>
 {
-    ConfigurePanelHttpsListener(options, panelHttpsSnapshot, panelHttpsRuntime);
+    options.ConfigureHttpsDefaults(httpsOptions =>
+    {
+        httpsOptions.OnAuthenticate = (_, sslOptions) =>
+        {
+            var authenticationOptions = panelHttpsRuntime.CreateAuthenticationOptions();
+            sslOptions.ServerCertificate = authenticationOptions.ServerCertificate;
+            sslOptions.EnabledSslProtocols = authenticationOptions.EnabledSslProtocols;
+        };
+    });
 });
 
 builder.Services
@@ -49,7 +61,6 @@ builder.Services.AddControllersWithViews(options =>
 });
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton(panelHttpsRuntime);
-builder.Services.AddSingleton<PanelProcessControl>();
 builder.Services.AddSingleton<DatabaseService>();
 builder.Services.AddSingleton<PanelSnapshotBuilder>();
 builder.Services.AddSingleton<NodeConnectionRegistry>();
@@ -57,6 +68,7 @@ builder.Services.AddSingleton<ControlPlanePushService>();
 builder.Services.AddSingleton<PanelAcmeHttpChallengeStore>();
 builder.Services.AddSingleton<PanelMutationService>();
 builder.Services.AddSingleton<PanelQueryService>();
+builder.Services.AddSingleton<PanelAuthSettingsService>();
 builder.Services.AddSingleton<PanelDnsChallengeService>();
 builder.Services.AddSingleton<PanelCertificateProgressTracker>();
 builder.Services.AddSingleton<PanelCertificateService>();
@@ -66,6 +78,8 @@ builder.Services.AddSingleton<SubscriptionProfileResolver>();
 builder.Services.AddSingleton<SubscriptionRenderer>();
 builder.Services.AddSingleton<UserPortalService>();
 builder.Services.AddSingleton<EpayService>();
+builder.Services.AddSingleton<EmailVerificationService>();
+builder.Services.AddSingleton<SmtpEmailService>();
 
 builder.Services.AddSingleton<NetworkAccountingService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<NetworkAccountingService>());
@@ -116,7 +130,7 @@ app.Use(async (context, next) =>
 {
     if (!context.Request.IsHttps && panelHttpsRuntime.ShouldRedirectHttp(context.Request.Path))
     {
-        context.Response.Redirect(panelHttpsRuntime.BuildRedirectUri(context.Request).ToString(), permanent: false);
+        context.Response.Redirect(panelHttpsRuntime.BuildRedirectUri(context.Request).ToString(), permanent: true);
         return;
     }
 
@@ -429,26 +443,4 @@ static bool IsAdminAuthorized(HttpContext context, PanelOptions options)
     }
 
     return false;
-}
-
-static void ConfigurePanelHttpsListener(
-    KestrelServerOptions options,
-    PanelHttpsRuntimeSnapshot snapshot,
-    PanelHttpsRuntime runtime)
-{
-    void Configure(ListenOptions listenOptions)
-    {
-        listenOptions.UseHttps(new TlsHandshakeCallbackOptions
-        {
-            OnConnection = _ => new ValueTask<SslServerAuthenticationOptions>(runtime.CreateAuthenticationOptions())
-        });
-    }
-
-    if (IPAddress.TryParse(snapshot.ListenAddress, out var address))
-    {
-        options.Listen(address, snapshot.Port, Configure);
-        return;
-    }
-
-    options.ListenAnyIP(snapshot.Port, Configure);
 }

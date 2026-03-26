@@ -213,6 +213,20 @@ public sealed class PanelQueryService
         return entity?.ToRecord();
     }
 
+    public async Task<PanelUserRecord?> FindUserByEmailAsync(string email, CancellationToken cancellationToken = default)
+    {
+        if (!_db.IsConfigured) return null;
+
+        var normalizedEmail = NodeFormValueCodec.TrimOrEmpty(email);
+        if (string.IsNullOrWhiteSpace(normalizedEmail))
+        {
+            return null;
+        }
+
+        var entity = await _db.FSql.Select<UserEntity>().Where(u => u.Email == normalizedEmail).FirstAsync(cancellationToken);
+        return entity?.ToRecord();
+    }
+
     public async Task<PanelUserRecord?> FindUserBySubscriptionTokenAsync(string token, CancellationToken cancellationToken = default)
     {
         if (!_db.IsConfigured) return null;
@@ -254,6 +268,93 @@ public sealed class PanelQueryService
         {
             LogId = r.LogId, InviteUserId = r.InviteUserId, OrderId = r.OrderId, TradeAmount = r.TradeAmount, CommissionAmount = r.CommissionAmount, CreatedAt = r.CreatedAt
         }).ToArray();
+    }
+
+    public async Task<PortalReferralCenterViewModel> BuildUserReferralCenterAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (!_db.IsConfigured) return new PortalReferralCenterViewModel();
+
+        var normalizedUserId = NodeFormValueCodec.TrimOrEmpty(userId);
+        if (string.IsNullOrWhiteSpace(normalizedUserId))
+        {
+            return new PortalReferralCenterViewModel();
+        }
+
+        var user = await _db.FSql.Select<UserEntity>().Where(x => x.UserId == normalizedUserId).FirstAsync(cancellationToken);
+        if (user is null)
+        {
+            return new PortalReferralCenterViewModel();
+        }
+
+        var settings = await GetSettingsDictionaryAsync(cancellationToken).ConfigureAwait(false);
+        var authSettings = PanelAuthSettings.FromSettings(settings);
+        var inviteCodes = await _db.FSql.Select<InviteCodeEntity>().Where(x => x.UserId == normalizedUserId).ToListAsync(cancellationToken);
+        var invitees = await _db.FSql.Select<UserEntity>().Where(x => x.InviteUserId == normalizedUserId).ToListAsync(cancellationToken);
+        var commissionLogs = await _db.FSql.Select<CommissionLogEntity>().Where(x => x.InviteUserId == normalizedUserId).ToListAsync(cancellationToken);
+
+        var usageByCode = invitees
+            .Where(static item => !string.IsNullOrWhiteSpace(item.AppliedInviteCode))
+            .GroupBy(static item => item.AppliedInviteCode, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.Ordinal);
+
+        var lastUsedAtByCode = invitees
+            .Where(static item => !string.IsNullOrWhiteSpace(item.AppliedInviteCode))
+            .GroupBy(static item => item.AppliedInviteCode, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Max(static item => item.CreatedAt),
+                StringComparer.Ordinal);
+
+        var inviteCodeCount = inviteCodes.Count;
+
+        return new PortalReferralCenterViewModel
+        {
+            InviteOnlyRegistrationEnabled = authSettings.RequireInviteCodeForRegistration,
+            MaxInviteCodes = authSettings.MaxInviteCodesPerUser,
+            MaxInviteCodesText = authSettings.MaxInviteCodesPerUser > 0 ? authSettings.MaxInviteCodesPerUser.ToString() : "不限",
+            RemainingInviteCodesText = authSettings.MaxInviteCodesPerUser > 0
+                ? Math.Max(authSettings.MaxInviteCodesPerUser - inviteCodeCount, 0).ToString()
+                : "不限",
+            CanGenerateInviteCode = authSettings.MaxInviteCodesPerUser <= 0 || inviteCodeCount < authSettings.MaxInviteCodesPerUser,
+            InviteCodeCount = inviteCodeCount,
+            InvitedUserCount = invitees.Count,
+            CommissionBalance = user.CommissionBalance,
+            CommissionTotal = commissionLogs.Sum(static item => item.CommissionAmount),
+            CommissionRate = Math.Clamp(user.CommissionRate, 0, 100),
+            InviteCodes = inviteCodes
+                .OrderByDescending(static item => item.CreatedAt)
+                .Select(item => new PortalInviteCodeViewModel
+                {
+                    Code = item.Code,
+                    CreatedAtText = FormatPortalDateTime(item.CreatedAt),
+                    UsageCount = usageByCode.GetValueOrDefault(item.Code),
+                    LastUsedAtText = lastUsedAtByCode.TryGetValue(item.Code, out var lastUsedAt)
+                        ? FormatPortalDateTime(lastUsedAt)
+                        : "-"
+                })
+                .ToArray(),
+            Invitees = invitees
+                .OrderByDescending(static item => item.CreatedAt)
+                .Select(item => new PortalInviteeViewModel
+                {
+                    UserId = item.UserId,
+                    DisplayName = string.IsNullOrWhiteSpace(item.DisplayName) ? item.UserId : item.DisplayName.Trim(),
+                    Email = item.Email,
+                    AppliedInviteCode = string.IsNullOrWhiteSpace(item.AppliedInviteCode) ? "-" : item.AppliedInviteCode,
+                    CreatedAtText = FormatPortalDateTime(item.CreatedAt)
+                })
+                .ToArray(),
+            CommissionLogs = commissionLogs
+                .OrderByDescending(static item => item.CreatedAt)
+                .Select(item => new PortalCommissionLogItemViewModel
+                {
+                    OrderId = item.OrderId,
+                    TradeAmount = item.TradeAmount,
+                    CommissionAmount = item.CommissionAmount,
+                    CreatedAtText = FormatPortalDateTime(item.CreatedAt)
+                })
+                .ToArray()
+        };
     }
 
     private static PanelCertificateAlertView BuildCertificateAlert(PanelNodeRecord node, NodeRuntimeSnapshot runtime)
@@ -298,6 +399,9 @@ public sealed class PanelQueryService
         if (remaining.TotalHours >= 1) return $"{Math.Ceiling(remaining.TotalHours)} 小时";
         return $"{Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟";
     }
+    private static string FormatPortalDateTime(DateTimeOffset value)
+        => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
     private async Task<IReadOnlyDictionary<string, string>> GetSettingsDictionaryAsync(CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured)

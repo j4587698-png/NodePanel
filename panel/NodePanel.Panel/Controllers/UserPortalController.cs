@@ -10,13 +10,18 @@ namespace NodePanel.Panel.Controllers;
 [Route("user")]
 public sealed class UserPortalController : Controller
 {
+    private readonly PanelAuthSettingsService _panelAuthSettingsService;
     private readonly UserPortalService _userPortalService;
     private readonly PanelMutationService _panelMutationService;
 
-    public UserPortalController(UserPortalService userPortalService, PanelMutationService panelMutationService)
+    public UserPortalController(
+        UserPortalService userPortalService,
+        PanelMutationService panelMutationService,
+        PanelAuthSettingsService panelAuthSettingsService)
     {
         _userPortalService = userPortalService;
         _panelMutationService = panelMutationService;
+        _panelAuthSettingsService = panelAuthSettingsService;
     }
 
     [HttpGet("")]
@@ -31,9 +36,12 @@ public sealed class UserPortalController : Controller
         var result = await _userPortalService.TryBuildByUserIdAsync(userId, Request, cancellationToken);
         if (!result.Success)
         {
-            return View("~/Views/Portal/Index.cshtml", _userPortalService.BuildEmpty());
+            var emptyModel = _userPortalService.BuildEmpty();
+            emptyModel.StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty;
+            return View("~/Views/Portal/Index.cshtml", emptyModel);
         }
 
+        result.Model.StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty;
         return View("~/Views/Portal/Index.cshtml", result.Model);
     }
 
@@ -103,6 +111,34 @@ public sealed class UserPortalController : Controller
         var model = await _userPortalService.BuildOrdersAsync(userId, cancellationToken);
         model.StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty;
         return View("~/Views/Portal/Orders.cshtml", model);
+    }
+
+    [HttpPost("invite-codes/generate")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> GenerateInviteCode(CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Redirect("/auth/login");
+        }
+
+        var settings = await _panelAuthSettingsService.GetAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await _panelMutationService
+                .CreateInviteCodeAsync(userId, settings.MaxInviteCodesPerUser, cancellationToken)
+                .ConfigureAwait(false);
+
+            TempData["StatusMessage"] = "邀请码已生成。";
+        }
+        catch (InvalidOperationException ex)
+        {
+            TempData["StatusMessage"] = ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index));
     }
 
     [HttpPost("pay/{orderId}")]

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Identity;
 using NodePanel.ControlPlane.Configuration;
 using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
@@ -70,9 +71,10 @@ public sealed class PanelMutationService
         var entity = existing ?? new UserEntity { UserId = userId };
         var originalNodeIds = existing?.NodeIds.ToArray();
 
+        entity.Email = NodeFormValueCodec.TrimOrEmpty(request.Email);
         entity.DisplayName = request.DisplayName;
-        entity.SubscriptionToken = request.SubscriptionToken;
-        entity.TrojanPassword = request.TrojanPassword;
+        entity.SubscriptionToken = NormalizeSecret(request.SubscriptionToken, existing?.SubscriptionToken);
+        entity.TrojanPassword = NormalizeSecret(request.TrojanPassword, existing?.TrojanPassword);
         entity.V2rayUuid = NormalizeUuid(request.V2rayUuid, existing?.V2rayUuid);
         entity.InviteUserId = NodeFormValueCodec.TrimOrEmpty(request.InviteUserId);
         entity.CommissionBalance = request.CommissionBalance;
@@ -91,6 +93,13 @@ public sealed class PanelMutationService
         entity.PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(request.Subscription.PurchaseUrl);
         entity.PortalNotice = request.Subscription.PortalNotice ?? string.Empty;
 
+        var normalizedLoginPassword = NodeFormValueCodec.TrimOrEmpty(request.LoginPassword);
+        if (!string.IsNullOrWhiteSpace(normalizedLoginPassword))
+        {
+            var passwordHasher = new PasswordHasher<UserEntity>();
+            entity.PasswordHash = passwordHasher.HashPassword(entity, normalizedLoginPassword);
+        }
+
         await _db.FSql.InsertOrUpdate<UserEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
 
         var allNodeIds = await _db.FSql.Select<NodeEntity>().ToListAsync(n => n.NodeId, cancellationToken);
@@ -103,6 +112,69 @@ public sealed class PanelMutationService
 
         await _controlPlanePushService.PushSnapshotsAsync(affectedNodes, cancellationToken).ConfigureAwait(false);
         return entity.ToRecord();
+    }
+
+    public async Task<PanelUserRecord> ResetUserSubscriptionTokenAsync(string userId, CancellationToken cancellationToken)
+    {
+        if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
+
+        var entity = await _db.FSql.Select<UserEntity>().Where(x => x.UserId == userId).FirstAsync(cancellationToken);
+        if (entity is null)
+        {
+            throw new InvalidOperationException($"User {userId} not found");
+        }
+
+        entity.SubscriptionToken = Guid.NewGuid().ToString("N");
+        await _db.FSql.InsertOrUpdate<UserEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
+        return entity.ToRecord();
+    }
+
+    public async Task<InviteCodeEntity> CreateInviteCodeAsync(string userId, int maxInviteCodesPerUser, CancellationToken cancellationToken)
+    {
+        if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
+
+        var normalizedUserId = NodeFormValueCodec.TrimOrEmpty(userId);
+        if (string.IsNullOrWhiteSpace(normalizedUserId))
+        {
+            throw new InvalidOperationException("User id is required.");
+        }
+
+        var userExists = await _db.FSql.Select<UserEntity>().Where(x => x.UserId == normalizedUserId).AnyAsync(cancellationToken);
+        if (!userExists)
+        {
+            throw new InvalidOperationException($"User {normalizedUserId} not found");
+        }
+
+        if (maxInviteCodesPerUser > 0)
+        {
+            var existingCount = (int)await _db.FSql.Select<InviteCodeEntity>().Where(x => x.UserId == normalizedUserId).CountAsync(cancellationToken);
+            if (existingCount >= maxInviteCodesPerUser)
+            {
+                throw new InvalidOperationException("当前已达到可生成的邀请码上限。");
+            }
+        }
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var code = GenerateInviteCodeValue();
+            var exists = await _db.FSql.Select<InviteCodeEntity>().Where(x => x.Code == code).AnyAsync(cancellationToken);
+            if (exists)
+            {
+                continue;
+            }
+
+            var entity = new InviteCodeEntity
+            {
+                Code = code,
+                UserId = normalizedUserId,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+
+            await _db.FSql.Insert(entity).ExecuteAffrowsAsync(cancellationToken);
+            return entity;
+        }
+
+        throw new InvalidOperationException("邀请码生成失败，请稍后重试。");
     }
 
     public async Task ResetUserTrafficAsync(string userId, CancellationToken cancellationToken)
@@ -191,6 +263,7 @@ public sealed class PanelMutationService
 
             var request = new UpsertUserRequest
             {
+                Email = user.Email,
                 DisplayName = user.DisplayName,
                 SubscriptionToken = user.SubscriptionToken,
                 TrojanPassword = user.TrojanPassword,
@@ -384,6 +457,26 @@ public sealed class PanelMutationService
 
         return Guid.NewGuid().ToString("D");
     }
+
+    private static string NormalizeSecret(string? requested, string? current)
+    {
+        var normalizedRequested = NodeFormValueCodec.TrimOrEmpty(requested);
+        if (!string.IsNullOrWhiteSpace(normalizedRequested))
+        {
+            return normalizedRequested;
+        }
+
+        var normalizedCurrent = NodeFormValueCodec.TrimOrEmpty(current);
+        if (!string.IsNullOrWhiteSpace(normalizedCurrent))
+        {
+            return normalizedCurrent;
+        }
+
+        return Guid.NewGuid().ToString("N");
+    }
+
+    private static string GenerateInviteCodeValue()
+        => Guid.NewGuid().ToString("N")[..8];
 
     private static IReadOnlyList<string> NormalizeNodeIds(IReadOnlyList<string> nodeIds)
         => nodeIds

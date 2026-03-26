@@ -12,7 +12,11 @@ public static class PlanPresentation
     public const string TrafficUnitMb = "MB";
     public const string TrafficUnitGb = "GB";
     public const string TrafficUnitTb = "TB";
+    public const string RateUnitKbPerSecond = "KB/s";
+    public const string RateUnitMbPerSecond = "MB/s";
+    public const string RateUnitGbPerSecond = "GB/s";
 
+    private const long Kilobyte = 1024L;
     private const long Megabyte = 1024L * 1024L;
     private const long Gigabyte = Megabyte * 1024L;
     private const long Terabyte = Gigabyte * 1024L;
@@ -149,6 +153,17 @@ public static class PlanPresentation
         return $"{amount:0.##} {unit}";
     }
 
+    public static string FormatRate(long bytesPerSecond)
+    {
+        if (bytesPerSecond <= 0)
+        {
+            return "不限速";
+        }
+
+        var (amount, unit) = ToEditableRate(bytesPerSecond);
+        return $"{amount:0.##} {unit}";
+    }
+
     public static (decimal Amount, string Unit) ToEditableTraffic(long bytes)
     {
         var normalizedBytes = Math.Max(0L, bytes);
@@ -208,12 +223,79 @@ public static class PlanPresentation
         return decimal.ToInt64(bytes);
     }
 
+    public static (decimal Amount, string Unit) ToEditableRate(long bytesPerSecond)
+    {
+        var normalizedBytesPerSecond = Math.Max(0L, bytesPerSecond);
+        if (normalizedBytesPerSecond == 0)
+        {
+            return (0m, RateUnitMbPerSecond);
+        }
+
+        if (normalizedBytesPerSecond % Gigabyte == 0)
+        {
+            return (normalizedBytesPerSecond / (decimal)Gigabyte, RateUnitGbPerSecond);
+        }
+
+        if (normalizedBytesPerSecond % Megabyte == 0)
+        {
+            return (normalizedBytesPerSecond / (decimal)Megabyte, RateUnitMbPerSecond);
+        }
+
+        if (normalizedBytesPerSecond % Kilobyte == 0)
+        {
+            return (normalizedBytesPerSecond / (decimal)Kilobyte, RateUnitKbPerSecond);
+        }
+
+        if (normalizedBytesPerSecond >= Gigabyte)
+        {
+            return (decimal.Round(normalizedBytesPerSecond / (decimal)Gigabyte, 2, MidpointRounding.AwayFromZero), RateUnitGbPerSecond);
+        }
+
+        if (normalizedBytesPerSecond >= Megabyte)
+        {
+            return (decimal.Round(normalizedBytesPerSecond / (decimal)Megabyte, 2, MidpointRounding.AwayFromZero), RateUnitMbPerSecond);
+        }
+
+        return (decimal.Round(normalizedBytesPerSecond / (decimal)Kilobyte, 2, MidpointRounding.AwayFromZero), RateUnitKbPerSecond);
+    }
+
+    public static long ToRateBytesPerSecond(decimal amount, string? unit)
+    {
+        if (amount <= 0)
+        {
+            return 0;
+        }
+
+        var factor = NormalizeRateUnit(unit) switch
+        {
+            RateUnitGbPerSecond => Gigabyte,
+            RateUnitKbPerSecond => Kilobyte,
+            _ => Megabyte
+        };
+
+        var bytesPerSecond = decimal.Round(amount * factor, 0, MidpointRounding.AwayFromZero);
+        if (bytesPerSecond >= long.MaxValue)
+        {
+            return long.MaxValue;
+        }
+
+        return decimal.ToInt64(bytesPerSecond);
+    }
+
     public static string NormalizeTrafficUnit(string? unit)
         => unit?.Trim().ToUpperInvariant() switch
         {
             TrafficUnitMb => TrafficUnitMb,
             TrafficUnitTb => TrafficUnitTb,
             _ => TrafficUnitGb
+        };
+
+    public static string NormalizeRateUnit(string? unit)
+        => unit?.Trim().ToUpperInvariant() switch
+        {
+            "GB/S" => RateUnitGbPerSecond,
+            "KB/S" => RateUnitKbPerSecond,
+            _ => RateUnitMbPerSecond
         };
 
     private static void AppendCycleOption(List<PlanCycleOption> options, string cycle, decimal? price)

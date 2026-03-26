@@ -32,15 +32,21 @@ public sealed class UserPortalService
     public Task<(bool Success, PortalPageViewModel Model, string Error)> TryBuildAsync(string token, HttpRequest request, CancellationToken cancellationToken = default)
     {
         return TryBuildInternalAsync(
-            () => _subscriptionCatalogService.TryBuildAsync(token, cancellationToken), 
-            token, request, cancellationToken);
+            () => _subscriptionCatalogService.TryBuildAsync(token, cancellationToken),
+            token,
+            "portal",
+            request,
+            cancellationToken);
     }
 
     public Task<(bool Success, PortalPageViewModel Model, string Error)> TryBuildByUserIdAsync(string userId, HttpRequest request, CancellationToken cancellationToken = default)
     {
         return TryBuildInternalAsync(
-            () => _subscriptionCatalogService.TryBuildByUserIdAsync(userId, cancellationToken), 
-            "", request, cancellationToken);
+            () => _subscriptionCatalogService.TryBuildByUserIdAsync(userId, cancellationToken),
+            string.Empty,
+            "user",
+            request,
+            cancellationToken);
     }
 
     public async Task<PortalStoreViewModel> BuildStoreAsync(string userId, CancellationToken cancellationToken)
@@ -79,6 +85,7 @@ public sealed class UserPortalService
     private async Task<(bool Success, PortalPageViewModel Model, string Error)> TryBuildInternalAsync(
         Func<Task<(bool Success, SubscriptionCatalog Catalog, string Error)>> catalogFactory,
         string tokenFallback,
+        string resetSubscriptionReturnTarget,
         HttpRequest request, 
         CancellationToken cancellationToken)
     {
@@ -89,7 +96,14 @@ public sealed class UserPortalService
         }
 
         var catalog = buildResult.Catalog;
-        var traffic = await _panelQueryService.BuildUserTrafficSummaryAsync(catalog.User.UserId, cancellationToken) ?? new PanelUserTrafficSummary { UserId = catalog.User.UserId };
+        var trafficTask = _panelQueryService.BuildUserTrafficSummaryAsync(catalog.User.UserId, cancellationToken);
+        var referralTask = _panelQueryService.BuildUserReferralCenterAsync(catalog.User.UserId, cancellationToken);
+        var settingsTask = _panelQueryService.GetSettingsAsync(cancellationToken);
+        await Task.WhenAll(trafficTask, referralTask, settingsTask).ConfigureAwait(false);
+
+        var traffic = trafficTask.Result ?? new PanelUserTrafficSummary { UserId = catalog.User.UserId };
+        var referral = referralTask.Result;
+        var settings = settingsTask.Result;
         var subscription = catalog.User.Subscription;
         var totalTraffic = Math.Max(0, subscription.TransferEnableBytes);
         var remainingTraffic = totalTraffic > 0 ? Math.Max(0, totalTraffic - traffic.TotalBytes) : 0;
@@ -101,6 +115,9 @@ public sealed class UserPortalService
             LookupToken = tokenFallback,
             IsResolved = true,
             DisplayName = title,
+            CurrentSubscriptionToken = catalog.User.SubscriptionToken,
+            AllowSubscriptionReset = !string.IsNullOrWhiteSpace(catalog.User.SubscriptionToken),
+            ResetSubscriptionReturnTarget = resetSubscriptionReturnTarget,
             PortalUrl = _publicUrlBuilder.BuildPortalUrl(catalog.User.SubscriptionToken, request),
             SubscriptionUrl = _publicUrlBuilder.BuildSubscriptionUrl(catalog.User.SubscriptionToken, null, request),
             RawSubscriptionUrl = _publicUrlBuilder.BuildSubscriptionUrl(catalog.User.SubscriptionToken, "trojan", request),
@@ -111,6 +128,8 @@ public sealed class UserPortalService
             TotalTrafficText = totalTraffic > 0 ? FormatTraffic(totalTraffic) : "未限制",
             Notice = subscription.PortalNotice,
             PurchaseUrl = subscription.PurchaseUrl,
+            CurrencySymbol = settings.GetValueOrDefault("currency_symbol", "¥") ?? "¥",
+            Referral = referral,
             ImportLinks = BuildImportLinks(catalog.User.SubscriptionToken, request, title),
             Nodes = catalog.Endpoints
                 .Select(endpoint => new PortalNodeViewModel

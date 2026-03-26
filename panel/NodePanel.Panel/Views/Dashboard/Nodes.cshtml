@@ -100,7 +100,8 @@
                                 <button type="submit" class="button button--small">续签</button>
                             </form>
                         }
-                        <a class="button button--small" asp-action="Node" asp-route-nodeId="@node.Definition.NodeId">编辑</a>
+                        <a class="button button--small" asp-action="Node" asp-route-nodeId="@node.Definition.NodeId">详情</a>
+                        <a class="button button--small" asp-action="NodeEdit" asp-route-nodeId="@node.Definition.NodeId">编辑</a>
                     </td>
                 </tr>
             }

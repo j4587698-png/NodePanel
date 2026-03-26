@@ -1,0 +1,587 @@
+@using NodePanel.ControlPlane.Configuration
+@using NodePanel.ControlPlane.Protocol
+@using NodePanel.Core.Runtime
+@model NodeEditorViewModel
+@{
+    ViewData["Title"] = "节点详情";
+    var certificate = Model.Runtime.LastStatus?.Certificate;
+    var runtimeStatus = Model.Runtime.LastStatus;
+    var hostStatus = runtimeStatus?.Host;
+    var certificateMode = CertificateModes.Normalize(Model.Form.CertificateMode);
+    Model.Form.PrepareForEditView();
+    var enabledInbounds = Model.Form.Inbounds
+        .Where(static inbound => inbound.Enabled)
+        .ToArray();
+    var canRequestRenewal = Model.IsEditMode &&
+        !string.IsNullOrWhiteSpace(Model.Form.NodeId) &&
+        (certificateMode == CertificateModes.AcmeManaged || certificateMode == CertificateModes.AcmeExternal);
+    var autoRefreshSeconds = Math.Clamp(Model.Form.TelemetryFlushIntervalSeconds, 5, 60);
+    var autoRefreshMilliseconds = autoRefreshSeconds * 1000;
+    var groupNames = string.IsNullOrWhiteSpace(Model.Form.GroupIds)
+        ? Array.Empty<string>()
+        : Model.Form.GroupIds
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(groupId => Model.AvailableGroups.FirstOrDefault(group => string.Equals(group.GroupId.ToString(), groupId, StringComparison.Ordinal))?.Name ?? $"#{groupId}")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    string FormatTimestamp(DateTimeOffset? value)
+        => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+
+    string FormatBytes(long? value)
+    {
+        if (!value.HasValue || value.Value < 0)
+        {
+            return "-";
+        }
+
+        var units = new[] { "B", "KB", "MB", "GB", "TB", "PB" };
+        double size = value.Value;
+        var unitIndex = 0;
+        while (size >= 1024d && unitIndex < units.Length - 1)
+        {
+            size /= 1024d;
+            unitIndex++;
+        }
+
+        return $"{size:0.##} {units[unitIndex]}";
+    }
+
+    string FormatPercent(double? value)
+        => value.HasValue ? $"{value.Value:0.##}%" : "-";
+
+    string FormatNumber(double? value)
+        => value.HasValue ? value.Value.ToString("0.##") : "-";
+
+    string FormatDuration(long? seconds)
+    {
+        if (!seconds.HasValue || seconds.Value < 0)
+        {
+            return "-";
+        }
+
+        var duration = TimeSpan.FromSeconds(seconds.Value);
+        if (duration.TotalDays >= 1)
+        {
+            return $"{(int)duration.TotalDays} 天 {duration.Hours} 小时";
+        }
+
+        if (duration.TotalHours >= 1)
+        {
+            return $"{(int)duration.TotalHours} 小时 {duration.Minutes} 分钟";
+        }
+
+        if (duration.TotalMinutes >= 1)
+        {
+            return $"{(int)duration.TotalMinutes} 分钟 {duration.Seconds} 秒";
+        }
+
+        return $"{duration.Seconds} 秒";
+    }
+
+    string FormatLatency(long? value)
+        => value.HasValue ? $"{value.Value} ms" : "-";
+
+    string FormatText(string? value)
+        => string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
+
+    string JoinOrDash(IEnumerable<string> values)
+    {
+        var items = values
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .ToArray();
+        return items.Length == 0 ? "-" : string.Join(", ", items);
+    }
+}
+
+<style>
+    .details-stack {
+        display: grid;
+        gap: 24px;
+    }
+
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+    }
+
+    .runtime-grid {
+        display: grid;
+        gap: 16px;
+    }
+
+    .runtime-grid--summary {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .runtime-panel {
+        display: grid;
+        gap: 12px;
+        padding: 18px;
+        border: 1px solid var(--admin-border);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.02);
+    }
+
+    .runtime-panel h4 {
+        margin: 0;
+    }
+
+    .runtime-panel__subtitle {
+        margin: 0;
+    }
+
+    .runtime-list {
+        display: grid;
+        gap: 12px;
+    }
+
+    .runtime-item {
+        display: grid;
+        gap: 10px;
+        padding: 14px 16px;
+        border: 1px solid var(--admin-border);
+        border-radius: 14px;
+        background: rgba(11, 13, 23, 0.35);
+    }
+
+    .runtime-item__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .runtime-item__title {
+        display: grid;
+        gap: 4px;
+    }
+
+    .runtime-item__title strong {
+        font-size: 15px;
+    }
+
+    .runtime-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .runtime-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--admin-border);
+        font-size: 12px;
+        line-height: 1.4;
+        background: rgba(255, 255, 255, 0.04);
+    }
+
+    .runtime-badge--ok {
+        border-color: rgba(75, 179, 125, 0.55);
+        color: #8fe2ad;
+        background: rgba(75, 179, 125, 0.12);
+    }
+
+    .runtime-badge--warn {
+        border-color: rgba(224, 171, 75, 0.55);
+        color: #f0cf86;
+        background: rgba(224, 171, 75, 0.12);
+    }
+
+    .runtime-badge--error {
+        border-color: rgba(224, 90, 90, 0.55);
+        color: #ff9d9d;
+        background: rgba(224, 90, 90, 0.12);
+    }
+
+    .runtime-meta {
+        display: grid;
+        gap: 8px;
+    }
+
+    .runtime-meta__row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 14px;
+    }
+
+    .runtime-meta__row span {
+        color: var(--admin-muted);
+    }
+
+    .runtime-meta__row strong {
+        color: var(--admin-fg);
+        font-weight: 600;
+    }
+
+    @@media (max-width: 980px) {
+        .runtime-item__header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>
+
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Node Details</p>
+        <h2>@(string.IsNullOrWhiteSpace(Model.Form.DisplayName) ? Model.Form.NodeId : Model.Form.DisplayName)</h2>
+        <p class="muted">节点运行态与遥测数据已经从编辑页拆出。当前节点按 `@Model.Form.TelemetryFlushIntervalSeconds` 秒上报一次，本页每 `@autoRefreshSeconds` 秒自动刷新。</p>
+    </div>
+    <div class="page-actions">
+        <a class="button" asp-action="Nodes">返回节点列表</a>
+        <a class="button button--primary" asp-action="NodeEdit" asp-route-nodeId="@Model.Form.NodeId">编辑节点</a>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="notice">@Model.StatusMessage</div>
+}
+
+<div class="details-stack">
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Overview</p>
+                <h3>基础信息</h3>
+            </div>
+            <span class="badge @(Model.Runtime.Connected ? "badge--ok" : "badge--idle")">
+                @(Model.Runtime.Connected ? "已连接" : "离线")
+            </span>
+        </div>
+        <div class="summary-grid">
+            <section class="runtime-panel">
+                <h4>节点定义</h4>
+                <dl class="stats">
+                    <div><dt>节点 ID</dt><dd>@Model.Form.NodeId</dd></div>
+                    <div><dt>显示名</dt><dd>@FormatText(Model.Form.DisplayName)</dd></div>
+                    <div><dt>协议</dt><dd>@InboundProtocols.Normalize(Model.Form.Protocol).ToUpperInvariant()</dd></div>
+                    <div><dt>启用状态</dt><dd>@(Model.Form.Enabled ? "启用" : "停用")</dd></div>
+                    <div><dt>当前修订</dt><dd>@Model.Runtime.AppliedRevision</dd></div>
+                    <div><dt>Service 版本</dt><dd>@FormatText(Model.Runtime.Version)</dd></div>
+                    <div><dt>最近心跳</dt><dd>@FormatTimestamp(Model.Runtime.LastSeenAt)</dd></div>
+                    <div><dt>遥测周期</dt><dd>@Model.Form.TelemetryFlushIntervalSeconds 秒</dd></div>
+                </dl>
+            </section>
+
+            <section class="runtime-panel">
+                <h4>订阅与分组</h4>
+                <dl class="stats">
+                    <div><dt>订阅域名</dt><dd>@FormatText(Model.Form.SubscriptionHost)</dd></div>
+                    <div><dt>订阅 SNI</dt><dd>@FormatText(Model.Form.SubscriptionSni)</dd></div>
+                    <div><dt>订阅地区</dt><dd>@FormatText(Model.Form.SubscriptionRegion)</dd></div>
+                    <div><dt>订阅标签</dt><dd>@JoinOrDash(Model.Form.SubscriptionTags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))</dd></div>
+                    <div><dt>权限组</dt><dd>@JoinOrDash(groupNames)</dd></div>
+                    <div><dt>证书模式</dt><dd>@certificateMode</dd></div>
+                    <div><dt>证书域名</dt><dd>@FormatText(Model.Form.CertificateDomain)</dd></div>
+                    <div><dt>跳过订阅校验</dt><dd>@(Model.Form.SubscriptionAllowInsecure ? "是" : "否")</dd></div>
+                </dl>
+            </section>
+
+            <section class="runtime-panel">
+                <h4>预期接入</h4>
+                @if (enabledInbounds.Length == 0)
+                {
+                    <p class="muted">当前没有启用的接入监听。</p>
+                }
+                else
+                {
+                    <div class="runtime-list">
+                        @foreach (var inbound in enabledInbounds)
+                        {
+                            <article class="runtime-item">
+                                <div class="runtime-item__header">
+                                    <div class="runtime-item__title">
+                                        <strong>@inbound.Tag</strong>
+                                        <span class="muted">@inbound.ListenAddress:@inbound.Port</span>
+                                    </div>
+                                    <div class="runtime-badges">
+                                        <span class="runtime-badge">@InboundProtocols.Normalize(inbound.Protocol)</span>
+                                        <span class="runtime-badge">@InboundTransports.Normalize(inbound.Transport)</span>
+                                    </div>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Runtime</p>
+                <h3>运行状态</h3>
+            </div>
+            <span class="badge @(Model.Runtime.Connected ? "badge--ok" : "badge--idle")">
+                @(Model.Runtime.Connected ? "在线" : "离线")
+            </span>
+        </div>
+        <dl class="stats">
+            <div><dt>Service 版本</dt><dd>@FormatText(Model.Runtime.Version)</dd></div>
+            <div><dt>当前修订</dt><dd>@Model.Runtime.AppliedRevision</dd></div>
+            <div><dt>最近心跳</dt><dd>@FormatTimestamp(Model.Runtime.LastSeenAt)</dd></div>
+            <div><dt>证书可用</dt><dd>@(certificate?.Available == true ? "是" : "否")</dd></div>
+            <div><dt>证书模式</dt><dd>@(certificate?.Mode ?? certificateMode)</dd></div>
+            <div><dt>证书过期</dt><dd>@FormatTimestamp(certificate?.NotAfter)</dd></div>
+            <div><dt>最近尝试</dt><dd>@FormatTimestamp(certificate?.LastAttemptAt)</dd></div>
+            <div><dt>最近成功</dt><dd>@FormatTimestamp(certificate?.LastSuccessAt)</dd></div>
+        </dl>
+        @if (!string.IsNullOrWhiteSpace(certificate?.Domain))
+        {
+            <div class="muted">证书域名: @certificate.Domain</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(certificate?.Thumbprint))
+        {
+            <div class="muted mono">Thumbprint: @certificate.Thumbprint</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(Model.Runtime.LastApplyError))
+        {
+            <div class="error-box">@Model.Runtime.LastApplyError</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(certificate?.Error))
+        {
+            <div class="error-box">@certificate.Error</div>
+        }
+    </section>
+
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Certificate</p>
+                <h3>续签控制</h3>
+            </div>
+        </div>
+        @if (canRequestRenewal)
+        {
+            <div class="form">
+                <p class="muted">ACME 模式固定使用生产证书。节点会按本地检查周期自动续签，面板这里只负责下发一次立即续签请求。</p>
+                <div class="muted">
+                    @(Model.Runtime.Connected
+                        ? "节点当前在线，可以立即触发一次续签。"
+                        : "节点当前离线，无法立即下发续签，但本地自动续签仍会在 service 侧继续执行。")
+                </div>
+                <form asp-action="RenewNodeCertificate" asp-route-nodeId="@Model.Form.NodeId" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="returnUrl" value="@(Url.Action("Node", "Dashboard", new { nodeId = Model.Form.NodeId }) ?? "/")" />
+                    <button type="submit" class="button button--primary">立即续签</button>
+                </form>
+            </div>
+        }
+        else if (certificateMode == CertificateModes.ManualPfx)
+        {
+            <p class="muted">当前使用 `manual-pfx`。面板不会触发续签，请直接替换 PFX 文件。</p>
+        }
+        else if (certificateMode == CertificateModes.PanelDistributed)
+        {
+            <p class="muted">当前使用 `panel-distributed`。证书由面板统一签发、续签并重新下发到节点，请到证书管理页操作。</p>
+        }
+        else if (certificateMode == CertificateModes.Disabled)
+        {
+            <p class="muted">当前未启用证书，无法触发续签。</p>
+        }
+        else
+        {
+            <p class="muted">保存节点后即可在这里查看证书状态并触发续签。</p>
+        }
+    </section>
+
+    <section class="card">
+        <div class="card__header">
+            <div>
+                <p class="eyebrow">Telemetry</p>
+                <h3>节点遥测</h3>
+            </div>
+        </div>
+        @if (runtimeStatus is null)
+        {
+            <p class="muted">节点尚未上报遥测数据。节点上线并完成至少一次 telemetry flush 后，这里会显示主机资源、本地代理、远程入站和策略出站状态。</p>
+        }
+        else
+        {
+            <div class="runtime-grid">
+                <div class="runtime-grid runtime-grid--summary">
+                    <section class="runtime-panel">
+                        <h4>连接概况</h4>
+                        <dl class="stats">
+                            <div><dt>上报时间</dt><dd>@FormatTimestamp(runtimeStatus.Timestamp)</dd></div>
+                            <div><dt>活动会话</dt><dd>@runtimeStatus.ActiveSessions</dd></div>
+                            <div><dt>已知用户</dt><dd>@runtimeStatus.KnownUsers</dd></div>
+                            <div><dt>远程入站</dt><dd>@runtimeStatus.Inbounds.Count</dd></div>
+                            <div><dt>本地代理</dt><dd>@runtimeStatus.LocalProxies.Count</dd></div>
+                            <div><dt>策略出站</dt><dd>@runtimeStatus.OutboundStrategies.Count</dd></div>
+                        </dl>
+                    </section>
+
+                    <section class="runtime-panel">
+                        <h4>主机资源</h4>
+                        @if (hostStatus is null)
+                        {
+                            <p class="muted">当前没有主机资源数据。</p>
+                        }
+                        else
+                        {
+                            <dl class="stats">
+                                <div><dt>逻辑核心</dt><dd>@hostStatus.CpuLogicalCores</dd></div>
+                                <div><dt>CPU 使用率</dt><dd>@FormatPercent(hostStatus.CpuUsagePercent)</dd></div>
+                                <div><dt>内存可用</dt><dd>@FormatBytes(hostStatus.AvailableMemoryBytes)</dd></div>
+                                <div><dt>内存总量</dt><dd>@FormatBytes(hostStatus.TotalMemoryBytes)</dd></div>
+                                <div><dt>进程 RSS</dt><dd>@FormatBytes(hostStatus.ProcessWorkingSetBytes)</dd></div>
+                                <div><dt>Load Avg</dt><dd>@($"{FormatNumber(hostStatus.LoadAverage1m)} / {FormatNumber(hostStatus.LoadAverage5m)} / {FormatNumber(hostStatus.LoadAverage15m)}")</dd></div>
+                                <div><dt>运行时长</dt><dd>@FormatDuration(hostStatus.UptimeSeconds)</dd></div>
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(hostStatus.Error))
+                            {
+                                <div class="error-box">@hostStatus.Error</div>
+                            }
+                        }
+                    </section>
+                </div>
+
+                <section class="runtime-panel">
+                    <h4>远程入站</h4>
+                    <p class="muted runtime-panel__subtitle">面板下发到 service 的对外监听配置，包含协议、传输和监听地址。</p>
+                    @if (runtimeStatus.Inbounds.Count == 0)
+                    {
+                        <p class="muted">当前没有启用的远程入站。</p>
+                    }
+                    else
+                    {
+                        <div class="runtime-list">
+                            @foreach (var inbound in runtimeStatus.Inbounds)
+                            {
+                                <article class="runtime-item">
+                                    <div class="runtime-item__header">
+                                        <div class="runtime-item__title">
+                                            <strong>@inbound.Tag</strong>
+                                            <span class="muted">@inbound.ListenAddress:@inbound.Port</span>
+                                        </div>
+                                        <div class="runtime-badges">
+                                            <span class="runtime-badge">@inbound.Protocol</span>
+                                            <span class="runtime-badge">@inbound.Transport</span>
+                                            @if (inbound.ReceiveOriginalDestination)
+                                            {
+                                                <span class="runtime-badge runtime-badge--warn">接收原始目标</span>
+                                            }
+                                        </div>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="runtime-panel">
+                    <h4>本地代理</h4>
+                    <p class="muted runtime-panel__subtitle">service 本机开放给客户端或系统使用的本地代理入口。</p>
+                    @if (runtimeStatus.LocalProxies.Count == 0)
+                    {
+                        <p class="muted">当前没有启用的本地代理。</p>
+                    }
+                    else
+                    {
+                        <div class="runtime-list">
+                            @foreach (var proxy in runtimeStatus.LocalProxies)
+                            {
+                                <article class="runtime-item">
+                                    <div class="runtime-item__header">
+                                        <div class="runtime-item__title">
+                                            <strong>@proxy.Tag</strong>
+                                            <span class="muted">@proxy.ListenAddress:@proxy.Port</span>
+                                        </div>
+                                        <div class="runtime-badges">
+                                            <span class="runtime-badge">@proxy.Protocol</span>
+                                            <span class="runtime-badge @(proxy.Listening ? "runtime-badge--ok" : "runtime-badge--error")">
+                                                @(proxy.Listening ? "监听中" : "未监听")
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="runtime-meta">
+                                        <div class="runtime-meta__row">
+                                            <span>上次启动</span>
+                                            <strong>@FormatTimestamp(proxy.LastStartedAt)</strong>
+                                        </div>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(proxy.Error))
+                                    {
+                                        <div class="error-box">@proxy.Error</div>
+                                    }
+                                </article>
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="runtime-panel">
+                    <h4>策略出站</h4>
+                    <p class="muted runtime-panel__subtitle">显示 selector、url-test、fallback、load-balance 这类策略出站的候选探测结果。</p>
+                    @if (runtimeStatus.OutboundStrategies.Count == 0)
+                    {
+                        <p class="muted">当前没有启用策略出站。</p>
+                    }
+                    else
+                    {
+                        <div class="runtime-list">
+                            @foreach (var strategy in runtimeStatus.OutboundStrategies)
+                            {
+                                <article class="runtime-item">
+                                    <div class="runtime-item__header">
+                                        <div class="runtime-item__title">
+                                            <strong>@strategy.Tag</strong>
+                                            <span class="muted">探测地址: @(string.IsNullOrWhiteSpace(strategy.ProbeUrl) ? "-" : strategy.ProbeUrl)</span>
+                                        </div>
+                                        <div class="runtime-badges">
+                                            <span class="runtime-badge">@strategy.Protocol</span>
+                                            <span class="runtime-badge">默认选中: @(string.IsNullOrWhiteSpace(strategy.SelectedTag) ? "-" : strategy.SelectedTag)</span>
+                                        </div>
+                                    </div>
+                                    @if (strategy.Candidates.Count == 0)
+                                    {
+                                        <p class="muted">当前没有候选出站。</p>
+                                    }
+                                    else
+                                    {
+                                        <div class="runtime-list">
+                                            @foreach (var candidate in strategy.Candidates)
+                                            {
+                                                <article class="runtime-item">
+                                                    <div class="runtime-item__header">
+                                                        <div class="runtime-item__title">
+                                                            <strong>@candidate.Tag</strong>
+                                                            <span class="muted">检测时间: @FormatTimestamp(candidate.CheckedAt)</span>
+                                                        </div>
+                                                        <div class="runtime-badges">
+                                                            <span class="runtime-badge @(candidate.Success ? "runtime-badge--ok" : "runtime-badge--error")">
+                                                                @(candidate.Success ? "可用" : "失败")
+                                                            </span>
+                                                            <span class="runtime-badge">延迟: @FormatLatency(candidate.LatencyMilliseconds)</span>
+                                                        </div>
+                                                    </div>
+                                                </article>
+                                            }
+                                        </div>
+                                    }
+                                </article>
+                            }
+                        </div>
+                    }
+                </section>
+            </div>
+        }
+    </section>
+</div>
+
+@section Scripts {
+    <script>
+        (() => {
+            const delay = @autoRefreshMilliseconds;
+            window.setTimeout(() => window.location.reload(), delay);
+        })();
+    </script>
+}

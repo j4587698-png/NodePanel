@@ -232,10 +232,8 @@ write_default_env_file() {
 
     cat >"$ENV_FILE" <<EOF
 DOTNET_ENVIRONMENT=Production
-# Keep HTTP on 80 for first-time install, ACME http-01 and local ws control-plane access.
-ASPNETCORE_URLS=http://0.0.0.0:80
-# When Panel HTTPS listener address/port changes from the web UI, restart automatically under systemd.
-Panel__AutoRestartOnHttpsChange=true
+# Default to both HTTP and HTTPS when no custom URLs are supplied.
+ASPNETCORE_URLS=http://0.0.0.0:80;https://0.0.0.0:443
 Panel__DataFilePath=${DATA_DIR}/panel-state.json
 EOF
 

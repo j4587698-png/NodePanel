@@ -12,7 +12,6 @@ public sealed class DashboardController : Controller
 {
     private readonly PanelCertificateService _panelCertificateService;
     private readonly PanelMutationService _panelMutationService;
-    private readonly PanelProcessControl _panelProcessControl;
     private readonly PanelPublicUrlBuilder _publicUrlBuilder;
     private readonly PanelQueryService _panelQueryService;
 
@@ -20,14 +19,12 @@ public sealed class DashboardController : Controller
         PanelQueryService panelQueryService,
         PanelMutationService panelMutationService,
         PanelPublicUrlBuilder publicUrlBuilder,
-        PanelCertificateService panelCertificateService,
-        PanelProcessControl panelProcessControl)
+        PanelCertificateService panelCertificateService)
     {
         _panelQueryService = panelQueryService;
         _panelMutationService = panelMutationService;
         _publicUrlBuilder = publicUrlBuilder;
         _panelCertificateService = panelCertificateService;
-        _panelProcessControl = panelProcessControl;
     }
 
     [HttpGet("")]
@@ -221,25 +218,8 @@ public sealed class DashboardController : Controller
                 });
         }
 
-        var currentSettings = await _panelQueryService.GetPanelHttpsSettingsAsync(cancellationToken).ConfigureAwait(false);
-        var requiresRestart = normalizedPanelHttps.RequiresProcessRestart(currentSettings);
-
         await _panelMutationService.SavePanelHttpsSettingsAsync(normalizedPanelHttps, cancellationToken).ConfigureAwait(false);
-        if (requiresRestart &&
-            _panelProcessControl.TryScheduleRestart("Panel HTTPS listener configuration changed."))
-        {
-            return View(
-                "Restarting",
-                new PanelRestartingViewModel
-                {
-                    Title = "正在重启面板",
-                    Message = usingTemporaryCertificate
-                        ? "Panel HTTPS 监听地址或端口已保存，面板进程正在重启以应用新的监听配置。当前没有可用的正式证书，重启后会先返回临时自签证书。几秒后会自动返回证书页面。"
-                        : "Panel HTTPS 监听地址或端口已保存，面板进程正在重启以应用新的监听配置。几秒后会自动返回证书页面。",
-                    RedirectUrl = Url.Action(nameof(Certificates)) ?? "/admin/certificates"
-                });
-        }
-        var statusMessage = "Panel HTTPS 设置已保存。证书切换和 HTTP 跳转规则已立即生效。";
+        var statusMessage = "Panel HTTPS 设置已保存。监听地址和端口由 ASP.NET Core 启动参数或环境变量控制，证书绑定和 HTTP 跳转规则已立即生效。";
         if (usingTemporaryCertificate)
         {
             statusMessage += string.IsNullOrWhiteSpace(normalizedPanelHttps.CertificateId)
@@ -259,6 +239,33 @@ public sealed class DashboardController : Controller
         var validSettings = settings
             .Where(kv => !string.IsNullOrWhiteSpace(kv.Key))
             .ToDictionary(kv => kv.Key, kv => kv.Value ?? string.Empty);
+
+        var validationErrors = PanelAuthSettings.Validate(validSettings);
+        if (validationErrors.Count > 0)
+        {
+            foreach (var error in validationErrors)
+            {
+                ModelState.AddModelError(string.Empty, error);
+            }
+
+            var state = await _panelQueryService.BuildStateViewAsync(cancellationToken).ConfigureAwait(false);
+            var mergedSettings = new Dictionary<string, string>(state.Settings, StringComparer.Ordinal);
+            foreach (var (key, value) in validSettings)
+            {
+                mergedSettings[key] = value;
+            }
+
+            return View(
+                "Settings",
+                new DashboardPageViewModel
+                {
+                    State = state with
+                    {
+                        Settings = mergedSettings
+                    },
+                    StatusMessage = BuildValidationStatusMessage("系统设置校验失败")
+                });
+        }
 
         await _panelMutationService.SaveSettingsAsync(validSettings, cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = "系统设置已保存。";
@@ -283,6 +290,7 @@ public sealed class DashboardController : Controller
             {
                 Form = form,
                 IsEditMode = false,
+                ShowRuntimeDetails = false,
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty,
                 AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
                 AvailableCertificates = certificates
@@ -292,27 +300,35 @@ public sealed class DashboardController : Controller
     [HttpGet("nodes/{nodeId}")]
     public async Task<IActionResult> Node(string nodeId, CancellationToken cancellationToken)
     {
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        var node = state.Nodes.FirstOrDefault(item => string.Equals(item.Definition.NodeId, nodeId, StringComparison.Ordinal));
-        if (node is null)
+        var model = await BuildExistingNodeEditorViewModelAsync(
+            nodeId,
+            TempData["StatusMessage"]?.ToString() ?? string.Empty,
+            true,
+            cancellationToken);
+        if (model is null)
         {
             TempData["StatusMessage"] = $"节点 {nodeId} 不存在。";
-            return RedirectToAction(nameof(Index));
+            return RedirectToAction(nameof(Nodes));
         }
 
-        var form = NodeFormInput.FromRecord(node.Definition);
-        form.PrepareForEditView();
+        return View("NodeDetails", model);
+    }
 
-        return View(
-            new NodeEditorViewModel
-            {
-                Form = form,
-                IsEditMode = true,
-                Runtime = node.Runtime,
-                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty,
-                AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
-                AvailableCertificates = await _panelQueryService.GetCertificatesAsync(cancellationToken)
-            });
+    [HttpGet("nodes/{nodeId}/edit")]
+    public async Task<IActionResult> NodeEdit(string nodeId, CancellationToken cancellationToken)
+    {
+        var model = await BuildExistingNodeEditorViewModelAsync(
+            nodeId,
+            TempData["StatusMessage"]?.ToString() ?? string.Empty,
+            false,
+            cancellationToken);
+        if (model is null)
+        {
+            TempData["StatusMessage"] = $"èŠ‚ç‚¹ {nodeId} ä¸å­˜åœ¨ã€‚";
+            return RedirectToAction(nameof(Nodes));
+        }
+
+        return View("Node", model);
     }
 
     [HttpPost("nodes/save")]
@@ -386,19 +402,16 @@ public sealed class DashboardController : Controller
 
     [HttpGet("users/new")]
     public async Task<IActionResult> NewUser(CancellationToken cancellationToken)
-    {
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        return View(
+        => View(
             "User",
-            new UserEditorViewModel
-            {
-                Form = new UserFormInput(),
-                IsEditMode = false,
-                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty,
-                Plans = state.Plans,
-                AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
-            });
-    }
+            await BuildUserEditorViewModelAsync(
+                new UserFormInput
+                {
+                    UserId = Guid.NewGuid().ToString("N")
+                },
+                isEditMode: false,
+                statusMessage: TempData["StatusMessage"]?.ToString() ?? string.Empty,
+                cancellationToken: cancellationToken));
 
     [HttpGet("users/{userId}")]
     public async Task<IActionResult> UserEditor(string userId, CancellationToken cancellationToken)
@@ -410,26 +423,32 @@ public sealed class DashboardController : Controller
             return RedirectToAction(nameof(Index));
         }
 
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-
         return View(
             "User",
-            new UserEditorViewModel
-            {
-                Form = UserFormInput.FromRecord(user),
-                IsEditMode = true,
-                PortalUrl = BuildPortalUrl(user.SubscriptionToken),
-                SubscriptionUrl = BuildSubscriptionUrl(user.SubscriptionToken),
-                StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty,
-                Plans = state.Plans,
-                AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
-            });
+            await BuildUserEditorViewModelAsync(
+                UserFormInput.FromRecord(user),
+                isEditMode: true,
+                statusMessage: TempData["StatusMessage"]?.ToString() ?? string.Empty,
+                cancellationToken: cancellationToken,
+                user));
     }
 
     [HttpPost("users/save")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveUser(UserFormInput form, CancellationToken cancellationToken)
     {
+        var normalizedUserId = NodeFormValueCodec.TrimOrEmpty(form.UserId);
+        var currentUser = string.IsNullOrWhiteSpace(normalizedUserId)
+            ? null
+            : await _panelQueryService.FindUserAsync(normalizedUserId, cancellationToken);
+
+        var existingByEmail = await _panelQueryService.FindUserByEmailAsync(form.Email, cancellationToken);
+        if (existingByEmail is not null &&
+            !string.Equals(existingByEmail.UserId, normalizedUserId, StringComparison.Ordinal))
+        {
+            ModelState.AddModelError(nameof(form.Email), "邮箱已被其他用户占用。");
+        }
+
         if (!ModelState.IsValid)
         {
             var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
@@ -438,17 +457,21 @@ public sealed class DashboardController : Controller
                 new UserEditorViewModel
                 {
                     Form = form,
-                    IsEditMode = true,
-                    PortalUrl = BuildPortalUrl(form.SubscriptionToken),
-                    SubscriptionUrl = BuildSubscriptionUrl(form.SubscriptionToken),
+                    IsEditMode = currentUser is not null,
+                    HasPortalPassword = currentUser?.HasPortalPassword ?? false,
+                    PortalUrl = BuildPortalUrl(currentUser?.SubscriptionToken ?? form.SubscriptionToken),
+                    SubscriptionUrl = BuildSubscriptionUrl(currentUser?.SubscriptionToken ?? form.SubscriptionToken),
                     StatusMessage = BuildValidationStatusMessage("用户配置校验失败"),
                     Plans = state.Plans,
                     AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
                 });
         }
 
-        var userId = NodeFormValueCodec.TrimOrEmpty(form.UserId);
+        var userId = string.IsNullOrWhiteSpace(normalizedUserId)
+            ? Guid.NewGuid().ToString("N")
+            : normalizedUserId;
         var saved = await _panelMutationService.SaveUserAsync(userId, form.ToRequest(), cancellationToken).ConfigureAwait(false);
+        TempData["StatusMessage"] = $"用户 {userId} 已保存。";
         TempData["StatusMessage"] = $"用户 {userId} 已保存。";
         return RedirectToAction(nameof(UserEditor), new { userId = saved.UserId });
     }
@@ -485,6 +508,7 @@ public sealed class DashboardController : Controller
         {
             var request = new UpsertUserRequest
             {
+                Email = user.Email,
                 DisplayName = user.DisplayName,
                 SubscriptionToken = user.SubscriptionToken,
                 TrojanPassword = user.TrojanPassword,
@@ -548,6 +572,21 @@ public sealed class DashboardController : Controller
 
         await _panelMutationService.ResetUserTrafficAsync(normalizedUserId, cancellationToken).ConfigureAwait(false);
         TempData["StatusMessage"] = $"已重置用户 {normalizedUserId} 的流量。";
+        return RedirectToAction(nameof(UserEditor), new { userId = normalizedUserId });
+    }
+
+    [HttpPost("users/{userId}/reset-subscription-token")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ResetUserSubscriptionToken(string userId, CancellationToken cancellationToken)
+    {
+        var normalizedUserId = userId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedUserId))
+        {
+            return RedirectToAction(nameof(Index));
+        }
+
+        await _panelMutationService.ResetUserSubscriptionTokenAsync(normalizedUserId, cancellationToken).ConfigureAwait(false);
+        TempData["StatusMessage"] = $"用户 {normalizedUserId} 的订阅令牌已重置，旧链接立即失效。";
         return RedirectToAction(nameof(UserEditor), new { userId = normalizedUserId });
     }
 
@@ -619,6 +658,62 @@ public sealed class DashboardController : Controller
 
     private string BuildSubscriptionUrl(string token)
         => string.IsNullOrWhiteSpace(token) ? string.Empty : _publicUrlBuilder.BuildSubscriptionUrl(token, null, Request);
+
+    private async Task<UserEditorViewModel> BuildUserEditorViewModelAsync(
+        UserFormInput form,
+        bool isEditMode,
+        string statusMessage,
+        CancellationToken cancellationToken,
+        PanelUserRecord? currentUser = null)
+    {
+        var resolvedUser = currentUser;
+        if (resolvedUser is null && !string.IsNullOrWhiteSpace(form.UserId))
+        {
+            resolvedUser = await _panelQueryService.FindUserAsync(form.UserId, cancellationToken);
+        }
+
+        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
+
+        return new UserEditorViewModel
+        {
+            Form = form,
+            IsEditMode = isEditMode,
+            HasPortalPassword = resolvedUser?.HasPortalPassword ?? false,
+            PortalUrl = BuildPortalUrl(resolvedUser?.SubscriptionToken ?? form.SubscriptionToken),
+            SubscriptionUrl = BuildSubscriptionUrl(resolvedUser?.SubscriptionToken ?? form.SubscriptionToken),
+            StatusMessage = statusMessage,
+            Plans = state.Plans,
+            AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
+        };
+    }
+
+    private async Task<NodeEditorViewModel?> BuildExistingNodeEditorViewModelAsync(
+        string nodeId,
+        string statusMessage,
+        bool showRuntimeDetails,
+        CancellationToken cancellationToken)
+    {
+        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
+        var node = state.Nodes.FirstOrDefault(item => string.Equals(item.Definition.NodeId, nodeId, StringComparison.Ordinal));
+        if (node is null)
+        {
+            return null;
+        }
+
+        var form = NodeFormInput.FromRecord(node.Definition);
+        form.PrepareForEditView();
+
+        return new NodeEditorViewModel
+        {
+            Form = form,
+            IsEditMode = true,
+            ShowRuntimeDetails = showRuntimeDetails,
+            Runtime = node.Runtime,
+            StatusMessage = statusMessage,
+            AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
+            AvailableCertificates = await _panelQueryService.GetCertificatesAsync(cancellationToken)
+        };
+    }
 
     private IActionResult RedirectToLocalOrDefault(string? returnUrl, string actionName, object? routeValues = null)
     {

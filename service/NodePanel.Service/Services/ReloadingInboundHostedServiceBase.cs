@@ -32,6 +32,18 @@ public abstract class ReloadingInboundHostedServiceBase : BackgroundService
         X509Certificate2? certificate,
         CancellationToken cancellationToken);
 
+    protected virtual void OnRuntimeInactive(NodeRuntimeSnapshot snapshot)
+    {
+    }
+
+    protected virtual void OnHostFault(NodeRuntimeSnapshot snapshot, Exception exception)
+    {
+    }
+
+    protected virtual void OnHostUnexpectedStop(NodeRuntimeSnapshot snapshot)
+    {
+    }
+
     protected virtual string ResolveCertificatePath(NodeRuntimeSnapshot snapshot)
         => snapshot.Config.Certificate.PfxPath;
 
@@ -45,6 +57,7 @@ public abstract class ReloadingInboundHostedServiceBase : BackgroundService
             var snapshot = _runtimeConfigStore.GetSnapshot();
             if (!HasActiveRuntime(snapshot))
             {
+                OnRuntimeInactive(snapshot);
                 await _runtimeConfigStore.WaitForChangeAsync(snapshot.Revision, stoppingToken).ConfigureAwait(false);
                 continue;
             }
@@ -69,6 +82,7 @@ public abstract class ReloadingInboundHostedServiceBase : BackgroundService
                 }
                 catch (Exception ex)
                 {
+                    OnHostFault(snapshot, ex);
                     _logger.LogError(ex, "{Host} failed to load certificate from {Path}.", HostDisplayName, certificatePath);
                     await WaitForReloadAsync(snapshot.Revision, _certificateStateStore.GetSnapshot().AssetVersion, stoppingToken).ConfigureAwait(false);
                     continue;
@@ -103,12 +117,14 @@ public abstract class ReloadingInboundHostedServiceBase : BackgroundService
 
                 if (completed == hostTask && !stoppingToken.IsCancellationRequested)
                 {
+                    OnHostUnexpectedStop(snapshot);
                     _logger.LogWarning("{Host} ended unexpectedly. Restarting on the current revision.", HostDisplayName);
                     await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
+                OnHostFault(snapshot, ex);
                 _logger.LogError(ex, "{Host} failed for revision {Revision}.", HostDisplayName, snapshot.Revision);
                 await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken).ConfigureAwait(false);
             }

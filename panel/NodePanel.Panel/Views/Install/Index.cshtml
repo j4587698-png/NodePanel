@@ -54,7 +54,7 @@
         <div class="card install-card">
             <div class="install-header">
                 <h1>NodePanel 安装向导</h1>
-                <p>配置您的数据库并创建管理员账户</p>
+                <p>配置数据库，并创建管理员用户名、邮箱和密码</p>
             </div>
 
             @if (!ViewData.ModelState.IsValid)
@@ -103,6 +103,11 @@
                 </div>
 
                 <hr />
+
+                <div>
+                    <label for="AdminDisplayName">管理员用户名</label>
+                    <input id="AdminDisplayName" asp-for="AdminDisplayName" placeholder="admin" required autocomplete="nickname" />
+                </div>
 
                 <div>
                     <label for="AdminEmail">管理员邮箱</label>

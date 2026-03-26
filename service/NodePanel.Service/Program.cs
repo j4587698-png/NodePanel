@@ -22,6 +22,8 @@ builder.Services.AddSingleton(XrayRuntimeOptions.FromEnvironment());
 
 builder.Services.AddSingleton<RuntimeConfigStore>();
 builder.Services.AddSingleton<CertificateStateStore>();
+builder.Services.AddSingleton<HostResourceTelemetryProvider>();
+builder.Services.AddSingleton<LocalProxyStateStore>();
 builder.Services.AddSingleton<PersistedNodeConfigStore>();
 builder.Services.AddSingleton<CertificateRenewalSignal>();
 builder.Services.AddSingleton<AcmeHttpChallengeStore>();
@@ -44,7 +46,8 @@ builder.Services.AddSingleton<IDnsRuntimeSettingsProvider>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<IDnsResolver>(sp => new RuntimeDnsResolver(sp.GetRequiredService<IDnsRuntimeSettingsProvider>()));
 builder.Services.AddSingleton<IOutboundHandler, FreedomOutboundHandler>();
 builder.Services.AddSingleton<IOutboundHandler, TrojanOutboundHandler>();
-builder.Services.AddSingleton<IStrategyOutboundProbeService, StrategyOutboundProbeService>();
+builder.Services.AddSingleton<StrategyOutboundProbeService>();
+builder.Services.AddSingleton<IStrategyOutboundProbeService>(sp => sp.GetRequiredService<StrategyOutboundProbeService>());
 builder.Services.AddSingleton<IOutboundHandler, SelectorOutboundHandler>();
 builder.Services.AddSingleton<IOutboundHandler, UrlTestOutboundHandler>();
 builder.Services.AddSingleton<IOutboundHandler, FallbackOutboundHandler>();

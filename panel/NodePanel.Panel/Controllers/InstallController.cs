@@ -51,7 +51,14 @@ public class InstallController : Controller
             // 1. Test connection
             var normalizedDbType = NodeFormValueCodec.TrimOrEmpty(request.DbType);
             var normalizedDbName = NodeFormValueCodec.TrimOrEmpty(request.DbName);
+            var normalizedAdminDisplayName = NodeFormValueCodec.TrimOrEmpty(request.AdminDisplayName);
             var normalizedAdminEmail = NodeFormValueCodec.TrimOrEmpty(request.AdminEmail);
+            if (string.IsNullOrWhiteSpace(normalizedAdminDisplayName))
+            {
+                ModelState.AddModelError(nameof(request.AdminDisplayName), "管理员用户名不能为空。");
+                return View(request);
+            }
+
             var dataType = DataType.Sqlite;
             var connectionString = $"Data Source={normalizedDbName}";
 
@@ -76,6 +83,7 @@ public class InstallController : Controller
             testFsql.CodeFirst.SyncStructure<NodeEntity>();
             testFsql.CodeFirst.SyncStructure<PlanEntity>();
             testFsql.CodeFirst.SyncStructure<TrafficRecordEntity>();
+            testFsql.CodeFirst.SyncStructure<EmailVerificationCodeEntity>();
 
             // 3. Insert temp admin if not exists
             var adminExists = await testFsql.Select<UserEntity>().Where(u => u.Email == normalizedAdminEmail).AnyAsync();
@@ -87,7 +95,7 @@ public class InstallController : Controller
                     UserId = Guid.NewGuid().ToString("N"),
                     Email = normalizedAdminEmail,
                     IsAdmin = true,
-                    DisplayName = "Administrator",
+                    DisplayName = normalizedAdminDisplayName,
                     TrojanPassword = Guid.NewGuid().ToString("N"),
                     V2rayUuid = Guid.NewGuid().ToString("D"),
                     SubscriptionToken = Guid.NewGuid().ToString("N")

@@ -56,7 +56,17 @@
             color: var(--admin-accent-hover);
             text-decoration: underline;
         }
+        .auth-links {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 24px;
+            flex-wrap: wrap;
+        }
         .auth-error {
+            margin-bottom: 24px;
+        }
+        .auth-notice {
             margin-bottom: 24px;
         }
     </style>
@@ -69,6 +79,11 @@
                 <p>登录以管理您的服务节点与订阅</p>
             </div>
 
+            @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+            {
+                <div class="notice auth-notice">@Model.StatusMessage</div>
+            }
+
             @if (!ViewData.ModelState.IsValid)
             {
                 <div class="error-box auth-error">
@@ -77,6 +92,7 @@
             }
 
             <form asp-action="Login" method="post" class="form">
+                @Html.AntiForgeryToken()
                 <div>
                     <label for="Email">邮箱地址</label>
                     <input id="Email" asp-for="Email" type="email" placeholder="admin@example.com" required autocomplete="email" />
@@ -95,7 +111,16 @@
                 </div>
 
                 <button type="submit" class="button button--primary" style="width: 100%; margin-top: 8px;">登 录</button>
-                <a href="/auth/register" class="register-link">还没有账号？立即注册</a>
+                <div class="auth-links">
+                    @if (Model.AllowRegistration)
+                    {
+                        <a href="/auth/register" class="register-link">立即注册</a>
+                    }
+                    @if (Model.AllowPasswordReset)
+                    {
+                        <a href="/auth/forgot-password" class="register-link">忘记密码</a>
+                    }
+                </div>
             </form>
         </div>
     </div>
