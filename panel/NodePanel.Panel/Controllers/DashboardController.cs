@@ -413,6 +413,7 @@ public sealed class DashboardController : Controller
         var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
 
         return View(
+            "User",
             new UserEditorViewModel
             {
                 Form = UserFormInput.FromRecord(user),
@@ -488,6 +489,9 @@ public sealed class DashboardController : Controller
                 SubscriptionToken = user.SubscriptionToken,
                 TrojanPassword = user.TrojanPassword,
                 V2rayUuid = user.V2rayUuid,
+                InviteUserId = user.InviteUserId,
+                CommissionBalance = user.CommissionBalance,
+                CommissionRate = user.CommissionRate,
                 GroupId = plan.GroupId,
                 Enabled = true,
                 BytesPerSecond = user.BytesPerSecond,

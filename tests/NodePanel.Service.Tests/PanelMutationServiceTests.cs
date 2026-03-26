@@ -269,6 +269,42 @@ public sealed class PanelMutationServiceTests
     }
 
     [Fact]
+    public async Task SaveUserAsync_persists_extended_user_fields()
+    {
+        using var harness = new PanelMutationHarness();
+
+        var saved = await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                InviteUserId = "inviter-a",
+                CommissionBalance = 12.34m,
+                CommissionRate = 35,
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    TransferEnableBytes = 1024,
+                    PurchaseUrl = "https://panel.example.com/plan/starter",
+                    PortalNotice = "Portal notice"
+                }
+            },
+            CancellationToken.None);
+
+        var stored = await harness.GetUserAsync("user-a");
+
+        Assert.Equal("inviter-a", saved.InviteUserId);
+        Assert.Equal(12.34m, saved.CommissionBalance);
+        Assert.Equal(35, saved.CommissionRate);
+        Assert.Equal("https://panel.example.com/plan/starter", saved.Subscription.PurchaseUrl);
+        Assert.Equal("Portal notice", saved.Subscription.PortalNotice);
+        Assert.Equal("inviter-a", stored.InviteUserId);
+        Assert.Equal(12.34m, stored.CommissionBalance);
+        Assert.Equal(35, stored.CommissionRate);
+        Assert.Equal("https://panel.example.com/plan/starter", stored.PurchaseUrl);
+        Assert.Equal("Portal notice", stored.PortalNotice);
+    }
+
+    [Fact]
     public async Task SaveUserAsync_persists_cycle_and_preserves_existing_cycle_when_request_omits_it()
     {
         using var harness = new PanelMutationHarness();
@@ -301,6 +337,58 @@ public sealed class PanelMutationServiceTests
 
         Assert.Equal("month", updated.Subscription.Cycle);
         Assert.Equal("month", (await harness.GetUserAsync("user-a")).Cycle);
+    }
+
+    [Fact]
+    public async Task CompleteOrderAsync_preserves_existing_user_metadata()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePlanAsync(
+            "plan-a",
+            new UpsertPlanRequest
+            {
+                Name = "Pro Plan",
+                GroupId = 2,
+                TransferEnableBytes = 536870912000L,
+                MonthPrice = 20m
+            },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                InviteUserId = "inviter-a",
+                CommissionBalance = 8.5m,
+                CommissionRate = 15,
+                Subscription = new PanelUserSubscriptionProfile
+                {
+                    PlanName = "starter",
+                    Cycle = "month",
+                    TransferEnableBytes = 1024,
+                    PurchaseUrl = "https://panel.example.com/upgrade",
+                    PortalNotice = "Existing portal notice"
+                }
+            },
+            CancellationToken.None);
+
+        var order = await harness.MutationService.CreateOrderAsync(
+            "user-a",
+            "plan-a",
+            "month",
+            20m,
+            cancellationToken: CancellationToken.None);
+
+        await harness.MutationService.CompleteOrderAsync(order.OrderId, CancellationToken.None);
+
+        var user = await harness.GetUserAsync("user-a");
+
+        Assert.Equal("inviter-a", user.InviteUserId);
+        Assert.Equal(8.5m, user.CommissionBalance);
+        Assert.Equal(15, user.CommissionRate);
+        Assert.Equal("https://panel.example.com/upgrade", user.PurchaseUrl);
+        Assert.Equal("Existing portal notice", user.PortalNotice);
     }
 
     [Fact]
@@ -402,6 +490,30 @@ public sealed class PanelMutationServiceTests
         Assert.NotNull(traffic);
         Assert.Equal(0L, traffic!.UploadBytes);
         Assert.Equal(0L, traffic.DownloadBytes);
+    }
+
+    [Fact]
+    public void UserEntity_to_record_accepts_legacy_csv_node_ids()
+    {
+        var entity = new UserEntity
+        {
+            UserId = "user-a",
+            InviteUserId = "inviter-a",
+            CommissionBalance = 3.21m,
+            CommissionRate = 25,
+            PurchaseUrl = "https://panel.example.com/upgrade",
+            PortalNotice = "Existing portal notice",
+            NodeIdsJson = "node-b, node-a, node-b"
+        };
+
+        var record = entity.ToRecord();
+
+        Assert.Equal(["node-b", "node-a"], record.NodeIds);
+        Assert.Equal("inviter-a", record.InviteUserId);
+        Assert.Equal(3.21m, record.CommissionBalance);
+        Assert.Equal(25, record.CommissionRate);
+        Assert.Equal("https://panel.example.com/upgrade", record.Subscription.PurchaseUrl);
+        Assert.Equal("Existing portal notice", record.Subscription.PortalNotice);
     }
 
     [Fact]

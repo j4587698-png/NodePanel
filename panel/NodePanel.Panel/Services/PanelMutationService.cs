@@ -74,6 +74,9 @@ public sealed class PanelMutationService
         entity.SubscriptionToken = request.SubscriptionToken;
         entity.TrojanPassword = request.TrojanPassword;
         entity.V2rayUuid = NormalizeUuid(request.V2rayUuid, existing?.V2rayUuid);
+        entity.InviteUserId = NodeFormValueCodec.TrimOrEmpty(request.InviteUserId);
+        entity.CommissionBalance = request.CommissionBalance;
+        entity.CommissionRate = Math.Clamp(request.CommissionRate, 0, 100);
         entity.GroupId = request.GroupId;
         entity.Enabled = request.Enabled;
         entity.BytesPerSecond = request.BytesPerSecond;
@@ -85,6 +88,8 @@ public sealed class PanelMutationService
             : request.Subscription.Cycle;
         entity.TransferEnableBytes = request.Subscription.TransferEnableBytes;
         entity.ExpiresAt = request.Subscription.ExpiresAt;
+        entity.PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(request.Subscription.PurchaseUrl);
+        entity.PortalNotice = request.Subscription.PortalNotice ?? string.Empty;
 
         await _db.FSql.InsertOrUpdate<UserEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
 
@@ -190,6 +195,9 @@ public sealed class PanelMutationService
                 SubscriptionToken = user.SubscriptionToken,
                 TrojanPassword = user.TrojanPassword,
                 V2rayUuid = user.V2rayUuid,
+                InviteUserId = user.InviteUserId,
+                CommissionBalance = user.CommissionBalance,
+                CommissionRate = user.CommissionRate,
                 GroupId = plan.GroupId,
                 Enabled = true,
                 BytesPerSecond = user.BytesPerSecond,
@@ -201,8 +209,8 @@ public sealed class PanelMutationService
                     Cycle = order.Cycle,
                     TransferEnableBytes = plan.TransferEnableBytes,
                     ExpiresAt = targetExpiresAt,
-                    PurchaseUrl = string.Empty,
-                    PortalNotice = string.Empty
+                    PurchaseUrl = user.PurchaseUrl,
+                    PortalNotice = user.PortalNotice
                 }
             };
             await SaveUserAsync(user.UserId, request, cancellationToken).ConfigureAwait(false);

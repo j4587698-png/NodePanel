@@ -45,6 +45,12 @@ public class UserEntity
     public DateTimeOffset? ExpiresAt { get; set; }
 
     [Column(DbType = "varchar(1024)")]
+    public string PurchaseUrl { get; set; } = string.Empty;
+
+    [Column(StringLength = -1)]
+    public string PortalNotice { get; set; } = string.Empty;
+
+    [Column(DbType = "varchar(1024)")]
     public string NodeIdsJson { get; set; } = "[]";
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -60,19 +66,20 @@ public class UserEntity
     [NotMapped]
     public IReadOnlyList<string> NodeIds
     {
-        get => string.IsNullOrWhiteSpace(NodeIdsJson)
-            ? Array.Empty<string>()
-            : JsonSerializer.Deserialize<string[]>(NodeIdsJson) ?? Array.Empty<string>();
-        set => NodeIdsJson = JsonSerializer.Serialize(value ?? Array.Empty<string>());
+        get => ReadNodeIds(NodeIdsJson);
+        set => NodeIdsJson = JsonSerializer.Serialize(NormalizeNodeIds(value));
     }
 
     public PanelUserRecord ToRecord() => new PanelUserRecord
     {
         UserId = UserId,
-        DisplayName = DisplayName,
-        SubscriptionToken = SubscriptionToken,
-        TrojanPassword = TrojanPassword,
-        V2rayUuid = V2rayUuid,
+        DisplayName = NodeFormValueCodec.TrimOrEmpty(DisplayName),
+        SubscriptionToken = NodeFormValueCodec.TrimOrEmpty(SubscriptionToken),
+        TrojanPassword = NodeFormValueCodec.TrimOrEmpty(TrojanPassword),
+        V2rayUuid = NodeFormValueCodec.TrimOrEmpty(V2rayUuid),
+        InviteUserId = NodeFormValueCodec.TrimOrEmpty(InviteUserId),
+        CommissionBalance = CommissionBalance,
+        CommissionRate = Math.Clamp(CommissionRate, 0, 100),
         GroupId = GroupId,
         Enabled = Enabled,
         BytesPerSecond = BytesPerSecond,
@@ -80,10 +87,12 @@ public class UserEntity
         NodeIds = NodeIds,
         Subscription = new PanelUserSubscriptionProfile
         {
-            PlanName = PlanName,
-            Cycle = Cycle,
+            PlanName = NodeFormValueCodec.TrimOrEmpty(PlanName),
+            Cycle = NodeFormValueCodec.TrimOrEmpty(Cycle),
             TransferEnableBytes = TransferEnableBytes,
-            ExpiresAt = ExpiresAt
+            ExpiresAt = ExpiresAt,
+            PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(PurchaseUrl),
+            PortalNotice = PortalNotice ?? string.Empty
         }
     };
 
@@ -93,6 +102,9 @@ public class UserEntity
         SubscriptionToken = record.SubscriptionToken;
         TrojanPassword = record.TrojanPassword;
         V2rayUuid = record.V2rayUuid;
+        InviteUserId = record.InviteUserId;
+        CommissionBalance = record.CommissionBalance;
+        CommissionRate = Math.Clamp(record.CommissionRate, 0, 100);
         GroupId = record.GroupId;
         Enabled = record.Enabled;
         BytesPerSecond = record.BytesPerSecond;
@@ -102,7 +114,39 @@ public class UserEntity
         Cycle = record.Subscription.Cycle;
         TransferEnableBytes = record.Subscription.TransferEnableBytes;
         ExpiresAt = record.Subscription.ExpiresAt;
+        PurchaseUrl = record.Subscription.PurchaseUrl;
+        PortalNotice = record.Subscription.PortalNotice;
     }
+
+    private static IReadOnlyList<string> ReadNodeIds(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return Array.Empty<string>();
+        }
+
+        var normalized = value.Trim();
+        if (!normalized.StartsWith("[", StringComparison.Ordinal))
+        {
+            return NormalizeNodeIds(NodeFormValueCodec.ParseCsv(normalized));
+        }
+
+        try
+        {
+            return NormalizeNodeIds(JsonSerializer.Deserialize<string[]>(normalized));
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    private static IReadOnlyList<string> NormalizeNodeIds(IEnumerable<string>? values)
+        => (values ?? Array.Empty<string>())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 }
 
 [Table(Name = "np_nodes")]
