@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NodePanel.ControlPlane.Configuration;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
+builder.WebHost.UseKestrelHttpsConfiguration();
 
 var bootstrapPanelOptions = builder.Configuration.GetSection(PanelOptions.SectionName).Get<PanelOptions>() ?? new PanelOptions();
 var panelHttpsRuntime = new PanelHttpsRuntime(bootstrapPanelOptions);
