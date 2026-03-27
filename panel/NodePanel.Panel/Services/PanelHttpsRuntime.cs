@@ -82,6 +82,9 @@ public sealed class PanelHttpsRuntime : IDisposable
         return builder.Uri;
     }
 
+    public X509Certificate2 GetServerCertificate()
+        => GetOrCreateServerCertificate();
+
     public SslServerAuthenticationOptions CreateAuthenticationOptions()
         => new()
         {

@@ -31,12 +31,8 @@ builder.WebHost.ConfigureKestrel(options =>
 {
     options.ConfigureHttpsDefaults(httpsOptions =>
     {
-        httpsOptions.OnAuthenticate = (_, sslOptions) =>
-        {
-            var authenticationOptions = panelHttpsRuntime.CreateAuthenticationOptions();
-            sslOptions.ServerCertificate = authenticationOptions.ServerCertificate;
-            sslOptions.EnabledSslProtocols = authenticationOptions.EnabledSslProtocols;
-        };
+        httpsOptions.ServerCertificateSelector = (_, _) => panelHttpsRuntime.GetServerCertificate();
+        httpsOptions.SslProtocols = panelHttpsRuntime.CreateAuthenticationOptions().EnabledSslProtocols;
     });
 });
 
