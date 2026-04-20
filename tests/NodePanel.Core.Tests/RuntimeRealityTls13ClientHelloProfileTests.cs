@@ -232,7 +232,31 @@ public sealed class RuntimeRealityTls13ClientHelloProfileTests
         var emptyProfile = RuntimeRealityTls13ClientHelloProfileCatalog.Resolve(string.Empty);
         var chromeProfile = RuntimeRealityTls13ClientHelloProfileCatalog.Resolve("chrome");
 
-        Assert.Equal(chromeProfile, emptyProfile);
+        Assert.Equal(chromeProfile.UseGrease, emptyProfile.UseGrease);
+        Assert.Equal(chromeProfile.CipherSuites, emptyProfile.CipherSuites);
+        Assert.Equal(chromeProfile.SupportedGroups, emptyProfile.SupportedGroups);
+        Assert.Equal(chromeProfile.KeyShareGroups, emptyProfile.KeyShareGroups);
+        Assert.Equal(chromeProfile.SupportedVersions, emptyProfile.SupportedVersions);
+        Assert.Equal(chromeProfile.SignatureAlgorithms, emptyProfile.SignatureAlgorithms);
+        Assert.Equal(chromeProfile.SignatureAlgorithmsCert, emptyProfile.SignatureAlgorithmsCert);
+        Assert.Equal(chromeProfile.Extensions, emptyProfile.Extensions);
+        Assert.Equal(chromeProfile.PaddingLength, emptyProfile.PaddingLength);
+        Assert.Equal(chromeProfile.IncludeGreaseKeyShare, emptyProfile.IncludeGreaseKeyShare);
+        Assert.Equal(chromeProfile.ShuffleCipherSuites, emptyProfile.ShuffleCipherSuites);
+        Assert.Equal(chromeProfile.ShuffleSupportedGroups, emptyProfile.ShuffleSupportedGroups);
+        Assert.Equal(chromeProfile.ShuffleKeyShares, emptyProfile.ShuffleKeyShares);
+        Assert.Equal(chromeProfile.ReuseHybridClassicalX25519KeyShare, emptyProfile.ReuseHybridClassicalX25519KeyShare);
+        Assert.Equal(chromeProfile.RecordSizeLimit, emptyProfile.RecordSizeLimit);
+        Assert.Equal(chromeProfile.DelegatedCredentialSignatureAlgorithms, emptyProfile.DelegatedCredentialSignatureAlgorithms);
+        Assert.Equal(chromeProfile.CompressCertificateAlgorithms, emptyProfile.CompressCertificateAlgorithms);
+        Assert.Equal(chromeProfile.EchGreaseCandidateAeads, emptyProfile.EchGreaseCandidateAeads);
+        Assert.Equal(chromeProfile.EchGreaseCandidatePayloadLengths, emptyProfile.EchGreaseCandidatePayloadLengths);
+        Assert.Equal(chromeProfile.UseRandomSessionId, emptyProfile.UseRandomSessionId);
+        Assert.Equal(chromeProfile.AllowAutomaticApplicationProtocolInjection, emptyProfile.AllowAutomaticApplicationProtocolInjection);
+        Assert.Equal(chromeProfile.UseBoringPadding, emptyProfile.UseBoringPadding);
+        Assert.Equal(chromeProfile.ShuffleExtensions, emptyProfile.ShuffleExtensions);
+        Assert.Equal(chromeProfile.ClientHelloLegacyVersion, emptyProfile.ClientHelloLegacyVersion);
+        Assert.Equal(chromeProfile.ClientHelloApplicationProtocols, emptyProfile.ClientHelloApplicationProtocols);
     }
 
     private static byte[] BuildClientHello(

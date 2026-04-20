@@ -72,7 +72,8 @@ public sealed class PanelHttpsRuntime : IDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (TryBuildRedirectUri(request, out var redirectUri))
+        if (TryBuildRedirectUri(request, out var redirectUri) &&
+            redirectUri is not null)
         {
             return redirectUri;
         }

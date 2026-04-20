@@ -128,7 +128,8 @@ app.Use(async (context, next) =>
 {
     if (!context.Request.IsHttps && panelHttpsRuntime.ShouldRedirectHttp(context.Request.Path))
     {
-        if (panelHttpsRuntime.TryBuildRedirectUri(context.Request, out var redirectUri))
+        if (panelHttpsRuntime.TryBuildRedirectUri(context.Request, out var redirectUri) &&
+            redirectUri is not null)
         {
             context.Response.Redirect(redirectUri.ToString(), permanent: true);
             return;
