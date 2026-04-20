@@ -5,5 +5,6 @@
     <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
     <RepositoryUrl Condition="'$(RepositoryUrl)' == ''">https://github.com/j4587698-png/NodePanel</RepositoryUrl>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <NuGetAudit>false</NuGetAudit>
   </PropertyGroup>
 </Project>

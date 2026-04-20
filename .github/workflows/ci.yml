@@ -23,14 +23,22 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Restore Core Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore ./tests/NodePanel.Core.Tests/NodePanel.Core.Tests.csproj \
+            --verbosity minimal
+        working-directory: .
+
       - name: Run Core Tests
         shell: bash
         run: |
           set -euo pipefail
           dotnet test ./tests/NodePanel.Core.Tests/NodePanel.Core.Tests.csproj \
             --configuration Release \
+            --no-restore \
             --filter "Category!=Interop&FullyQualifiedName!~SslStreamGoInteropTests" \
-            -p:NuGetAudit=false \
             --verbosity minimal
         working-directory: .
 
@@ -46,13 +54,21 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Restore Service Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore ./tests/NodePanel.Service.Tests/NodePanel.Service.Tests.csproj \
+            --verbosity minimal
+        working-directory: .
+
       - name: Run Service Tests
         shell: bash
         run: |
           set -euo pipefail
           dotnet test ./tests/NodePanel.Service.Tests/NodePanel.Service.Tests.csproj \
             --configuration Release \
-            -p:NuGetAudit=false \
+            --no-restore \
             --verbosity minimal
         working-directory: .
 
@@ -71,6 +87,17 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Restore Native AOT Service
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore ./service/NodePanel.Service/NodePanel.Service.csproj \
+            --runtime linux-x64 \
+            -p:PublishAot=true \
+            -p:SelfContained=true \
+            --verbosity minimal
+        working-directory: .
+
       - name: Publish Native AOT Service
         shell: bash
         run: |
@@ -79,6 +106,7 @@ jobs:
             --configuration Release \
             --runtime linux-x64 \
             --self-contained true \
+            --no-restore \
             -p:PublishAot=true \
             -p:DebugSymbols=false \
             -p:DebugType=None \
