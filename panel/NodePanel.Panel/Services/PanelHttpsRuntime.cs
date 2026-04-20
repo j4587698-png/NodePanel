@@ -335,6 +335,12 @@ public sealed class PanelHttpsRuntime : IDisposable
             return string.Empty;
         }
 
+        if (hostValue.Contains("://", StringComparison.Ordinal) &&
+            Uri.TryCreate(hostValue, UriKind.Absolute, out var absoluteUri))
+        {
+            hostValue = absoluteUri.Host;
+        }
+
         if (IPAddress.TryParse(hostValue, out var address))
         {
             hostValue = address.AddressFamily == AddressFamily.InterNetworkV6
