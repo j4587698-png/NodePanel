@@ -87,17 +87,6 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Restore Native AOT Service
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet restore ./service/NodePanel.Service/NodePanel.Service.csproj \
-            --runtime linux-x64 \
-            -p:PublishAot=true \
-            -p:SelfContained=true \
-            --verbosity minimal
-        working-directory: .
-
       - name: Publish Native AOT Service
         shell: bash
         run: |
@@ -106,7 +95,6 @@ jobs:
             --configuration Release \
             --runtime linux-x64 \
             --self-contained true \
-            --no-restore \
             -p:PublishAot=true \
             -p:DebugSymbols=false \
             -p:DebugType=None \
