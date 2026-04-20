@@ -341,8 +341,8 @@ public sealed class PanelHttpsRuntime : IDisposable
                 : address.ToString();
         }
         else if (hostValue.Contains(':', StringComparison.Ordinal) &&
-                 !hostValue.StartsWith('[']) &&
-                 !hostValue.EndsWith(']'))
+                 !hostValue.StartsWith("[", StringComparison.Ordinal) &&
+                 !hostValue.EndsWith("]", StringComparison.Ordinal))
         {
             // Uri absolute parsing requires IPv6 literals to be bracketed.
             hostValue = $"[{hostValue}]";
