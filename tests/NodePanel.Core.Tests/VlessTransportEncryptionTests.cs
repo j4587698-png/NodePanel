@@ -22,6 +22,11 @@ public sealed class VlessTransportEncryptionTests
     [Fact]
     public async Task ConnectAsync_routes_vless_over_mlkem_transport_encryption()
     {
+        if (!MLKem.IsSupported)
+        {
+            return;
+        }
+
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         using var nfsServerKey = MLKem.GenerateKey(MLKemAlgorithm.MLKem768);

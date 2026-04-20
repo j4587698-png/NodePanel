@@ -32,18 +32,29 @@ public sealed class RuntimeRealityTls13ClientHelloProfileTests
         Assert.Contains(firefoxHello.Extensions, static extension => extension.Type == 0x001B);
         Assert.Contains(firefoxHello.Extensions, static extension => extension.Type == 0xFE0D);
 
-        Assert.Equal(3, chromeKeyShares.Count);
+        Assert.Equal(RuntimeX25519MlKem768.IsSupported ? 3 : 2, chromeKeyShares.Count);
         Assert.True(IsGreaseValue(chromeKeyShares[0].Group));
-        Assert.Equal(RuntimeTlsNamedGroups.X25519MLKem768, chromeKeyShares[1].Group);
-        Assert.Equal(RuntimeTlsNamedGroups.X25519, chromeKeyShares[2].Group);
+        if (RuntimeX25519MlKem768.IsSupported)
+        {
+            Assert.Equal(RuntimeTlsNamedGroups.X25519MLKem768, chromeKeyShares[1].Group);
+            Assert.Equal(RuntimeTlsNamedGroups.X25519, chromeKeyShares[2].Group);
 
-        Assert.Equal(3, firefoxKeyShares.Count);
-        Assert.Equal(RuntimeTlsNamedGroups.X25519MLKem768, firefoxKeyShares[0].Group);
-        Assert.Equal(RuntimeTlsNamedGroups.X25519, firefoxKeyShares[1].Group);
-        Assert.Equal(RuntimeTlsNamedGroups.Secp256r1, firefoxKeyShares[2].Group);
-        Assert.Equal(
-            firefoxKeyShares[1].KeyExchange,
-            firefoxKeyShares[0].KeyExchange[^RuntimeX25519.KeyLength..]);
+            Assert.Equal(3, firefoxKeyShares.Count);
+            Assert.Equal(RuntimeTlsNamedGroups.X25519MLKem768, firefoxKeyShares[0].Group);
+            Assert.Equal(RuntimeTlsNamedGroups.X25519, firefoxKeyShares[1].Group);
+            Assert.Equal(RuntimeTlsNamedGroups.Secp256r1, firefoxKeyShares[2].Group);
+            Assert.Equal(
+                firefoxKeyShares[1].KeyExchange,
+                firefoxKeyShares[0].KeyExchange[^RuntimeX25519.KeyLength..]);
+        }
+        else
+        {
+            Assert.Equal(RuntimeTlsNamedGroups.X25519, chromeKeyShares[1].Group);
+
+            Assert.Equal(2, firefoxKeyShares.Count);
+            Assert.Equal(RuntimeTlsNamedGroups.X25519, firefoxKeyShares[0].Group);
+            Assert.Equal(RuntimeTlsNamedGroups.Secp256r1, firefoxKeyShares[1].Group);
+        }
     }
 
     [Fact]

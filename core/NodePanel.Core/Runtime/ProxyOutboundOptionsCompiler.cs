@@ -260,17 +260,17 @@ public static class ProxyOutboundOptionsCompiler
 
         var normalizedEncryption = VlessTransportEncryption.NormalizeEncryption(options.Encryption);
         var normalizedPadding = options.Padding?.Trim() ?? string.Empty;
-        if (!VlessTransportEncryption.TryValidateConfiguration(normalizedEncryption, normalizedPadding, out error))
-        {
-            compiled = default!;
-            return false;
-        }
-
         if (VlessTransportEncryption.IsEnabled(normalizedEncryption) &&
             common.WebSocketEarlyDataBytes > 0)
         {
             compiled = default!;
             error = "VLESS transport encryption does not support websocket early-data.";
+            return false;
+        }
+
+        if (!VlessTransportEncryption.TryValidateConfiguration(normalizedEncryption, normalizedPadding, out error))
+        {
+            compiled = default!;
             return false;
         }
 

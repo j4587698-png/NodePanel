@@ -80,15 +80,24 @@ public sealed class RuntimeInternetProfileTests
         Assert.NotNull(hello.X25519PublicKey);
         Assert.Equal(32, hello.SessionId.Length);
         var keyShares = ParseKeyShares(hello.Extensions.Single(static extension => extension.Type == 0x0033).Payload);
-        Assert.Equal(3, keyShares.Count);
+        Assert.Equal(RuntimeX25519MlKem768.IsSupported ? 3 : 2, keyShares.Count);
         Assert.True(IsGreaseValue(keyShares[0].Group));
-        Assert.Equal(RuntimeTlsNamedGroups.X25519MLKem768, keyShares[1].Group);
-        Assert.Equal(RuntimeX25519MlKem768.ClientKeyShareLength, keyShares[1].KeyExchange.Length);
-        Assert.Equal(0x001D, keyShares[2].Group);
-        Assert.Equal(32, keyShares[2].KeyExchange.Length);
-        Assert.Contains(
-            ParseUInt16Vector(hello.Extensions.Single(static extension => extension.Type == 0x000A).Payload),
-            value => value == RuntimeTlsNamedGroups.X25519MLKem768);
+        Assert.Equal(RuntimeTlsNamedGroups.X25519, keyShares[^1].Group);
+        Assert.Equal(32, keyShares[^1].KeyExchange.Length);
+        if (RuntimeX25519MlKem768.IsSupported)
+        {
+            Assert.Equal(RuntimeTlsNamedGroups.X25519MLKem768, keyShares[1].Group);
+            Assert.Equal(RuntimeX25519MlKem768.ClientKeyShareLength, keyShares[1].KeyExchange.Length);
+            Assert.Contains(
+                ParseUInt16Vector(hello.Extensions.Single(static extension => extension.Type == 0x000A).Payload),
+                value => value == RuntimeTlsNamedGroups.X25519MLKem768);
+        }
+        else
+        {
+            Assert.DoesNotContain(
+                ParseUInt16Vector(hello.Extensions.Single(static extension => extension.Type == 0x000A).Payload),
+                value => value == RuntimeTlsNamedGroups.X25519MLKem768);
+        }
         Assert.Contains(ParseUInt16Vector(hello.CipherSuites), IsGreaseValue);
         Assert.Contains(hello.Extensions, static extension => IsGreaseValue(extension.Type));
         Assert.DoesNotContain(hello.Extensions, static extension => extension.Type == 0x0015);
@@ -3228,8 +3237,8 @@ public sealed class RuntimeInternetProfileTests
 
             case "hellochrome_131":
                 expectedCipherSuites = [.. GetExpectedChromeMixedCipherSuites()];
-                expectedSupportedGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1];
-                expectedKeyShareGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519];
+                expectedSupportedGroups = [.. GetExpectedChrome133SupportedGroups()];
+                expectedKeyShareGroups = [.. GetExpectedChrome133KeyShareGroups()];
                 expectedSupportedVersions = [0x0304, 0x0303];
                 expectedExtensionTypes = BuildExpectedChromeExtensionTypeSet(
                     includeKeyShare: true,
@@ -3241,8 +3250,8 @@ public sealed class RuntimeInternetProfileTests
                     includePadding: false);
                 expectsEchGrease = true;
                 expectedApplicationSettingsExtensionType = 17513;
-                expectedHybridKeyShareGroup = RuntimeTlsNamedGroups.X25519MLKem768;
-                expectedHybridKeyShareLength = RuntimeX25519MlKem768.ClientKeyShareLength;
+                expectedHybridKeyShareGroup = GetExpectedChrome133HybridKeyShareGroup();
+                expectedHybridKeyShareLength = GetExpectedChrome133HybridKeyShareLength();
                 break;
 
             case "chrome":
@@ -3250,8 +3259,8 @@ public sealed class RuntimeInternetProfileTests
                 if (!allowProtocolConstraints)
                 {
                     expectedCipherSuites = [.. GetExpectedChromeMixedCipherSuites()];
-                    expectedSupportedGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1];
-                    expectedKeyShareGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519];
+                    expectedSupportedGroups = [.. GetExpectedChrome133SupportedGroups()];
+                    expectedKeyShareGroups = [.. GetExpectedChrome133KeyShareGroups()];
                     expectedSupportedVersions = [0x0304, 0x0303];
                     expectedExtensionTypes = BuildExpectedChromeExtensionTypeSet(
                         includeKeyShare: true,
@@ -3263,16 +3272,16 @@ public sealed class RuntimeInternetProfileTests
                         includePadding: false);
                     expectsEchGrease = true;
                     expectedApplicationSettingsExtensionType = 17613;
-                    expectedHybridKeyShareGroup = RuntimeTlsNamedGroups.X25519MLKem768;
-                    expectedHybridKeyShareLength = RuntimeX25519MlKem768.ClientKeyShareLength;
+                    expectedHybridKeyShareGroup = GetExpectedChrome133HybridKeyShareGroup();
+                    expectedHybridKeyShareLength = GetExpectedChrome133HybridKeyShareLength();
                     break;
                 }
 
                 if (actualSupportedVersions.SequenceEqual(new[] { 0x0304 }))
                 {
                     expectedCipherSuites = [.. GetExpectedChromeTls13OnlyCipherSuites()];
-                    expectedSupportedGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1];
-                    expectedKeyShareGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519];
+                    expectedSupportedGroups = [.. GetExpectedChrome133SupportedGroups()];
+                    expectedKeyShareGroups = [.. GetExpectedChrome133KeyShareGroups()];
                     expectedSupportedVersions = [0x0304];
                     expectedExtensionTypes = BuildExpectedChromeExtensionTypeSet(
                         includeKeyShare: true,
@@ -3284,16 +3293,16 @@ public sealed class RuntimeInternetProfileTests
                         includePadding: false);
                     expectsEchGrease = true;
                     expectedApplicationSettingsExtensionType = 17613;
-                    expectedHybridKeyShareGroup = RuntimeTlsNamedGroups.X25519MLKem768;
-                    expectedHybridKeyShareLength = RuntimeX25519MlKem768.ClientKeyShareLength;
+                    expectedHybridKeyShareGroup = GetExpectedChrome133HybridKeyShareGroup();
+                    expectedHybridKeyShareLength = GetExpectedChrome133HybridKeyShareLength();
                     break;
                 }
 
                 if (actualSupportedVersions.SequenceEqual(new[] { 0x0304, 0x0303 }))
                 {
                     expectedCipherSuites = [.. GetExpectedChromeMixedCipherSuites()];
-                    expectedSupportedGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1];
-                    expectedKeyShareGroups = [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519];
+                    expectedSupportedGroups = [.. GetExpectedChrome133SupportedGroups()];
+                    expectedKeyShareGroups = [.. GetExpectedChrome133KeyShareGroups()];
                     expectedSupportedVersions = [0x0304, 0x0303];
                     expectedExtensionTypes = BuildExpectedChromeExtensionTypeSet(
                         includeKeyShare: true,
@@ -3305,8 +3314,8 @@ public sealed class RuntimeInternetProfileTests
                         includePadding: false);
                     expectsEchGrease = true;
                     expectedApplicationSettingsExtensionType = 17613;
-                    expectedHybridKeyShareGroup = RuntimeTlsNamedGroups.X25519MLKem768;
-                    expectedHybridKeyShareLength = RuntimeX25519MlKem768.ClientKeyShareLength;
+                    expectedHybridKeyShareGroup = GetExpectedChrome133HybridKeyShareGroup();
+                    expectedHybridKeyShareLength = GetExpectedChrome133HybridKeyShareLength();
                     break;
                 }
 
@@ -3649,6 +3658,26 @@ public sealed class RuntimeInternetProfileTests
     private static IReadOnlyList<int> GetExpectedGolangTls12SupportedGroups()
         => [RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1, RuntimeTlsNamedGroups.Secp521r1];
 
+    private static IReadOnlyList<int> GetExpectedChrome133SupportedGroups()
+        => RuntimeX25519MlKem768.IsSupported
+            ? [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1]
+            : [RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1];
+
+    private static IReadOnlyList<int> GetExpectedChrome133KeyShareGroups()
+        => RuntimeX25519MlKem768.IsSupported
+            ? [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519]
+            : [RuntimeTlsNamedGroups.X25519];
+
+    private static int GetExpectedChrome133HybridKeyShareGroup()
+        => RuntimeX25519MlKem768.IsSupported
+            ? RuntimeTlsNamedGroups.X25519MLKem768
+            : 0;
+
+    private static int GetExpectedChrome133HybridKeyShareLength()
+        => RuntimeX25519MlKem768.IsSupported
+            ? RuntimeX25519MlKem768.ClientKeyShareLength
+            : 0;
+
     private static IReadOnlyList<int> GetExpectedThreeSixty75CipherSuites()
         => [0xC00A, 0xC014, 0x0039, 0x006B, 0x0035, 0x003D, 0xC007, 0xC009, 0xC023, 0xC011, 0xC013, 0xC027, 0x0033, 0x0067, 0x0032, 0x0005, 0x0004, 0x002F, 0x003C, 0x000A];
 
@@ -3686,7 +3715,7 @@ public sealed class RuntimeInternetProfileTests
             "hello360_11_0" or "helloqq_11_1"
                 => [RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1],
             "hellochrome_131"
-                => [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1],
+                => GetExpectedChrome133SupportedGroups(),
             "hellofirefox_120"
                 => [RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1, RuntimeTlsNamedGroups.Secp384r1, RuntimeTlsNamedGroups.Secp521r1, 0x0100, 0x0101],
             "hellosafari_16_0"
@@ -3702,7 +3731,7 @@ public sealed class RuntimeInternetProfileTests
             "helloios_14" or "hello360_11_0" or "helloqq_11_1"
                 => [RuntimeTlsNamedGroups.X25519],
             "hellochrome_131"
-                => [RuntimeTlsNamedGroups.X25519MLKem768, RuntimeTlsNamedGroups.X25519],
+                => GetExpectedChrome133KeyShareGroups(),
             "hellofirefox_120"
                 => [RuntimeTlsNamedGroups.X25519, RuntimeTlsNamedGroups.Secp256r1],
             "hellosafari_16_0"

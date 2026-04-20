@@ -568,11 +568,6 @@ internal sealed class VlessTransportEncryption
             return Array.Empty<PublicKeyEntry>();
         }
 
-        if (!MLKem.IsSupported)
-        {
-            throw new PlatformNotSupportedException("The current platform does not support VLESS ML-KEM encryption.");
-        }
-
         var algorithm = MLKemAlgorithm.MLKem768;
         var keys = new List<PublicKeyEntry>();
         foreach (var segment in normalized.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -595,6 +590,11 @@ internal sealed class VlessTransportEncryption
         if (keys.Count == 0)
         {
             throw new FormatException("VLESS encryption requires at least one public key.");
+        }
+
+        if (!MLKem.IsSupported)
+        {
+            throw new PlatformNotSupportedException("The current platform does not support VLESS ML-KEM encryption.");
         }
 
         return keys;

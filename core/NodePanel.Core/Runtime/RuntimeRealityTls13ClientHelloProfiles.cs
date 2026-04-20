@@ -932,7 +932,7 @@ internal static class RuntimeRealityTls13ClientHelloProfileCatalog
     public static RuntimeRealityTls13ClientHelloProfile Resolve(string? fingerprint)
     {
         var normalized = NormalizeFingerprint(fingerprint);
-        return normalized switch
+        var profile = normalized switch
         {
             "" or "chrome" or "hellochrome_auto"
                 => CreateChrome133Profile(),
@@ -1038,10 +1038,78 @@ internal static class RuntimeRealityTls13ClientHelloProfileCatalog
 
             _ => CreateChromeProfile()
         };
+
+        return CreateRuntimeCompatibleProfile(profile);
     }
 
     private static RuntimeRealityTls13ClientHelloProfile CreateChromeProfile()
         => CreateChrome133Profile();
+
+    private static RuntimeRealityTls13ClientHelloProfile CreateRuntimeCompatibleProfile(
+        RuntimeRealityTls13ClientHelloProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var supportedGroups = FilterUnsupportedHybridGroups(profile.SupportedGroups);
+        var keyShareGroups = FilterUnsupportedHybridGroups(profile.KeyShareGroups);
+        if (ReferenceEquals(supportedGroups, profile.SupportedGroups) &&
+            ReferenceEquals(keyShareGroups, profile.KeyShareGroups))
+        {
+            return profile;
+        }
+
+        return profile with
+        {
+            SupportedGroups = supportedGroups,
+            KeyShareGroups = keyShareGroups,
+            ReuseHybridClassicalX25519KeyShare = profile.ReuseHybridClassicalX25519KeyShare &&
+                                                 HasX25519HybridKeyShareGroup(keyShareGroups)
+        };
+    }
+
+    private static IReadOnlyList<ushort> FilterUnsupportedHybridGroups(IReadOnlyList<ushort> groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+
+        List<ushort>? filtered = null;
+        for (var index = 0; index < groups.Count; index++)
+        {
+            var group = groups[index];
+            if (!ShouldExcludeForCurrentRuntime(group))
+            {
+                filtered?.Add(group);
+                continue;
+            }
+
+            filtered ??= new List<ushort>(groups.Count - 1);
+            for (var copyIndex = 0; copyIndex < index; copyIndex++)
+            {
+                filtered.Add(groups[copyIndex]);
+            }
+        }
+
+        return filtered is null
+            ? groups
+            : filtered.ToArray();
+    }
+
+    private static bool HasX25519HybridKeyShareGroup(IReadOnlyList<ushort> groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+
+        return groups.Contains(RuntimeTlsNamedGroups.X25519Kyber768Draft00) ||
+               groups.Contains(RuntimeTlsNamedGroups.X25519MLKem768);
+    }
+
+    private static bool ShouldExcludeForCurrentRuntime(ushort group)
+        => group switch
+        {
+            RuntimeTlsNamedGroups.X25519Kyber768Draft00 => !RuntimeX25519Kyber768Draft00.IsSupported,
+            RuntimeTlsNamedGroups.X25519MLKem768 => !RuntimeX25519MlKem768.IsSupported,
+            RuntimeTlsNamedGroups.Secp256r1MLKem768 => !RuntimeSecp256r1MlKem768.IsSupported,
+            RuntimeTlsNamedGroups.Secp384r1MLKem1024 => !RuntimeSecp384r1MlKem1024.IsSupported,
+            _ => false
+        };
 
     private static RuntimeRealityTls13ClientHelloProfile CreateChrome133Profile()
         => new(

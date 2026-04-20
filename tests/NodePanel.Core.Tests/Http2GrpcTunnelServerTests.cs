@@ -17,6 +17,7 @@ public sealed class Http2GrpcTunnelServerTestCollection
 }
 
 [Collection(Http2GrpcTunnelServerTestCollection.CollectionName)]
+[Trait("Category", "Interop")]
 public sealed class Http2GrpcTunnelServerTests
 {
     private static readonly TimeSpan GoHelperTestTimeout = TimeSpan.FromSeconds(90);

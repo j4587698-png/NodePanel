@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Text;
 using NodePanel.Core.Protocol;
 using NodePanel.Core.Runtime;
@@ -335,6 +336,11 @@ public sealed class VlessInboundConnectionHandlerTests
     [Fact]
     public async Task HandleAsync_accepts_transport_encrypted_vless_request_and_resumes_session()
     {
+        if (!MLKem.IsSupported)
+        {
+            return;
+        }
+
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         using var keyPair = RuntimeX25519.CreateKeyPair();

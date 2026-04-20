@@ -38,7 +38,7 @@ jobs:
           dotnet test ./tests/NodePanel.Core.Tests/NodePanel.Core.Tests.csproj \
             --configuration Release \
             --no-restore \
-            --filter "Category!=Interop&FullyQualifiedName!~SslStreamGoInteropTests" \
+            --filter "Category!=Interop&FullyQualifiedName!~SslStreamGoInteropTests&FullyQualifiedName!~Http2GrpcTunnelServerTests" \
             --verbosity minimal
         working-directory: .
 

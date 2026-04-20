@@ -243,15 +243,15 @@ public sealed class VlessOutboundClient
             throw new ArgumentOutOfRangeException(nameof(options), options.WebSocketHeartbeatPeriodSeconds, "WebSocket heartbeat period must be zero or greater.");
         }
 
-        if (!VlessTransportEncryption.TryValidateConfiguration(options.Encryption, options.Padding, out var encryptionError))
-        {
-            throw new ArgumentException(encryptionError, nameof(options));
-        }
-
         if (VlessTransportEncryption.IsEnabled(options.Encryption) &&
             options.WebSocketEarlyDataBytes > 0)
         {
             throw new ArgumentException("VLESS transport encryption does not support websocket early-data.", nameof(options));
+        }
+
+        if (!VlessTransportEncryption.TryValidateConfiguration(options.Encryption, options.Padding, out var encryptionError))
+        {
+            throw new ArgumentException(encryptionError, nameof(options));
         }
     }
 

@@ -1113,7 +1113,7 @@ public sealed class RuntimeSplitHttpTransportTests
         using var lifetimeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var profile = RuntimeInternetProfile.FromDefault();
 
-        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => RuntimeGrpcClientConnector.OpenAsync(
+        var exception = await Record.ExceptionAsync(() => RuntimeGrpcClientConnector.OpenAsync(
                 new TestSplitHttpInternetOptions
                 {
                     ServerHost = "127.0.0.1",
@@ -1129,6 +1129,15 @@ public sealed class RuntimeSplitHttpTransportTests
                 transportInitializationData: null,
                 lifetimeCts.Token).AsTask());
 
+        Assert.NotNull(exception);
+        if (!QuicConnection.IsSupported)
+        {
+            Assert.IsType<PlatformNotSupportedException>(exception);
+            Assert.Contains("QUIC", exception.Message, StringComparison.OrdinalIgnoreCase);
+            return;
+        }
+
+        Assert.IsType<NotSupportedException>(exception);
         Assert.Contains("TransportStreamFactory", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 

@@ -730,7 +730,8 @@ internal static class HttpInboundProcessor
         out string pathAndQuery,
         out string overrideHostHeaderValue)
     {
-        if (Uri.TryCreate(target, UriKind.Absolute, out var absoluteUri))
+        if (LooksLikeAbsoluteHttpTarget(target) &&
+            Uri.TryCreate(target, UriKind.Absolute, out var absoluteUri))
         {
             if (!absoluteUri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) &&
                 !absoluteUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase))
@@ -774,6 +775,10 @@ internal static class HttpInboundProcessor
         overrideHostHeaderValue = string.Empty;
         return true;
     }
+
+    private static bool LooksLikeAbsoluteHttpTarget(string target)
+        => target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+           target.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
     private static string ExtractAuthorityFromAbsoluteTarget(string target)
     {

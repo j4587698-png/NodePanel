@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using NodePanel.Core.Runtime;
 
 namespace NodePanel.Core.Tests;
@@ -1129,6 +1130,11 @@ public sealed class ProxyOutboundOptionsCompilerTests
     [Fact]
     public void Compile_vless_normalizes_encryption_segments_and_padding()
     {
+        if (!MLKem.IsSupported)
+        {
+            return;
+        }
+
         var firstKey = EncodeBase64Url(32, 0x11);
         var secondKey = EncodeBase64Url(32, 0x22);
         var compiled = ProxyOutboundOptionsCompiler.CompileVless(
