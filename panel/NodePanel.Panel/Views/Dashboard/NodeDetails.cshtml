@@ -243,7 +243,7 @@
     <div class="notice">@Model.StatusMessage</div>
 }
 
-<div class="details-stack">
+<div id="node-details-runtime-root" class="details-stack">
     <section class="card">
         <div class="card__header">
             <div>
@@ -581,7 +581,63 @@
     <script>
         (() => {
             const delay = @autoRefreshMilliseconds;
-            window.setTimeout(() => window.location.reload(), delay);
+            const rootSelector = '#node-details-runtime-root';
+            const requestUrl = '@(Url.Action("Node", "Dashboard", new { nodeId = Model.Form.NodeId }) ?? string.Empty)';
+            const root = document.querySelector(rootSelector);
+            let isRefreshing = false;
+
+            if (!root || !requestUrl) {
+                return;
+            }
+
+            const refreshRuntime = async () => {
+                if (isRefreshing || document.visibilityState === 'hidden') {
+                    return;
+                }
+
+                isRefreshing = true;
+
+                try {
+                    const url = new URL(requestUrl, window.location.origin);
+                    url.searchParams.set('_refresh', Date.now().toString());
+
+                    const response = await fetch(url.toString(), {
+                        method: 'GET',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        cache: 'no-store',
+                        credentials: 'same-origin'
+                    });
+
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                        return;
+                    }
+
+                    if (!response.ok) {
+                        return;
+                    }
+
+                    const html = await response.text();
+                    const parser = new DOMParser();
+                    const nextDocument = parser.parseFromString(html, 'text/html');
+                    const nextRoot = nextDocument.querySelector(rootSelector);
+                    if (!nextRoot) {
+                        return;
+                    }
+
+                    root.innerHTML = nextRoot.innerHTML;
+                }
+                catch (error) {
+                    console.debug('Node runtime refresh skipped.', error);
+                }
+                finally {
+                    isRefreshing = false;
+                }
+            };
+
+            window.setInterval(refreshRuntime, delay);
         })();
     </script>
 }
