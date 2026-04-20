@@ -1310,6 +1310,11 @@ internal sealed class Http2TunnelSession : IAsyncDisposable
 
         lock (_stateLock)
         {
+            if (state.RemoteCompleted)
+            {
+                return;
+            }
+
             ThrowIfFaultedCore();
         }
     }
@@ -1344,7 +1349,7 @@ internal sealed class Http2TunnelSession : IAsyncDisposable
         foreach (var state in states)
         {
             state.SessionClosed = true;
-            if (exception is null)
+            if (exception is null || state.RemoteCompleted)
             {
                 state.Incoming.Writer.TryComplete();
                 continue;

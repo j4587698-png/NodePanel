@@ -6848,9 +6848,18 @@ internal static class RuntimeSplitHttpClientConnector
             Func<CancellationToken, ValueTask<(RuntimeHttp3ClientSession Session, RuntimeInternetSecurityState SecurityState)>> sessionFactory,
             CancellationToken cancellationToken)
         {
-            await _sessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (!await TryWaitForSessionGateAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+
             try
             {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    return null;
+                }
+
                 if (_session is not null &&
                     _session.CanOpenNewRequest)
                 {
@@ -6865,20 +6874,24 @@ internal static class RuntimeSplitHttpClientConnector
             }
             finally
             {
-                _sessionGate.Release();
+                ReleaseSessionGate();
             }
         }
 
         private async ValueTask ResetSessionAsync()
         {
-            await _sessionGate.WaitAsync().ConfigureAwait(false);
+            if (!await TryWaitForSessionGateAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                return;
+            }
+
             try
             {
                 await ResetSessionCoreAsync().ConfigureAwait(false);
             }
             finally
             {
-                _sessionGate.Release();
+                ReleaseSessionGate();
             }
         }
 
@@ -6915,6 +6928,30 @@ internal static class RuntimeSplitHttpClientConnector
             {
                 _securityState.RemoteCertificate?.Dispose();
                 _securityState = null;
+            }
+        }
+
+        private async ValueTask<bool> TryWaitForSessionGateAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await _sessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+
+        private void ReleaseSessionGate()
+        {
+            try
+            {
+                _sessionGate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 
@@ -7731,9 +7768,18 @@ internal static class RuntimeSplitHttpClientConnector
             Func<CancellationToken, ValueTask<RuntimeInternetConnectionContext>> transportContextFactory,
             CancellationToken cancellationToken)
         {
-            await _sessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (!await TryWaitForSessionGateAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+
             try
             {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    return null;
+                }
+
                 if (_session is not null &&
                     _session.CanOpenNewStream)
                 {
@@ -7768,20 +7814,24 @@ internal static class RuntimeSplitHttpClientConnector
             }
             finally
             {
-                _sessionGate.Release();
+                ReleaseSessionGate();
             }
         }
 
         private async ValueTask ResetSessionAsync()
         {
-            await _sessionGate.WaitAsync().ConfigureAwait(false);
+            if (!await TryWaitForSessionGateAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                return;
+            }
+
             try
             {
                 await ResetSessionCoreAsync().ConfigureAwait(false);
             }
             finally
             {
-                _sessionGate.Release();
+                ReleaseSessionGate();
             }
         }
 
@@ -7818,6 +7868,30 @@ internal static class RuntimeSplitHttpClientConnector
             {
                 _context.SecurityState.RemoteCertificate?.Dispose();
                 _context = null;
+            }
+        }
+
+        private async ValueTask<bool> TryWaitForSessionGateAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await _sessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+
+        private void ReleaseSessionGate()
+        {
+            try
+            {
+                _sessionGate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 
