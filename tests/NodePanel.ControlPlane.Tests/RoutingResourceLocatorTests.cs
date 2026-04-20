@@ -78,6 +78,32 @@ public sealed class RoutingResourceLocatorTests
         }
     }
 
+    [Fact]
+    public void ApplyDefaults_accepts_null_routing_resources()
+    {
+        var baseDirectory = CreateTempDirectory();
+        try
+        {
+            var config = RoutingResourceLocator.ApplyDefaults(
+                new NodeServiceConfig
+                {
+                    RoutingResources = null!
+                },
+                baseDirectory,
+                baseDirectory,
+                _ => null);
+
+            Assert.NotNull(config.RoutingResources);
+            Assert.Equal(baseDirectory, config.RoutingResources.ResourceDirectory);
+            Assert.Equal(string.Empty, config.RoutingResources.GeoSitePath);
+            Assert.Equal(string.Empty, config.RoutingResources.GeoIpPath);
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(baseDirectory);
+        }
+    }
+
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "NodePanel-RoutingLocator-" + Guid.NewGuid().ToString("N"));

@@ -39,6 +39,19 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (OperationCanceledException ex) when (ex.InnerException is ObjectDisposedException || _socket.State != WebSocketState.Open)
+        {
+            _logger.LogDebug(ex, "Control plane socket receive was canceled after the connection started shutting down.");
+            return null;
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
         catch (WebSocketException ex) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogInformation(ex, "Control plane socket closed without a clean WebSocket shutdown.");
@@ -68,6 +81,19 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
             await _socket.SendAsync(buffer.AsMemory(0, buffer.Length), WebSocketMessageType.Text, endOfMessage: true, cancellationToken).ConfigureAwait(false);
             return true;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (OperationCanceledException ex) when (ex.InnerException is ObjectDisposedException || _socket.State != WebSocketState.Open)
+        {
+            _logger.LogDebug(ex, "Control plane socket send was canceled after the connection started shutting down.");
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
         catch (WebSocketException ex)
         {
             _logger.LogWarning(ex, "Failed to push control plane message {Type}.", envelope.Type);
@@ -89,6 +115,16 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
         try
         {
             await _socket.CloseAsync(closeStatus, description, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (OperationCanceledException ex) when (ex.InnerException is ObjectDisposedException || _socket.State != WebSocketState.Open)
+        {
+            _logger.LogDebug(ex, "Control plane socket close was canceled after the connection started shutting down.");
+        }
+        catch (ObjectDisposedException)
+        {
         }
         catch (WebSocketException ex)
         {

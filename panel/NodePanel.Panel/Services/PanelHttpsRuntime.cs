@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -71,15 +72,30 @@ public sealed class PanelHttpsRuntime : IDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var activePort = GetActiveHttpsPort();
-        var builder = new UriBuilder(Uri.UriSchemeHttps, request.Host.Host)
+        if (TryBuildRedirectUri(request, out var redirectUri))
         {
-            Path = request.Path.ToString(),
-            Query = request.QueryString.HasValue ? request.QueryString.Value : string.Empty,
-            Port = activePort is > 0 and not 443 ? activePort : -1
-        };
+            return redirectUri;
+        }
 
-        return builder.Uri;
+        throw new UriFormatException("Invalid URI: The hostname could not be parsed.");
+    }
+
+    public bool TryBuildRedirectUri(HttpRequest request, out Uri? redirectUri)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var activePort = GetActiveHttpsPort();
+        var authority = NormalizeRedirectAuthority(request.Host, activePort);
+        if (string.IsNullOrWhiteSpace(authority))
+        {
+            redirectUri = null;
+            return false;
+        }
+
+        var pathBase = request.PathBase.ToUriComponent();
+        var path = request.Path.ToUriComponent();
+        var query = request.QueryString.ToUriComponent();
+        return Uri.TryCreate($"{Uri.UriSchemeHttps}://{authority}{pathBase}{path}{query}", UriKind.Absolute, out redirectUri);
     }
 
     public X509Certificate2 GetServerCertificate()
@@ -308,6 +324,36 @@ public sealed class PanelHttpsRuntime : IDisposable
         catch (ArgumentException)
         {
         }
+    }
+
+    private static string NormalizeRedirectAuthority(HostString host, int httpsPort)
+    {
+        var hostValue = host.Host?.Trim();
+        if (string.IsNullOrWhiteSpace(hostValue))
+        {
+            return string.Empty;
+        }
+
+        if (IPAddress.TryParse(hostValue, out var address))
+        {
+            hostValue = address.AddressFamily == AddressFamily.InterNetworkV6
+                ? $"[{address}]"
+                : address.ToString();
+        }
+        else if (hostValue.Contains(':', StringComparison.Ordinal) &&
+                 !hostValue.StartsWith('[']) &&
+                 !hostValue.EndsWith(']'))
+        {
+            // Uri absolute parsing requires IPv6 literals to be bracketed.
+            hostValue = $"[{hostValue}]";
+        }
+
+        if (httpsPort is > 0 and not 443)
+        {
+            hostValue = $"{hostValue}:{httpsPort}";
+        }
+
+        return hostValue;
     }
 
     private IFreeSql CreateFreeSql()

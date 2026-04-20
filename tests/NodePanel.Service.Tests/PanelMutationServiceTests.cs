@@ -997,6 +997,57 @@ public sealed class PanelMutationServiceTests
         Assert.Equal("https://panel.example.com:8443/admin?tab=https", harness.BuildPanelHttpsRedirectUri(request).ToString());
     }
 
+    [Fact]
+    public async Task PanelHttpsRuntime_redirects_ipv6_http_requests_to_the_configured_https_endpoint()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePanelHttpsSettingsAsync(
+            new PanelHttpsSettingsFormInput
+            {
+                CertificateId = string.Empty,
+                RedirectHttpToHttps = true
+            },
+            CancellationToken.None);
+
+        harness.MarkPanelHttpsListenerConfigured(8443);
+
+        var request = new DefaultHttpContext().Request;
+        request.Scheme = Uri.UriSchemeHttp;
+        request.Host = HostString.FromUriComponent("https://[2001:db8::10]:8080");
+        request.PathBase = "/panel";
+        request.Path = "/admin";
+        request.QueryString = new QueryString("?tab=https");
+
+        Assert.True(harness.TryBuildPanelHttpsRedirectUri(request, out var redirectUri));
+        Assert.NotNull(redirectUri);
+        Assert.Equal("https://[2001:db8::10]:8443/panel/admin?tab=https", redirectUri!.ToString());
+    }
+
+    [Fact]
+    public async Task PanelHttpsRuntime_skips_redirect_when_request_host_is_invalid()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SavePanelHttpsSettingsAsync(
+            new PanelHttpsSettingsFormInput
+            {
+                CertificateId = string.Empty,
+                RedirectHttpToHttps = true
+            },
+            CancellationToken.None);
+
+        harness.MarkPanelHttpsListenerConfigured(8443);
+
+        var request = new DefaultHttpContext().Request;
+        request.Scheme = Uri.UriSchemeHttp;
+        request.Host = new HostString("bad host");
+        request.Path = "/admin";
+
+        Assert.False(harness.TryBuildPanelHttpsRedirectUri(request, out var redirectUri));
+        Assert.Null(redirectUri);
+    }
+
     private static UpsertUserRequest CreateUserRequest(IReadOnlyList<string> nodeIds)
         => new()
         {
@@ -1108,6 +1159,9 @@ public sealed class PanelMutationServiceTests
 
         public Uri BuildPanelHttpsRedirectUri(HttpRequest request)
             => _panelHttpsRuntime.BuildRedirectUri(request);
+
+        public bool TryBuildPanelHttpsRedirectUri(HttpRequest request, out Uri? redirectUri)
+            => _panelHttpsRuntime.TryBuildRedirectUri(request, out redirectUri);
 
         public async Task CreateNodeAsync(string nodeId)
         {

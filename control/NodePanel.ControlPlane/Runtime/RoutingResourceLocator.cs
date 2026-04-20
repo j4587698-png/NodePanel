@@ -70,13 +70,16 @@ public static class RoutingResourceLocator
         };
     }
 
-    private static RoutingResourceOptions NormalizeResources(RoutingResourceOptions resources)
-        => resources with
+    private static RoutingResourceOptions NormalizeResources(RoutingResourceOptions? resources)
+    {
+        var normalized = resources ?? new RoutingResourceOptions();
+        return normalized with
         {
-            ResourceDirectory = resources.ResourceDirectory?.Trim() ?? string.Empty,
-            GeoSitePath = resources.GeoSitePath?.Trim() ?? string.Empty,
-            GeoIpPath = resources.GeoIpPath?.Trim() ?? string.Empty
+            ResourceDirectory = normalized.ResourceDirectory?.Trim() ?? string.Empty,
+            GeoSitePath = normalized.GeoSitePath?.Trim() ?? string.Empty,
+            GeoIpPath = normalized.GeoIpPath?.Trim() ?? string.Empty
         };
+    }
 
     private static string ResolveEnvironmentAssetDirectory(
         Func<string, string?> environmentReader,

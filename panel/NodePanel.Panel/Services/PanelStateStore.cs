@@ -603,13 +603,16 @@ public sealed class PanelStateStore
         };
     }
 
-    private static RoutingResourceOptions NormalizeRoutingResources(RoutingResourceOptions routingResources)
-        => routingResources with
+    private static RoutingResourceOptions NormalizeRoutingResources(RoutingResourceOptions? routingResources)
+    {
+        var normalized = routingResources ?? new RoutingResourceOptions();
+        return normalized with
         {
-            ResourceDirectory = routingResources.ResourceDirectory.Trim(),
-            GeoSitePath = routingResources.GeoSitePath.Trim(),
-            GeoIpPath = routingResources.GeoIpPath.Trim()
+            ResourceDirectory = normalized.ResourceDirectory?.Trim() ?? string.Empty,
+            GeoSitePath = normalized.GeoSitePath?.Trim() ?? string.Empty,
+            GeoIpPath = normalized.GeoIpPath?.Trim() ?? string.Empty
         };
+    }
 
     private static string NormalizeListenAddress(string value)
         => string.IsNullOrWhiteSpace(value) ? "0.0.0.0" : value.Trim();

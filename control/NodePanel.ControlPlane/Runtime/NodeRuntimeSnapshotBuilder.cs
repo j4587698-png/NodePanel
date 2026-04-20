@@ -914,13 +914,16 @@ public sealed class NodeRuntimeSnapshotBuilder
             })
             .ToArray();
 
-    private static RoutingResourceOptions NormalizeRoutingResources(RoutingResourceOptions resources)
-        => resources with
+    private static RoutingResourceOptions NormalizeRoutingResources(RoutingResourceOptions? resources)
+    {
+        var normalized = resources ?? new RoutingResourceOptions();
+        return normalized with
         {
-            ResourceDirectory = resources.ResourceDirectory?.Trim() ?? string.Empty,
-            GeoSitePath = resources.GeoSitePath?.Trim() ?? string.Empty,
-            GeoIpPath = resources.GeoIpPath?.Trim() ?? string.Empty
+            ResourceDirectory = normalized.ResourceDirectory?.Trim() ?? string.Empty,
+            GeoSitePath = normalized.GeoSitePath?.Trim() ?? string.Empty,
+            GeoIpPath = normalized.GeoIpPath?.Trim() ?? string.Empty
         };
+    }
 
     private static OutboundConfig NormalizeOutbound(OutboundConfig outbound)
         => OutboundRuntimeCompilerUtilities.Normalize(outbound);
