@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using NodePanel.ControlPlane.Configuration;
+using NodePanel.ControlPlane.Runtime;
 using NodePanel.Core.Runtime;
 using NodePanel.Service.Configuration;
 using NodePanel.Service.Runtime;
@@ -41,9 +42,7 @@ public sealed class ControlPlaneClientServiceTests
         var persistedNodeConfigStore = new PersistedNodeConfigStore(options, NullLogger<PersistedNodeConfigStore>.Instance);
         var orchestrator = new ConfigOrchestrator(
             runtimeConfigStore,
-            new UserStore(),
-            new RateLimiterRegistry(),
-            Array.Empty<IOutboundHandler>(),
+            Array.Empty<string>(),
             Array.Empty<IInboundProtocolRuntimeCompiler>(),
             persistedNodeConfigStore,
             NullLogger<ConfigOrchestrator>.Instance);
@@ -52,7 +51,7 @@ public sealed class ControlPlaneClientServiceTests
             options,
             new CertificateRenewalSignal(),
             orchestrator,
-            runtimeConfigStore,
+            new AppliedRuntimeSnapshotStore(),
             NullLogger<ControlPlaneClientService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -109,7 +108,7 @@ public sealed class ControlPlaneClientServiceTests
             _listener.Stop();
             try
             {
-                await _acceptLoopTask.ConfigureAwait(false);
+                await _acceptLoopTask;
             }
             catch (OperationCanceledException)
             {
@@ -125,7 +124,7 @@ public sealed class ControlPlaneClientServiceTests
                 TcpClient client;
                 try
                 {
-                    client = await _listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                    client = await _listener.AcceptTcpClientAsync(cancellationToken);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -161,7 +160,7 @@ public sealed class ControlPlaneClientServiceTests
                 try
                 {
                     using var stream = client.GetStream();
-                    var requestText = await ReadHttpRequestAsync(stream).ConfigureAwait(false);
+                    var requestText = await ReadHttpRequestAsync(stream);
                     var key = GetHeaderValue(requestText, "Sec-WebSocket-Key");
                     if (string.IsNullOrWhiteSpace(key))
                     {
@@ -175,10 +174,10 @@ public sealed class ControlPlaneClientServiceTests
                         $"Sec-WebSocket-Accept: {ComputeWebSocketAccept(key)}\r\n" +
                         "\r\n";
                     var responseBytes = Encoding.ASCII.GetBytes(responseText);
-                    await stream.WriteAsync(responseBytes).ConfigureAwait(false);
-                    await stream.FlushAsync().ConfigureAwait(false);
+                    await stream.WriteAsync(responseBytes);
+                    await stream.FlushAsync();
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(200));
                     client.Client.LingerState = new LingerOption(true, 0);
                 }
                 catch (IOException)
@@ -196,7 +195,7 @@ public sealed class ControlPlaneClientServiceTests
             var chunk = new byte[1024];
             while (true)
             {
-                var read = await stream.ReadAsync(chunk).ConfigureAwait(false);
+                var read = await stream.ReadAsync(chunk);
                 if (read == 0)
                 {
                     break;

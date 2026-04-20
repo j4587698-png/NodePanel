@@ -6,15 +6,15 @@ namespace NodePanel.Core.Runtime;
 public sealed class TrojanInboundConnectionHandler
 {
     private const int InitialProbeBytes = 4096;
-    private static readonly TimeSpan SniffProbeTimeout = TimeSpan.FromMilliseconds(200);
 
     private readonly IDispatcher _dispatcher;
+    private readonly IRuntimeSniffer _runtimeSniffer;
     private readonly TrojanFallbackRelayService _trojanFallbackRelayService;
-    private readonly RateLimiterRegistry _rateLimiterRegistry;
-    private readonly RelayService _relayService;
+    private readonly IRuntimeRateLimiterRegistry _rateLimiterRegistry;
+    private readonly IRuntimeRelayService _relayService;
     private readonly TrojanMuxInboundServer _trojanMuxInboundServer;
-    private readonly SessionRegistry _sessionRegistry;
-    private readonly TrafficRegistry _trafficRegistry;
+    private readonly IRuntimeSessionRegistry _sessionRegistry;
+    private readonly IRuntimeTrafficRegistry _trafficRegistry;
     private readonly TrojanHandshakeReader _trojanHandshakeReader;
     private readonly TrojanUdpAssociateRelay _trojanUdpAssociateRelay;
 
@@ -24,10 +24,36 @@ public sealed class TrojanInboundConnectionHandler
         TrojanUdpAssociateRelay trojanUdpAssociateRelay,
         TrojanMuxInboundServer trojanMuxInboundServer,
         TrojanFallbackRelayService trojanFallbackRelayService,
-        SessionRegistry sessionRegistry,
-        RelayService relayService,
-        RateLimiterRegistry rateLimiterRegistry,
-        TrafficRegistry trafficRegistry)
+        IRuntimeSessionRegistry sessionRegistry,
+        IRuntimeRelayService relayService,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        IFakeDnsEngine? fakeDnsEngine = null)
+        : this(
+            dispatcher,
+            trojanHandshakeReader,
+            trojanUdpAssociateRelay,
+            trojanMuxInboundServer,
+            trojanFallbackRelayService,
+            sessionRegistry,
+            relayService,
+            rateLimiterRegistry,
+            trafficRegistry,
+            new DefaultRuntimeSniffer(fakeDnsEngine))
+    {
+    }
+
+    internal TrojanInboundConnectionHandler(
+        IDispatcher dispatcher,
+        TrojanHandshakeReader trojanHandshakeReader,
+        TrojanUdpAssociateRelay trojanUdpAssociateRelay,
+        TrojanMuxInboundServer trojanMuxInboundServer,
+        TrojanFallbackRelayService trojanFallbackRelayService,
+        IRuntimeSessionRegistry sessionRegistry,
+        IRuntimeRelayService relayService,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        IRuntimeSniffer runtimeSniffer)
     {
         _dispatcher = dispatcher;
         _trojanHandshakeReader = trojanHandshakeReader;
@@ -38,6 +64,7 @@ public sealed class TrojanInboundConnectionHandler
         _relayService = relayService;
         _rateLimiterRegistry = rateLimiterRegistry;
         _trafficRegistry = trafficRegistry;
+        _runtimeSniffer = runtimeSniffer;
     }
 
     public async Task HandleAsync(Stream stream, ITrojanInboundConnectionOptions options, CancellationToken cancellationToken)
@@ -64,6 +91,9 @@ public sealed class TrojanInboundConnectionHandler
         }
 
         ArgumentNullException.ThrowIfNull(user);
+        var sessionOptions = options is TrojanInboundSessionOptions trojanOptions
+            ? trojanOptions.WithUserLevel(user.Level)
+            : options;
 
         var requestStream = new PrefixedReadStream(stream, initialPayload);
         TrojanRequest request;
@@ -76,11 +106,11 @@ public sealed class TrojanInboundConnectionHandler
             handshakeCts.CancelAfter(Timeout.InfiniteTimeSpan);
         }
 
-        using var session = OpenTrackedSession(user, options);
+        using var session = OpenTrackedSession(user, sessionOptions);
 
         if (request.Command == TrojanCommand.Associate)
         {
-            await _trojanUdpAssociateRelay.RelayAsync(requestStream, user, options, cancellationToken).ConfigureAwait(false);
+            await _trojanUdpAssociateRelay.RelayAsync(requestStream, user, sessionOptions, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -89,70 +119,47 @@ public sealed class TrojanInboundConnectionHandler
             throw new NotSupportedException($"Unsupported trojan command: {request.Command}.");
         }
 
-        var relayStream = (Stream)requestStream;
-        var dispatchContext = TrojanDispatchContextFactory.Create(user, options);
         var dispatchDestination = new DispatchDestination
         {
             Host = request.TargetHost,
             Port = request.TargetPort,
             Network = DispatchNetwork.Tcp
         };
-        dispatchContext = dispatchContext with
-        {
-            OriginalDestinationHost = request.TargetHost,
-            OriginalDestinationPort = request.TargetPort
-        };
+        var dispatchContext = DispatchContextTargeting.SetOriginalAndTarget(
+            TrojanDispatchContextFactory.Create(user, sessionOptions),
+            dispatchDestination);
 
         if (TrojanMuxProtocol.IsMuxDestination(request.TargetHost))
         {
             await _trojanMuxInboundServer.HandleAsync(
                 requestStream,
                 user,
-                options,
+                sessionOptions,
                 cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        if (options.Sniffing.Enabled && !options.Sniffing.MetadataOnly)
-        {
-            var sniffPayload = await ReadSniffPayloadAsync(requestStream, cancellationToken).ConfigureAwait(false);
-            if (sniffPayload.Length > 0)
-            {
-                relayStream = new PrefixedReadStream(requestStream, sniffPayload);
-                var sniffing = TrojanSniffingEvaluator.Evaluate(
-                    options.Sniffing,
-                    sniffPayload,
-                    DispatchNetwork.Tcp,
-                    dispatchDestination);
-
-                dispatchContext = dispatchContext with
-                {
-                    DetectedProtocol = sniffing.Protocol,
-                    DetectedDomain = sniffing.Domain
-                };
-
-                if (sniffing.OverrideDestination is not null)
-                {
-                    dispatchDestination = sniffing.OverrideDestination;
-                }
-            }
-        }
-
-        await using var remoteStream = await _dispatcher.DispatchTcpAsync(
+        var dispatchResult = await RuntimeTcpDispatchPipeline.DispatchAsync(
+            _dispatcher,
+            _runtimeSniffer,
+            options.Sniffing,
+            requestStream,
             dispatchContext,
             dispatchDestination,
+            cancellationToken,
             cancellationToken).ConfigureAwait(false);
+        await using var remoteStream = dispatchResult.OutboundStream;
         var userGate = _rateLimiterRegistry.GetUserGate(user);
         var globalGate = _rateLimiterRegistry.GlobalGate;
 
         await _relayService.RelayAsync(
-            relayStream,
+            dispatchResult.InboundStream,
             remoteStream,
             user,
             userGate,
             globalGate,
             _trafficRegistry,
-            options,
+            sessionOptions,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -173,7 +180,7 @@ public sealed class TrojanInboundConnectionHandler
     private IDisposable OpenTrackedSession(TrojanUser user, ITrojanInboundConnectionOptions options)
     {
         var remoteIp = ExtractRemoteIp(options.RemoteEndPoint);
-        if (!_sessionRegistry.TryOpenSession(user.UserId, remoteIp, user.DeviceLimit, out var lease) || lease is null)
+        if (!_sessionRegistry.TryOpenSession(RuntimeUserKeys.Get(user), remoteIp, user.DeviceLimit, out var lease) || lease is null)
         {
             throw new UnauthorizedAccessException("Trojan user device limit exceeded.");
         }
@@ -215,22 +222,5 @@ public sealed class TrojanInboundConnectionHandler
         }
 
         return read == buffer.Length ? buffer : buffer.AsSpan(0, read).ToArray();
-    }
-
-    private static async Task<byte[]> ReadSniffPayloadAsync(Stream stream, CancellationToken cancellationToken)
-    {
-        var buffer = new byte[InitialProbeBytes];
-        using var sniffCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        sniffCts.CancelAfter(SniffProbeTimeout);
-
-        try
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), sniffCts.Token).ConfigureAwait(false);
-            return read == 0 ? Array.Empty<byte>() : buffer.AsSpan(0, read).ToArray();
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return Array.Empty<byte>();
-        }
     }
 }

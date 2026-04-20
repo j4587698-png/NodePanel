@@ -7,7 +7,9 @@ public static class NodeServiceConfigInbounds
     private static readonly string[] CertificateInboundTransports =
     [
         InboundTransports.Tls,
-        InboundTransports.Wss
+        InboundTransports.Wss,
+        InboundTransports.Grpc,
+        InboundTransports.SplitHttp
     ];
 
     public static IReadOnlyList<InboundConfig> GetEffectiveInbounds(NodeServiceConfig config)
@@ -24,7 +26,7 @@ public static class NodeServiceConfigInbounds
         var migratedInbounds = config.Inbounds
             .Select(inbound =>
             {
-                if (!IsTrojanTlsOrWss(inbound))
+                if (!SupportsLegacyTrojanTopLevelUsers(inbound))
                 {
                     return inbound;
                 }
@@ -32,7 +34,9 @@ public static class NodeServiceConfigInbounds
                 return inbound with
                 {
                     Users = inbound.Users.Count == 0 ? config.Users : inbound.Users,
-                    Fallbacks = inbound.Fallbacks.Count == 0 ? config.Fallbacks : inbound.Fallbacks
+                    Fallbacks = SupportsLegacyTrojanTopLevelFallbacks(inbound) && inbound.Fallbacks.Count == 0
+                        ? config.Fallbacks
+                        : inbound.Fallbacks
                 };
             })
             .ToArray();
@@ -47,8 +51,7 @@ public static class NodeServiceConfigInbounds
 
     public static IReadOnlyList<InboundConfig> GetTrojanInbounds(NodeServiceConfig config)
         => GetProtocolInbounds(config, InboundProtocols.Trojan)
-            .Where(inbound => IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Tls) ||
-                              IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Wss))
+            .Where(IsTrojanTransportWithRuntimeUsers)
             .ToArray();
 
     public static IReadOnlyList<InboundConfig> GetProtocolInbounds(NodeServiceConfig config, string protocol)
@@ -77,9 +80,7 @@ public static class NodeServiceConfigInbounds
 
     public static bool RequiresCertificate(NodeServiceConfig config)
         => GetEffectiveInbounds(config)
-            .Any(inbound => inbound.Enabled && CertificateInboundTransports.Contains(
-                InboundTransports.Normalize(inbound.Transport),
-                StringComparer.OrdinalIgnoreCase));
+            .Any(static inbound => inbound.Enabled && RequiresCertificate(inbound));
 
     public static IReadOnlyList<InboundConfig> ReplaceTrojanUsers(
         IReadOnlyList<InboundConfig> inbounds,
@@ -130,10 +131,37 @@ public static class NodeServiceConfigInbounds
                 Enabled = false,
                 Protocol = normalizedProtocol,
                 Transport = InboundTransports.Wss,
+                TransportProtocol = RuntimeInternetTransportProtocols.Ws,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 8443,
                 HandshakeTimeoutSeconds = 10,
                 Path = "/ws"
+            },
+            InboundTransports.Grpc => new InboundConfig
+            {
+                Tag = $"{normalizedProtocol}-grpc",
+                Enabled = false,
+                Protocol = normalizedProtocol,
+                Transport = InboundTransports.Grpc,
+                TransportProtocol = RuntimeInternetTransportProtocols.Grpc,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                HandshakeTimeoutSeconds = 10
+            },
+            InboundTransports.SplitHttp => new InboundConfig
+            {
+                Tag = $"{normalizedProtocol}-splithttp",
+                Enabled = false,
+                Protocol = normalizedProtocol,
+                Transport = InboundTransports.SplitHttp,
+                TransportProtocol = RuntimeInternetTransportProtocols.SplitHttp,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                HandshakeTimeoutSeconds = 10,
+                Path = "/xhttp"
             },
             _ => new InboundConfig
             {
@@ -141,6 +169,8 @@ public static class NodeServiceConfigInbounds
                 Enabled = false,
                 Protocol = normalizedProtocol,
                 Transport = InboundTransports.Tls,
+                TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 443,
                 HandshakeTimeoutSeconds = 10
@@ -156,9 +186,74 @@ public static class NodeServiceConfigInbounds
                IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Wss);
     }
 
+    public static bool IsTrojanTlsOrWssOrGrpc(InboundConfig inbound)
+    {
+        ArgumentNullException.ThrowIfNull(inbound);
+
+        return IsTrojanTlsOrWss(inbound) ||
+               IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Grpc);
+    }
+
+    public static bool IsTrojanTlsOrWssOrGrpcOrSplitHttp(InboundConfig inbound)
+    {
+        ArgumentNullException.ThrowIfNull(inbound);
+
+        return IsTrojanTlsOrWssOrGrpc(inbound) ||
+               IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.SplitHttp);
+    }
+
+    public static bool IsTrojanTransportWithRuntimeUsers(InboundConfig inbound)
+    {
+        ArgumentNullException.ThrowIfNull(inbound);
+
+        return IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Tls) ||
+               IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Wss) ||
+               IsProtocolTransport(inbound, InboundProtocols.Trojan, RuntimeInternetTransportProtocols.HttpUpgrade) ||
+               IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Grpc) ||
+               IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.SplitHttp);
+    }
+
     public static bool IsProtocolTransport(InboundConfig inbound, string protocol, string transport)
         => string.Equals(InboundProtocols.Normalize(inbound.Protocol), InboundProtocols.Normalize(protocol), StringComparison.Ordinal) &&
-           string.Equals(InboundTransports.Normalize(inbound.Transport), InboundTransports.Normalize(transport), StringComparison.Ordinal);
+           string.Equals(ResolveTransportAlias(inbound), InboundTransports.Normalize(transport), StringComparison.Ordinal);
+
+    private static bool RequiresCertificate(InboundConfig inbound)
+    {
+        if (InboundInternetStackResolver.TryResolve(
+                inbound.Transport,
+                inbound.TransportProtocol,
+                inbound.TransportSecurity,
+                out var stack,
+                out _))
+        {
+            return stack.UsesTlsLikeSecurity;
+        }
+
+        return CertificateInboundTransports.Contains(
+            InboundTransports.Normalize(inbound.Transport),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveTransportAlias(InboundConfig inbound)
+    {
+        if (InboundInternetStackResolver.TryResolve(
+                inbound.Transport,
+                inbound.TransportProtocol,
+                inbound.TransportSecurity,
+                out var stack,
+                out _))
+        {
+            return stack.Transport;
+        }
+
+        return InboundTransports.Normalize(inbound.Transport);
+    }
+
+    private static bool SupportsLegacyTrojanTopLevelUsers(InboundConfig inbound)
+        => IsTrojanTransportWithRuntimeUsers(inbound);
+
+    private static bool SupportsLegacyTrojanTopLevelFallbacks(InboundConfig inbound)
+        => IsTrojanTlsOrWss(inbound);
 
     private static IReadOnlyList<TrojanUserConfig> MergeUsers(
         IReadOnlyList<TrojanUserConfig> primary,
@@ -193,6 +288,7 @@ public static class NodeServiceConfigInbounds
             destination.Add(user with
             {
                 UserId = key,
+                Level = Math.Max(0, user.Level),
                 Uuid = NormalizeUuid(user.Uuid),
                 Password = string.IsNullOrWhiteSpace(user.Password) ? string.Empty : user.Password.Trim(),
                 BytesPerSecond = Math.Max(0, user.BytesPerSecond),

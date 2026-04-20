@@ -1,6 +1,17 @@
 namespace NodePanel.Core.Runtime;
 
-public sealed class SessionRegistry
+public interface IRuntimeSessionRegistry
+{
+    int ActiveSessions { get; }
+
+    IDisposable OpenSession(string userId);
+
+    bool TryOpenSession(string userId, string? remoteIp, int deviceLimit, out IDisposable? lease);
+
+    IReadOnlyList<UserSessionSnapshot> CreateSnapshot();
+}
+
+public sealed class SessionRegistry : IRuntimeSessionRegistry
 {
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, UserSessionState> _perUser = new(StringComparer.Ordinal);
@@ -57,6 +68,34 @@ public sealed class SessionRegistry
         return true;
     }
 
+    public IReadOnlyList<UserSessionSnapshot> CreateSnapshot()
+    {
+        lock (_syncRoot)
+        {
+            if (_perUser.Count == 0)
+            {
+                return Array.Empty<UserSessionSnapshot>();
+            }
+
+            var items = new List<UserSessionSnapshot>(_perUser.Count);
+            foreach (var pair in _perUser)
+            {
+                if (pair.Value.TotalSessions <= 0)
+                {
+                    continue;
+                }
+
+                var remoteIps = pair.Value.SessionsByIp.Keys
+                    .OrderBy(static value => value, StringComparer.Ordinal)
+                    .ToArray();
+                items.Add(CreateSnapshot(pair.Key, pair.Value.TotalSessions, remoteIps));
+            }
+
+            items.Sort(static (left, right) => string.Compare(left.RuntimeKey, right.RuntimeKey, StringComparison.Ordinal));
+            return items;
+        }
+    }
+
     private void CloseSession(string userId, string? remoteIp)
     {
         var shouldDecrement = false;
@@ -101,6 +140,31 @@ public sealed class SessionRegistry
 
     private static string NormalizeRemoteIp(string? remoteIp)
         => string.IsNullOrWhiteSpace(remoteIp) ? string.Empty : remoteIp.Trim();
+
+    private static UserSessionSnapshot CreateSnapshot(
+        string runtimeKey,
+        int activeSessions,
+        IReadOnlyList<string> remoteIps)
+    {
+        var normalizedRuntimeKey = runtimeKey.Trim();
+        return RuntimeUserKeys.TryParse(normalizedRuntimeKey, out var protocol, out var inboundTag, out var userId)
+            ? new UserSessionSnapshot
+            {
+                RuntimeKey = normalizedRuntimeKey,
+                Protocol = protocol,
+                InboundTag = inboundTag,
+                UserId = userId,
+                ActiveSessions = activeSessions,
+                RemoteIps = remoteIps
+            }
+            : new UserSessionSnapshot
+            {
+                RuntimeKey = normalizedRuntimeKey,
+                UserId = normalizedRuntimeKey,
+                ActiveSessions = activeSessions,
+                RemoteIps = remoteIps
+            };
+    }
 
     private sealed class UserSessionState
     {

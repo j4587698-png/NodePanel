@@ -1,10 +1,17 @@
 using System.Net;
+using NodePanel.Core.Protocol;
 
 namespace NodePanel.Core.Runtime;
 
 internal sealed record TrojanInboundSessionOptions : ITrojanInboundConnectionOptions
 {
+    internal TrojanInboundRuntimeState? RuntimeState { get; init; }
+
+    internal RuntimeSessionPolicyCatalog SessionPolicies { get; init; } = RuntimeSessionPolicyCatalog.Default;
+
     public string InboundTag { get; init; } = string.Empty;
+
+    public int UserLevel { get; init; }
 
     public int HandshakeTimeoutSeconds { get; init; } = 60;
 
@@ -30,13 +37,32 @@ internal sealed record TrojanInboundSessionOptions : ITrojanInboundConnectionOpt
 
     public EndPoint? OriginalDestinationEndPoint { get; init; }
 
-    public ITrojanSniffingDefinition Sniffing { get; init; } = TrojanSniffingRuntime.Disabled;
-
-    public IReadOnlyDictionary<string, TrojanUser> UsersByHash { get; init; }
-        = new Dictionary<string, TrojanUser>(StringComparer.Ordinal);
+    public IRuntimeSniffingDefinition Sniffing { get; init; } = RuntimeSniffingOptions.Disabled;
 
     public bool TryAuthenticate(string passwordHash, out TrojanUser? user)
-        => UsersByHash.TryGetValue(passwordHash, out user);
+    {
+        if (RuntimeState is not null)
+        {
+            return RuntimeState.TryAuthenticate(passwordHash, out user);
+        }
 
-    public IReadOnlyList<ITrojanFallbackDefinition> Fallbacks { get; init; } = Array.Empty<ITrojanFallbackDefinition>();
+        user = null;
+        return false;
+    }
+
+    public IReadOnlyList<IRuntimeFallbackDefinition> Fallbacks { get; init; } = Array.Empty<IRuntimeFallbackDefinition>();
+
+    internal TrojanInboundSessionOptions WithUserLevel(int userLevel)
+    {
+        var limits = RuntimeInboundSessionLimitResolver.Resolve(this, SessionPolicies, userLevel);
+        return this with
+        {
+            UserLevel = Math.Max(0, userLevel),
+            HandshakeTimeoutSeconds = limits.HandshakeTimeoutSeconds,
+            ConnectTimeoutSeconds = limits.ConnectTimeoutSeconds,
+            ConnectionIdleSeconds = limits.ConnectionIdleSeconds,
+            UplinkOnlySeconds = limits.UplinkOnlySeconds,
+            DownlinkOnlySeconds = limits.DownlinkOnlySeconds
+        };
+    }
 }

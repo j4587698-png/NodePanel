@@ -2,63 +2,69 @@ namespace NodePanel.Core.Runtime;
 
 public sealed class DefaultOutboundRouter : IOutboundRouter
 {
-    private readonly IOutboundHandler _fallbackOutbound;
-    private readonly IReadOnlyDictionary<string, IOutboundHandler> _outboundsByProtocol;
+    private readonly IOutboundManager _outboundManager;
     private readonly IOutboundRuntimePlanProvider _planProvider;
+    private readonly IRuntimeRoutingService _routingService;
+
+    public DefaultOutboundRouter(
+        IOutboundManager outboundManager,
+        IRuntimeRoutingService routingService,
+        IOutboundRuntimePlanProvider planProvider)
+    {
+        ArgumentNullException.ThrowIfNull(outboundManager);
+        ArgumentNullException.ThrowIfNull(routingService);
+        ArgumentNullException.ThrowIfNull(planProvider);
+
+        _outboundManager = outboundManager;
+        _planProvider = planProvider;
+        _routingService = routingService;
+    }
+
+    public DefaultOutboundRouter(
+        IOutboundManager outboundManager,
+        IOutboundRuntimePlanProvider planProvider)
+        : this(outboundManager, new DefaultRuntimeRoutingService(planProvider), planProvider)
+    {
+    }
 
     public DefaultOutboundRouter(
         IEnumerable<IOutboundHandler> outbounds,
         IOutboundRuntimePlanProvider planProvider)
+        : this(new DefaultOutboundManager(outbounds, planProvider), planProvider)
     {
-        var materialized = outbounds.ToArray();
-        if (materialized.Length == 0)
-        {
-            throw new InvalidOperationException("At least one outbound handler must be registered.");
-        }
-
-        _outboundsByProtocol = materialized.ToDictionary(
-            static outbound => OutboundProtocols.Normalize(outbound.Protocol),
-            StringComparer.OrdinalIgnoreCase);
-
-        _fallbackOutbound = materialized.FirstOrDefault(static outbound =>
-            string.Equals(OutboundProtocols.Normalize(outbound.Protocol), OutboundProtocols.Freedom, StringComparison.Ordinal))
-            ?? materialized[0];
-        _planProvider = planProvider;
     }
 
-    public IOutboundHandler Resolve(DispatchContext context, DispatchDestination? destination)
+    public ResolvedOutboundRoute Resolve(DispatchContext context, DispatchDestination? destination)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var plan = _planProvider.GetCurrentOutboundPlan();
-        if (TryResolveConfiguredOutbound(plan, context, out var outbound) &&
-            _outboundsByProtocol.TryGetValue(OutboundProtocols.Normalize(outbound.Protocol), out var handler))
+        if (_routingService.TryPickRoute(context, out var route) &&
+            _outboundManager.GetHandler(route.OutboundTag) is { } handler)
         {
-            return handler;
+            return new ResolvedOutboundRoute
+            {
+                Handler = handler,
+                Context = context with
+                {
+                    OutboundTag = route.OutboundTag
+                },
+                OutboundTag = route.OutboundTag,
+                RuleTag = route.RuleTag,
+                OutboundGroupTags = route.OutboundGroupTags
+            };
         }
 
-        var defaultOutbound = plan.GetDefaultOutbound();
-        if (defaultOutbound is not null &&
-            _outboundsByProtocol.TryGetValue(OutboundProtocols.Normalize(defaultOutbound.Protocol), out handler))
+        var defaultTag = _planProvider.GetCurrentOutboundPlan().DefaultOutboundTag;
+        return new ResolvedOutboundRoute
         {
-            return handler;
-        }
-
-        return _fallbackOutbound;
-    }
-
-    private static bool TryResolveConfiguredOutbound(
-        OutboundRuntimePlan plan,
-        DispatchContext context,
-        out OutboundRuntime outbound)
-    {
-        if (plan.TryResolveOutboundTag(context, out var outboundTag) &&
-            plan.TryGetOutbound(outboundTag, out outbound))
-        {
-            return true;
-        }
-
-        outbound = default!;
-        return false;
+            Handler = _outboundManager.GetDefaultHandler(),
+            Context = string.IsNullOrWhiteSpace(defaultTag)
+                ? context
+                : context with
+                {
+                    OutboundTag = defaultTag.Trim()
+                },
+            OutboundTag = string.IsNullOrWhiteSpace(defaultTag) ? string.Empty : defaultTag.Trim()
+        };
     }
 }

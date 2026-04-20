@@ -15,7 +15,7 @@ public sealed class TelemetryDeltaTracker
             var items = new List<UserTrafficDelta>(snapshot.Count);
             foreach (var item in snapshot)
             {
-                _lastReported.TryGetValue(item.UserId, out var previous);
+                _lastReported.TryGetValue(GetSnapshotKey(item), out var previous);
 
                 var uploadDelta = previous is null || item.UploadBytes < previous.UploadBytes
                     ? item.UploadBytes
@@ -32,6 +32,9 @@ public sealed class TelemetryDeltaTracker
 
                 items.Add(new UserTrafficDelta
                 {
+                    RuntimeKey = item.RuntimeKey,
+                    Protocol = item.Protocol,
+                    InboundTag = item.InboundTag,
                     UserId = item.UserId,
                     UploadBytes = uploadDelta,
                     DownloadBytes = downloadDelta
@@ -46,7 +49,18 @@ public sealed class TelemetryDeltaTracker
     {
         lock (_sync)
         {
-            _lastReported = snapshot.ToDictionary(static item => item.UserId, StringComparer.Ordinal);
+            var next = new Dictionary<string, UserTrafficSnapshot>(StringComparer.Ordinal);
+            foreach (var item in snapshot)
+            {
+                next[GetSnapshotKey(item)] = item;
+            }
+
+            _lastReported = next;
         }
     }
+
+    private static string GetSnapshotKey(UserTrafficSnapshot snapshot)
+        => string.IsNullOrWhiteSpace(snapshot.RuntimeKey)
+            ? snapshot.UserId.Trim()
+            : snapshot.RuntimeKey.Trim();
 }

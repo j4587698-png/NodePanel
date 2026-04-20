@@ -306,11 +306,65 @@ public class TrafficRecordEntity
 
     public long DownloadBytes { get; set; }
 
-    public DateTimeOffset? LastResetAt { get; set; }
+    public long? LastResetAtUnixMilliseconds { get; set; }
+
+    [Column(Name = "LastResetAt")]
+    public DateTimeOffset? LegacyLastResetAt { get; set; }
+
+    [NotMapped]
+    public DateTimeOffset? LastResetAt
+    {
+        get => LastResetAtUnixMilliseconds.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(LastResetAtUnixMilliseconds.Value)
+            : LegacyLastResetAt;
+        set
+        {
+            LastResetAtUnixMilliseconds = value?.ToUnixTimeMilliseconds();
+            LegacyLastResetAt = value;
+        }
+    }
 
     public PanelUserTrafficRecord ToRecord() => new PanelUserTrafficRecord
     {
         UserId = UserId,
+        UploadBytes = UploadBytes,
+        DownloadBytes = DownloadBytes,
+        LastResetAt = LastResetAt
+    };
+}
+
+[Table(Name = "np_scoped_traffic_records")]
+public class ScopedTrafficRecordEntity
+{
+    [Column(IsPrimary = true)]
+    public string UserId { get; set; } = string.Empty;
+
+    [Column(IsPrimary = true, DbType = "varchar(32)")]
+    public string Protocol { get; set; } = string.Empty;
+
+    [Column(IsPrimary = true)]
+    public string InboundTag { get; set; } = string.Empty;
+
+    public long UploadBytes { get; set; }
+
+    public long DownloadBytes { get; set; }
+
+    public long? LastResetAtUnixMilliseconds { get; set; }
+
+    [NotMapped]
+    public DateTimeOffset? LastResetAt
+    {
+        get => LastResetAtUnixMilliseconds.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(LastResetAtUnixMilliseconds.Value)
+            : null;
+        set => LastResetAtUnixMilliseconds = value?.ToUnixTimeMilliseconds();
+    }
+
+    public PanelScopedTrafficRecord ToRecord() => new PanelScopedTrafficRecord
+    {
+        UserId = UserId,
+        Protocol = Protocol,
+        InboundTag = InboundTag,
         UploadBytes = UploadBytes,
         DownloadBytes = DownloadBytes,
         LastResetAt = LastResetAt

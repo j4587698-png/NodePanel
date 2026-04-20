@@ -1,6 +1,4 @@
 using System.Net;
-using System.Security.Cryptography;
-using System.Text;
 using NodePanel.Core.Protocol;
 
 namespace NodePanel.Core.Runtime;
@@ -43,18 +41,22 @@ public interface IVmessInboundScopeDefinition
 {
     IReadOnlyList<IVmessUserDefinition> GetVmessUsers();
 
-    ITrojanSniffingDefinition GetSniffing();
+    IRuntimeSniffingDefinition GetSniffing();
 
     bool GetReceiveOriginalDestination();
 }
 
-public sealed record VmessUser : IRuntimeUserDefinition
+public sealed record VmessUser : IRuntimeUserDefinition, IRuntimeScopedUserDefinition
 {
     public required string UserId { get; init; }
 
     public required string Uuid { get; init; }
 
     public required byte[] CmdKey { get; init; }
+
+    public string RuntimeKey { get; init; } = string.Empty;
+
+    public int Level { get; init; }
 
     public required long BytesPerSecond { get; init; }
 
@@ -63,11 +65,26 @@ public sealed record VmessUser : IRuntimeUserDefinition
 
 public sealed record VmessTlsInboundRuntime
 {
+    private string _transportProtocol = string.Empty;
+    private string _securityType = string.Empty;
+
     internal VmessInboundRuntimeState RuntimeState { get; init; } = new(Array.Empty<VmessUser>());
 
     public required string Tag { get; init; }
 
     public required string Transport { get; init; }
+
+    public string TransportProtocol
+    {
+        get => ResolveInternetStack().TransportProtocol;
+        init => _transportProtocol = value ?? string.Empty;
+    }
+
+    public string SecurityType
+    {
+        get => ResolveInternetStack().SecurityType;
+        init => _securityType = value ?? string.Empty;
+    }
 
     public required ListenerBinding Binding { get; init; }
 
@@ -83,49 +100,167 @@ public sealed record VmessTlsInboundRuntime
 
     public IReadOnlyList<string> ApplicationProtocols { get; init; } = Array.Empty<string>();
 
+    public RuntimeQuicOptions QuicOptions { get; init; } = RuntimeQuicOptions.Empty;
+
+    public RuntimeGrpcTransportOptions Grpc { get; init; } = RuntimeGrpcTransportOptions.Empty;
+
+    public RuntimeSplitHttpInboundOptions SplitHttp { get; init; } = RuntimeSplitHttpInboundOptions.Empty;
+
     public bool ReceiveOriginalDestination { get; init; }
 
-    public TrojanSniffingRuntime Sniffing { get; init; } = new();
+    public RuntimeSniffingOptions Sniffing { get; init; } = new();
 
     public IReadOnlyList<VmessUser> Users { get; init; } = Array.Empty<VmessUser>();
 
     public ulong BehaviorSeed => RuntimeState.BehaviorSeed;
+
+    public InboundInternetStack InternetStack => ResolveInternetStack();
+
+    private InboundInternetStack ResolveInternetStack()
+        => InboundInternetStackResolver.Resolve(
+            Transport,
+            string.IsNullOrWhiteSpace(_transportProtocol) ? null : _transportProtocol,
+            string.IsNullOrWhiteSpace(_securityType) ? null : _securityType);
 }
 
 public sealed record VmessTlsListenerRuntime
 {
+    private IReadOnlyList<VmessTlsInboundRuntime>? _inbounds;
+
     public required ListenerBinding Binding { get; init; }
 
     public bool AcceptProxyProtocol { get; init; }
 
     public IReadOnlyList<string> ApplicationProtocols { get; init; } = Array.Empty<string>();
 
+    public IReadOnlyList<VmessTlsInboundRuntime> Inbounds
+    {
+        get => _inbounds ?? ComposeLegacyInbounds(RawTlsInbound, MkcpInbound, WebSocketInbound, HttpUpgradeInbound, GrpcInbound, SplitHttpInbound);
+        init => _inbounds = value;
+    }
+
     public VmessTlsInboundRuntime? RawTlsInbound { get; init; }
+
+    public VmessTlsInboundRuntime? MkcpInbound { get; init; }
 
     public VmessTlsInboundRuntime? WebSocketInbound { get; init; }
 
-    public bool IsShared => RawTlsInbound is not null && WebSocketInbound is not null;
+    public VmessTlsInboundRuntime? HttpUpgradeInbound { get; init; }
+
+    public VmessTlsInboundRuntime? GrpcInbound { get; init; }
+
+    public VmessTlsInboundRuntime? SplitHttpInbound { get; init; }
+
+    public bool IsShared => Inbounds.Count > 1;
+
+    private static IReadOnlyList<VmessTlsInboundRuntime> ComposeLegacyInbounds(
+        VmessTlsInboundRuntime? rawTlsInbound,
+        VmessTlsInboundRuntime? mkcpInbound,
+        VmessTlsInboundRuntime? webSocketInbound,
+        VmessTlsInboundRuntime? httpUpgradeInbound,
+        VmessTlsInboundRuntime? grpcInbound,
+        VmessTlsInboundRuntime? splitHttpInbound)
+    {
+        var items = new List<VmessTlsInboundRuntime>(6);
+        if (rawTlsInbound is not null)
+        {
+            items.Add(rawTlsInbound);
+        }
+
+        if (mkcpInbound is not null)
+        {
+            items.Add(mkcpInbound);
+        }
+
+        if (webSocketInbound is not null)
+        {
+            items.Add(webSocketInbound);
+        }
+
+        if (httpUpgradeInbound is not null)
+        {
+            items.Add(httpUpgradeInbound);
+        }
+
+        if (grpcInbound is not null)
+        {
+            items.Add(grpcInbound);
+        }
+
+        if (splitHttpInbound is not null)
+        {
+            items.Add(splitHttpInbound);
+        }
+
+        return items;
+    }
 }
 
 public sealed record VmessInboundRuntimePlan : IInboundProtocolRuntimePlan
 {
+    private IReadOnlyList<VmessTlsListenerRuntime>? _listeners;
+
     public static VmessInboundRuntimePlan Empty { get; } = new();
 
     public string Protocol => InboundProtocols.Vmess;
 
+    public IReadOnlyList<VmessTlsListenerRuntime> Listeners
+    {
+        get => _listeners ?? ComposeListeners(TlsListeners, RealityListeners, PlainListeners);
+        init => _listeners = value;
+    }
+
     public IReadOnlyList<VmessTlsListenerRuntime> TlsListeners { get; init; } = Array.Empty<VmessTlsListenerRuntime>();
+
+    public IReadOnlyList<VmessTlsListenerRuntime> RealityListeners { get; init; } = Array.Empty<VmessTlsListenerRuntime>();
+
+    public IReadOnlyList<VmessTlsListenerRuntime> PlainListeners { get; init; } = Array.Empty<VmessTlsListenerRuntime>();
 
     public bool RequiresCertificate => TlsListeners.Count > 0;
 
-    public bool HasTcpTls => TlsListeners.Any(static listener => listener.RawTlsInbound is not null);
+    public bool RequiresReality => RealityListeners.Count > 0;
 
-    public bool HasWss => TlsListeners.Any(static listener => listener.WebSocketInbound is not null);
+    public bool HasTcpTls => TlsListeners.Any(static listener => listener.Inbounds.Any(static inbound =>
+        InboundInternetStackResolver.IsTcpTls(inbound.TransportProtocol, inbound.SecurityType)));
+
+    public bool HasWss => TlsListeners.Any(static listener => listener.Inbounds.Any(static inbound =>
+        InboundInternetStackResolver.IsWsTls(inbound.TransportProtocol, inbound.SecurityType)));
+
+    public bool HasGrpc => TlsListeners.Any(static listener => listener.Inbounds.Any(static inbound =>
+        InboundInternetStackResolver.IsGrpcTls(inbound.TransportProtocol, inbound.SecurityType)));
+
+    public bool HasSplitHttp => TlsListeners.Any(static listener => listener.Inbounds.Any(static inbound =>
+        InboundInternetStackResolver.IsSplitHttpTls(inbound.TransportProtocol, inbound.SecurityType)));
+
+    private static IReadOnlyList<VmessTlsListenerRuntime> ComposeListeners(
+        IReadOnlyList<VmessTlsListenerRuntime> tlsListeners,
+        IReadOnlyList<VmessTlsListenerRuntime> realityListeners,
+        IReadOnlyList<VmessTlsListenerRuntime> plainListeners)
+    {
+        if (tlsListeners.Count == 0 &&
+            realityListeners.Count == 0)
+        {
+            return plainListeners;
+        }
+
+        if (plainListeners.Count == 0 &&
+            realityListeners.Count == 0)
+        {
+            return tlsListeners;
+        }
+
+        if (tlsListeners.Count == 0 &&
+            plainListeners.Count == 0)
+        {
+            return realityListeners;
+        }
+
+        return tlsListeners.Concat(realityListeners).Concat(plainListeners).ToArray();
+    }
 }
 
 public static class VmessInboundRuntimePlanner
 {
-    private static readonly byte[] CmdKeySalt = Encoding.ASCII.GetBytes("c48619fe-8f02-49e0-b9e9-edf763e17e21");
-
     public static bool TryBuild(
         IReadOnlyList<IVmessInboundDefinition> inbounds,
         out VmessInboundRuntimePlan plan,
@@ -153,9 +288,22 @@ public static class VmessInboundRuntimePlanner
             return false;
         }
 
+        var tlsListeners = listeners
+            .Where(static listener => listener.Inbounds.Any(static inbound => IsTlsSecurity(inbound.SecurityType)))
+            .ToArray();
+        var realityListeners = listeners
+            .Where(static listener => listener.Inbounds.Any(static inbound => IsRealitySecurity(inbound.SecurityType)))
+            .ToArray();
+        var plainListeners = listeners
+            .Where(static listener => listener.Inbounds.Any(static inbound => IsPlainSecurity(inbound.SecurityType)))
+            .ToArray();
+
         plan = new VmessInboundRuntimePlan
         {
-            TlsListeners = listeners
+            Listeners = listeners,
+            TlsListeners = tlsListeners,
+            RealityListeners = realityListeners,
+            PlainListeners = plainListeners
         };
         error = null;
         return true;
@@ -167,20 +315,71 @@ public static class VmessInboundRuntimePlanner
     {
         ArgumentNullException.ThrowIfNull(listener);
 
-        if (listener.RawTlsInbound is null)
+        if (RuntimeHttp2RequestProbe.LooksLikeConnectionPreface(initialPayload))
+        {
+            if (listener.SplitHttpInbound is not null &&
+                RuntimeHttp2RequestProbe.TryExtractRequestPath(initialPayload, out var http2RequestPath) &&
+                RuntimeSplitHttpRequestMetadata.MatchesPathPrefix(
+                    http2RequestPath,
+                    listener.SplitHttpInbound.Path))
+            {
+                return listener.SplitHttpInbound;
+            }
+
+            return listener.GrpcInbound
+                   ?? listener.SplitHttpInbound
+                   ?? listener.RawTlsInbound;
+        }
+
+        var requestPath = HttpRequestProbe.ExtractRequestPath(initialPayload);
+        var splitHttpMatched = listener.SplitHttpInbound is not null &&
+                               RuntimeSplitHttpRequestMetadata.MatchesPathPrefix(
+                                   requestPath,
+                                   listener.SplitHttpInbound.Path);
+        var webSocketMatched = listener.WebSocketInbound is not null &&
+                               string.Equals(requestPath, listener.WebSocketInbound.Path, StringComparison.Ordinal);
+        var httpUpgradeMatched = listener.HttpUpgradeInbound is not null &&
+                                 string.Equals(requestPath, listener.HttpUpgradeInbound.Path, StringComparison.Ordinal);
+
+        if (splitHttpMatched && (webSocketMatched || httpUpgradeMatched))
+        {
+            return HttpRequestProbe.IsWebSocketUpgradeRequest(initialPayload)
+                ? webSocketMatched && httpUpgradeMatched
+                    ? HttpRequestProbe.LooksLikeWebSocketHandshake(initialPayload)
+                        ? listener.WebSocketInbound
+                        : listener.HttpUpgradeInbound
+                    : webSocketMatched
+                        ? listener.WebSocketInbound
+                        : listener.HttpUpgradeInbound
+                : listener.SplitHttpInbound;
+        }
+
+        if (webSocketMatched && httpUpgradeMatched)
+        {
+            return HttpRequestProbe.LooksLikeWebSocketHandshake(initialPayload)
+                ? listener.WebSocketInbound
+                : listener.HttpUpgradeInbound;
+        }
+
+        if (webSocketMatched)
         {
             return listener.WebSocketInbound;
         }
 
-        if (listener.WebSocketInbound is null)
+        if (httpUpgradeMatched)
         {
-            return listener.RawTlsInbound;
+            return listener.HttpUpgradeInbound;
         }
 
-        var requestPath = HttpRequestProbe.ExtractRequestPath(initialPayload);
-        return string.Equals(requestPath, listener.WebSocketInbound.Path, StringComparison.Ordinal)
-            ? listener.WebSocketInbound
-            : listener.RawTlsInbound;
+        if (splitHttpMatched)
+        {
+            return listener.SplitHttpInbound;
+        }
+
+        return listener.RawTlsInbound
+               ?? listener.SplitHttpInbound
+               ?? listener.WebSocketInbound
+               ?? listener.HttpUpgradeInbound;
     }
 
     private static IReadOnlyList<NormalizedInbound>? Normalize(
@@ -202,42 +401,98 @@ public static class VmessInboundRuntimePlanner
                 continue;
             }
 
-            var transport = InboundTransports.Normalize(inbound.Transport);
-            if (transport is not (InboundTransports.Tls or InboundTransports.Wss))
+            var internetDefinition = inbound as IInboundInternetDefinition;
+            if (!InboundInternetStackResolver.TryResolve(
+                    inbound.Transport,
+                    internetDefinition?.TransportProtocol,
+                    internetDefinition?.TransportSecurity,
+                    out var internetStack,
+                    out error))
             {
-                error = $"Unsupported VMess inbound transport: {inbound.Transport}.";
+                return null;
+            }
+
+            if (!IsSupportedInboundStack(internetStack.TransportProtocol, internetStack.SecurityType))
+            {
+                error = $"Unsupported VMess inbound transport/security stack: {internetStack.TransportProtocol}+{internetStack.SecurityType}. Currently only tcp/ws/httpupgrade/grpc/splithttp with none/tls security, mkcp with none security, plus tcp/grpc/splithttp with reality security, are supported.";
                 return null;
             }
 
             var listenAddress = NormalizeListenAddress(inbound.ListenAddress);
-            var port = NormalizeListenerPort(inbound.Port, transport == InboundTransports.Tls ? 443 : 8443);
-            if (!IsValidListenerBinding(listenAddress, port))
+            var port = NormalizeListenerPort(
+                inbound.Port,
+                IsWsTransport(internetStack.TransportProtocol) || IsHttpUpgradeTransport(internetStack.TransportProtocol) ? 8443 : 443);
+            if (IsMkcpTransport(internetStack.TransportProtocol) &&
+                !IPAddress.TryParse(listenAddress, out _))
             {
-                error = $"Invalid {transport.ToUpperInvariant()} listen address: {listenAddress}.";
+                error = "VMess mKCP inbound does not support UNIX listeners.";
                 return null;
             }
 
+            if (!IsValidListenerBinding(listenAddress, port))
+            {
+                error = $"Invalid {internetStack.Transport.ToUpperInvariant()} listen address: {listenAddress}.";
+                return null;
+            }
+
+            var tag = NormalizeTag(inbound.Tag, internetStack.Transport, index);
+
             items.Add(new NormalizedInbound
             {
-                Tag = NormalizeTag(inbound.Tag, transport, index),
-                Transport = transport,
+                Tag = tag,
+                Transport = internetStack.Transport,
+                TransportProtocol = internetStack.TransportProtocol,
+                SecurityType = internetStack.SecurityType,
                 Binding = new ListenerBinding(listenAddress, port),
                 HandshakeTimeoutSeconds = NormalizePositive(inbound.HandshakeTimeoutSeconds, 60),
                 AcceptProxyProtocol = inbound.AcceptProxyProtocol,
                 Host = inbound.Host.Trim(),
-                Path = transport == InboundTransports.Wss ? NormalizePath(inbound.Path) : string.Empty,
+                Path = IsWsTransport(internetStack.TransportProtocol) || IsHttpUpgradeTransport(internetStack.TransportProtocol)
+                    ? NormalizePath(inbound.Path)
+                    : IsSplitHttpTransport(internetStack.TransportProtocol)
+                        ? RuntimeSplitHttpRequestMetadata.NormalizePath(inbound.Path)
+                        : string.Empty,
                 EarlyDataBytes = Math.Max(0, inbound.EarlyDataBytes),
                 HeartbeatPeriodSeconds = Math.Max(0, inbound.HeartbeatPeriodSeconds),
-                ApplicationProtocols = NormalizeInboundApplicationProtocols(transport, inbound.ApplicationProtocols),
+                ApplicationProtocols = NormalizeInboundApplicationProtocols(
+                    internetStack.TransportProtocol,
+                    inbound.ApplicationProtocols),
+                QuicOptions = inbound is IInboundQuicDefinition quicDefinition
+                    ? RuntimeQuicOptionsNormalizer.Normalize(quicDefinition.QuicOptions)
+                    : RuntimeQuicOptions.Empty,
+                Grpc = RuntimeGrpcTransportOptions.Normalize(
+                    inbound as IInboundGrpcDefinition,
+                    internetStack.IsGrpcTransport),
                 ReceiveOriginalDestination = inbound is IVmessInboundScopeDefinition scopedReceiver &&
                                              scopedReceiver.GetReceiveOriginalDestination(),
                 Sniffing = inbound is IVmessInboundScopeDefinition scopedSniffing
                     ? NormalizeSniffing(scopedSniffing.GetSniffing())
-                    : new TrojanSniffingRuntime(),
+                    : new RuntimeSniffingOptions(),
                 Users = inbound is IVmessInboundScopeDefinition scopedInbound
-                    ? CompileUsers(scopedInbound.GetVmessUsers())
-                    : Array.Empty<VmessUser>()
+                    ? CompileUsers(scopedInbound.GetVmessUsers(), tag)
+                    : Array.Empty<VmessUser>(),
+                SplitHttp = RuntimeSplitHttpInboundOptions.Empty
             });
+
+            if (IsSplitHttpTransport(internetStack.TransportProtocol))
+            {
+                if (!RuntimeSplitHttpInboundOptionsNormalizer.TryNormalize(
+                        inbound.Host,
+                        inbound.Path,
+                        inbound as IInboundSplitHttpDefinition,
+                        out var splitHttp,
+                        out error))
+                {
+                    return null;
+                }
+
+                items[^1] = items[^1] with
+                {
+                    Host = splitHttp.Host,
+                    Path = splitHttp.Path,
+                    SplitHttp = splitHttp
+                };
+            }
         }
 
         error = null;
@@ -320,22 +575,82 @@ public static class VmessInboundRuntimePlanner
                 return null;
             }
 
-            var rawTlsInbound = entries.SingleOrDefault(static item => item.Transport == InboundTransports.Tls);
-            var webSocketInbound = entries.SingleOrDefault(static item => item.Transport == InboundTransports.Wss);
-            if (entries.Count(static item => item.Transport == InboundTransports.Tls) > 1 ||
-                entries.Count(static item => item.Transport == InboundTransports.Wss) > 1)
+            if (entries
+                    .Select(static item => RuntimeInternetSecurityTypes.Normalize(item.SecurityType))
+                    .Distinct(StringComparer.Ordinal)
+                    .Count() > 1)
+            {
+                error = $"VMess listener {group.Key} mixes none/tls/reality security on the same binding, which is not supported.";
+                return null;
+            }
+
+            var rawTlsInbound = entries.SingleOrDefault(static item =>
+                IsTcpTransport(item.TransportProtocol));
+            var mkcpInbound = entries.SingleOrDefault(static item =>
+                IsMkcpTransport(item.TransportProtocol));
+            var webSocketInbound = entries.SingleOrDefault(static item =>
+                IsWsTransport(item.TransportProtocol));
+            if (entries.Count(static item =>
+                    IsTcpTransport(item.TransportProtocol)) > 1 ||
+                entries.Count(static item =>
+                    IsMkcpTransport(item.TransportProtocol)) > 1 ||
+                entries.Count(static item =>
+                    IsWsTransport(item.TransportProtocol)) > 1 ||
+                entries.Count(static item =>
+                    IsHttpUpgradeTransport(item.TransportProtocol)) > 1 ||
+                entries.Count(static item =>
+                    IsGrpcTransport(item.TransportProtocol)) > 1 ||
+                entries.Count(static item =>
+                    IsSplitHttpTransport(item.TransportProtocol)) > 1)
             {
                 error = $"VMess listener {group.Key} defines duplicate transports on the same binding.";
                 return null;
             }
+
+            if (mkcpInbound is not null && entries.Length > 1)
+            {
+                error = $"VMess listener {group.Key} cannot share mKCP with other transports on the same binding.";
+                return null;
+            }
+
+            if (!RuntimeSplitHttpInboundPlanning.TryValidateSharedBinding(
+                    InboundProtocols.Vmess,
+                    group.Key,
+                    entries,
+                    static item => item.SecurityType,
+                    static item => item.TransportProtocol,
+                    static item => item.ApplicationProtocols,
+                    UsesTlsLikeSecurity,
+                    IsSplitHttpTransport,
+                    out error))
+            {
+                return null;
+            }
+
+            var runtimeInbounds = entries
+                .Select(ToRuntime)
+                .OrderBy(static inbound => inbound.TransportProtocol, StringComparer.Ordinal)
+                .ThenBy(static inbound => inbound.SecurityType, StringComparer.Ordinal)
+                .ToArray();
 
             listeners.Add(new VmessTlsListenerRuntime
             {
                 Binding = binding,
                 AcceptProxyProtocol = entries[0].AcceptProxyProtocol,
                 ApplicationProtocols = BuildListenerApplicationProtocols(entries),
-                RawTlsInbound = rawTlsInbound is null ? null : ToRuntime(rawTlsInbound),
-                WebSocketInbound = webSocketInbound is null ? null : ToRuntime(webSocketInbound)
+                Inbounds = runtimeInbounds,
+                RawTlsInbound = runtimeInbounds.SingleOrDefault(static inbound =>
+                    IsTcpTransport(inbound.TransportProtocol)),
+                MkcpInbound = runtimeInbounds.SingleOrDefault(static inbound =>
+                    IsMkcpTransport(inbound.TransportProtocol)),
+                WebSocketInbound = runtimeInbounds.SingleOrDefault(static inbound =>
+                    IsWsTransport(inbound.TransportProtocol)),
+                HttpUpgradeInbound = runtimeInbounds.SingleOrDefault(static inbound =>
+                    IsHttpUpgradeTransport(inbound.TransportProtocol)),
+                GrpcInbound = runtimeInbounds.SingleOrDefault(static inbound =>
+                    IsGrpcTransport(inbound.TransportProtocol)),
+                SplitHttpInbound = runtimeInbounds.SingleOrDefault(static inbound =>
+                    IsSplitHttpTransport(inbound.TransportProtocol))
             });
         }
 
@@ -349,6 +664,8 @@ public static class VmessInboundRuntimePlanner
             RuntimeState = new VmessInboundRuntimeState(inbound.Users),
             Tag = inbound.Tag,
             Transport = inbound.Transport,
+            TransportProtocol = inbound.TransportProtocol,
+            SecurityType = inbound.SecurityType,
             Binding = inbound.Binding,
             HandshakeTimeoutSeconds = inbound.HandshakeTimeoutSeconds,
             Host = inbound.Host,
@@ -356,6 +673,9 @@ public static class VmessInboundRuntimePlanner
             EarlyDataBytes = inbound.EarlyDataBytes,
             HeartbeatPeriodSeconds = inbound.HeartbeatPeriodSeconds,
             ApplicationProtocols = inbound.ApplicationProtocols,
+            QuicOptions = inbound.QuicOptions,
+            Grpc = inbound.Grpc,
+            SplitHttp = inbound.SplitHttp,
             ReceiveOriginalDestination = inbound.ReceiveOriginalDestination,
             Sniffing = inbound.Sniffing,
             Users = inbound.Users
@@ -366,14 +686,33 @@ public static class VmessInboundRuntimePlanner
         var ordered = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (inbounds.Any(static inbound => inbound.Transport == InboundTransports.Wss))
+        if (inbounds.Any(static inbound =>
+                UsesTlsLikeSecurity(inbound.SecurityType) &&
+                (IsWsTransport(inbound.TransportProtocol) || IsHttpUpgradeTransport(inbound.TransportProtocol))))
         {
             AddApplicationProtocol("http/1.1", ordered, seen);
         }
 
+        if (inbounds.Any(static inbound =>
+                UsesTlsLikeSecurity(inbound.SecurityType) &&
+                IsGrpcTransport(inbound.TransportProtocol)))
+        {
+            AddApplicationProtocol("h2", ordered, seen);
+        }
+
+        RuntimeSplitHttpInboundPlanning.AddListenerApplicationProtocols(
+            inbounds,
+            static inbound => inbound.SecurityType,
+            static inbound => inbound.TransportProtocol,
+            static inbound => inbound.ApplicationProtocols,
+            UsesTlsLikeSecurity,
+            IsSplitHttpTransport,
+            applicationProtocol => AddApplicationProtocol(applicationProtocol, ordered, seen));
+
         foreach (var inbound in inbounds)
         {
-            if (inbound.Transport != InboundTransports.Tls)
+            if (!UsesTlsLikeSecurity(inbound.SecurityType) ||
+                !IsTcpTransport(inbound.TransportProtocol))
             {
                 continue;
             }
@@ -387,7 +726,9 @@ public static class VmessInboundRuntimePlanner
         return ordered;
     }
 
-    private static IReadOnlyList<VmessUser> CompileUsers(IReadOnlyList<IVmessUserDefinition> users)
+    private static IReadOnlyList<VmessUser> CompileUsers(
+        IReadOnlyList<IVmessUserDefinition> users,
+        string inboundTag)
     {
         if (users.Count == 0)
         {
@@ -409,7 +750,9 @@ public static class VmessInboundRuntimePlanner
             {
                 UserId = user.UserId.Trim(),
                 Uuid = normalizedUuid,
-                CmdKey = CreateCmdKey(normalizedUuid),
+                CmdKey = VmessAccountCodec.CreateCommandKey(normalizedUuid),
+                RuntimeKey = RuntimeUserKeys.Create(InboundProtocols.Vmess, inboundTag, user.UserId),
+                Level = Math.Max(0, user.Level),
                 BytesPerSecond = Math.Max(0, user.BytesPerSecond),
                 DeviceLimit = Math.Max(0, user.DeviceLimit)
             });
@@ -418,21 +761,7 @@ public static class VmessInboundRuntimePlanner
         return compiled;
     }
 
-    private static byte[] CreateCmdKey(string normalizedUuid)
-    {
-        Span<byte> uuidBytes = stackalloc byte[16];
-        if (!ProtocolUuid.TryWriteBytes(normalizedUuid, uuidBytes))
-        {
-            return Array.Empty<byte>();
-        }
-
-        var buffer = new byte[uuidBytes.Length + CmdKeySalt.Length];
-        uuidBytes.CopyTo(buffer);
-        CmdKeySalt.CopyTo(buffer.AsSpan(uuidBytes.Length));
-        return MD5.HashData(buffer);
-    }
-
-    private static TrojanSniffingRuntime NormalizeSniffing(ITrojanSniffingDefinition sniffing)
+    private static RuntimeSniffingOptions NormalizeSniffing(IRuntimeSniffingDefinition sniffing)
         => new()
         {
             Enabled = sniffing.Enabled,
@@ -493,12 +822,17 @@ public static class VmessInboundRuntimePlanner
     }
 
     private static IReadOnlyList<string> NormalizeInboundApplicationProtocols(
-        string transport,
+        string transportProtocol,
         IReadOnlyList<string> values)
-        => transport switch
+        => RuntimeInternetTransportProtocols.Normalize(transportProtocol) switch
         {
-            InboundTransports.Tls => NormalizeApplicationProtocols(values),
-            InboundTransports.Wss => ["http/1.1"],
+            RuntimeInternetTransportProtocols.Tcp => NormalizeApplicationProtocols(values),
+            RuntimeInternetTransportProtocols.Ws or RuntimeInternetTransportProtocols.HttpUpgrade => ["http/1.1"],
+            RuntimeInternetTransportProtocols.Grpc => ["h2"],
+            RuntimeInternetTransportProtocols.SplitHttp
+                => RuntimeSplitHttpInboundPlanning.NormalizeApplicationProtocols(
+                    values,
+                    NormalizeApplicationProtocols),
             _ => Array.Empty<string>()
         };
 
@@ -540,11 +874,86 @@ public static class VmessInboundRuntimePlanner
             ? "unix:" + binding.ListenAddress
             : binding.ListenAddress + ":" + binding.Port.ToString();
 
+    private static bool IsSupportedInboundStack(string transportProtocol, string securityType)
+        => (IsPlainSecurity(securityType) || IsTlsSecurity(securityType)) &&
+           (IsTcpTransport(transportProtocol) ||
+            IsWsTransport(transportProtocol) ||
+            IsHttpUpgradeTransport(transportProtocol) ||
+            IsGrpcTransport(transportProtocol) ||
+            IsSplitHttpTransport(transportProtocol)) ||
+           IsPlainSecurity(securityType) &&
+           IsMkcpTransport(transportProtocol) ||
+           IsRealitySecurity(securityType) &&
+           (IsTcpTransport(transportProtocol) ||
+            IsGrpcTransport(transportProtocol) ||
+            IsSplitHttpTransport(transportProtocol));
+
+    private static bool IsPlainSecurity(string securityType)
+        => string.Equals(
+            RuntimeInternetSecurityTypes.Normalize(securityType),
+            RuntimeInternetSecurityTypes.None,
+            StringComparison.Ordinal);
+
+    private static bool IsTlsSecurity(string securityType)
+        => string.Equals(
+            RuntimeInternetSecurityTypes.Normalize(securityType),
+            RuntimeInternetSecurityTypes.Tls,
+            StringComparison.Ordinal);
+
+    private static bool IsRealitySecurity(string securityType)
+        => string.Equals(
+            RuntimeInternetSecurityTypes.Normalize(securityType),
+            RuntimeInternetSecurityTypes.Reality,
+            StringComparison.Ordinal);
+
+    private static bool UsesTlsLikeSecurity(string securityType)
+        => IsTlsSecurity(securityType) || IsRealitySecurity(securityType);
+
+    private static bool IsTcpTransport(string transportProtocol)
+        => string.Equals(
+            RuntimeInternetTransportProtocols.Normalize(transportProtocol),
+            RuntimeInternetTransportProtocols.Tcp,
+            StringComparison.Ordinal);
+
+    private static bool IsMkcpTransport(string transportProtocol)
+        => string.Equals(
+            RuntimeInternetTransportProtocols.Normalize(transportProtocol),
+            RuntimeInternetTransportProtocols.Mkcp,
+            StringComparison.Ordinal);
+
+    private static bool IsWsTransport(string transportProtocol)
+        => string.Equals(
+            RuntimeInternetTransportProtocols.Normalize(transportProtocol),
+            RuntimeInternetTransportProtocols.Ws,
+            StringComparison.Ordinal);
+
+    private static bool IsHttpUpgradeTransport(string transportProtocol)
+        => string.Equals(
+            RuntimeInternetTransportProtocols.Normalize(transportProtocol),
+            RuntimeInternetTransportProtocols.HttpUpgrade,
+            StringComparison.Ordinal);
+
+    private static bool IsGrpcTransport(string transportProtocol)
+        => string.Equals(
+            RuntimeInternetTransportProtocols.Normalize(transportProtocol),
+            RuntimeInternetTransportProtocols.Grpc,
+            StringComparison.Ordinal);
+
+    private static bool IsSplitHttpTransport(string transportProtocol)
+        => string.Equals(
+            RuntimeInternetTransportProtocols.Normalize(transportProtocol),
+            RuntimeInternetTransportProtocols.SplitHttp,
+            StringComparison.Ordinal);
+
     private sealed record NormalizedInbound
     {
         public string Tag { get; init; } = string.Empty;
 
         public string Transport { get; init; } = InboundTransports.Tls;
+
+        public string TransportProtocol { get; init; } = RuntimeInternetTransportProtocols.Tcp;
+
+        public string SecurityType { get; init; } = RuntimeInternetSecurityTypes.Tls;
 
         public required ListenerBinding Binding { get; init; }
 
@@ -562,9 +971,15 @@ public static class VmessInboundRuntimePlanner
 
         public IReadOnlyList<string> ApplicationProtocols { get; init; } = Array.Empty<string>();
 
+        public RuntimeQuicOptions QuicOptions { get; init; } = RuntimeQuicOptions.Empty;
+
+        public RuntimeGrpcTransportOptions Grpc { get; init; } = RuntimeGrpcTransportOptions.Empty;
+
+        public RuntimeSplitHttpInboundOptions SplitHttp { get; init; } = RuntimeSplitHttpInboundOptions.Empty;
+
         public bool ReceiveOriginalDestination { get; init; }
 
-        public TrojanSniffingRuntime Sniffing { get; init; } = new();
+        public RuntimeSniffingOptions Sniffing { get; init; } = new();
 
         public IReadOnlyList<VmessUser> Users { get; init; } = Array.Empty<VmessUser>();
     }

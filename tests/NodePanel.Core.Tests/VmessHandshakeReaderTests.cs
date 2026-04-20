@@ -193,7 +193,9 @@ public sealed class VmessHandshakeReaderTests
         var invalidUser = CreateUser(101);
         var invalidRequest = CreateMuxRequest(invalidUser);
         var headerBytes = VmessTestRequestEncoder.BuildRequestHeader(invalidUser, invalidRequest);
-        await using var stream = new MemoryStream(headerBytes, writable: false);
+        // Only keep the auth id so the drainer is guaranteed to observe EOF before its target drain length.
+        var truncated = headerBytes.AsSpan(0, 16).ToArray();
+        await using var stream = new MemoryStream(truncated, writable: false);
         var reader = new VmessHandshakeReader(new VmessSessionHistory());
 
         var exception = await Assert.ThrowsAsync<IOException>(() => reader.ReadAsync(
@@ -205,7 +207,7 @@ public sealed class VmessHandshakeReaderTests
         Assert.IsType<EndOfStreamException>(exception.InnerException);
         Assert.IsType<UnauthorizedAccessException>(exception.InnerException.InnerException);
         Assert.Contains("invalid user", exception.InnerException.InnerException!.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(headerBytes.Length, stream.Position);
+        Assert.Equal(truncated.Length, stream.Position);
     }
 
     [Fact]

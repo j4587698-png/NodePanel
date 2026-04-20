@@ -401,7 +401,7 @@
         </div>
         @if (runtimeStatus is null)
         {
-            <p class="muted">节点尚未上报遥测数据。节点上线并完成至少一次 telemetry flush 后，这里会显示主机资源、本地代理、远程入站和策略出站状态。</p>
+            <p class="muted">节点尚未上报遥测数据。节点上线并完成至少一次 telemetry flush 后，这里会显示主机资源、代理入站、远程入站和策略出站状态。</p>
         }
         else
         {
@@ -414,7 +414,7 @@
                             <div><dt>活动会话</dt><dd>@runtimeStatus.ActiveSessions</dd></div>
                             <div><dt>已知用户</dt><dd>@runtimeStatus.KnownUsers</dd></div>
                             <div><dt>远程入站</dt><dd>@runtimeStatus.Inbounds.Count</dd></div>
-                            <div><dt>本地代理</dt><dd>@runtimeStatus.LocalProxies.Count</dd></div>
+                            <div><dt>代理入站</dt><dd>@runtimeStatus.ProxyInbounds.Count</dd></div>
                             <div><dt>策略出站</dt><dd>@runtimeStatus.OutboundStrategies.Count</dd></div>
                         </dl>
                     </section>
@@ -478,16 +478,16 @@
                 </section>
 
                 <section class="runtime-panel">
-                    <h4>本地代理</h4>
-                    <p class="muted runtime-panel__subtitle">service 本机开放给客户端或系统使用的本地代理入口。</p>
-                    @if (runtimeStatus.LocalProxies.Count == 0)
+                    <h4>代理入站</h4>
+                    <p class="muted runtime-panel__subtitle">service 本机开放给客户端或系统使用的代理入站入口。</p>
+                    @if (runtimeStatus.ProxyInbounds.Count == 0)
                     {
-                        <p class="muted">当前没有启用的本地代理。</p>
+                        <p class="muted">当前没有启用的代理入站。</p>
                     }
                     else
                     {
                         <div class="runtime-list">
-                            @foreach (var proxy in runtimeStatus.LocalProxies)
+                            @foreach (var proxy in runtimeStatus.ProxyInbounds)
                             {
                                 <article class="runtime-item">
                                     <div class="runtime-item__header">

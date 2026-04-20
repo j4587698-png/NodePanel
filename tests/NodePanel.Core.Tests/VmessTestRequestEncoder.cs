@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using NodePanel.Core.Protocol;
@@ -64,6 +65,7 @@ internal static class VmessTestRequestEncoder
         stream.WriteByte((byte)request.Security);
         stream.WriteByte(0);
         stream.WriteByte((byte)request.Command);
+        WriteTarget(stream, request);
 
         var header = stream.ToArray();
         var checksum = ComputeFnv1a(header);
@@ -71,6 +73,44 @@ internal static class VmessTestRequestEncoder
         Buffer.BlockCopy(header, 0, payload, 0, header.Length);
         BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(header.Length, 4), checksum);
         return payload;
+    }
+
+    private static void WriteTarget(Stream stream, VmessRequest request)
+    {
+        if (request.Command == VmessCommand.Mux)
+        {
+            return;
+        }
+
+        Span<byte> portBuffer = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16BigEndian(portBuffer, checked((ushort)request.TargetPort));
+        stream.Write(portBuffer);
+
+        if (IPAddress.TryParse(request.TargetHost, out var ipAddress))
+        {
+            var bytes = ipAddress.GetAddressBytes();
+            switch (bytes.Length)
+            {
+                case 4:
+                    stream.WriteByte(0x01);
+                    stream.Write(bytes);
+                    return;
+                case 16:
+                    stream.WriteByte(0x04);
+                    stream.Write(bytes);
+                    return;
+            }
+        }
+
+        var domainBytes = Encoding.ASCII.GetBytes(request.TargetHost);
+        if (domainBytes.Length is 0 or > byte.MaxValue)
+        {
+            throw new InvalidOperationException("VMess test target host must be a non-empty ASCII domain or IP address.");
+        }
+
+        stream.WriteByte(0x03);
+        stream.WriteByte((byte)domainBytes.Length);
+        stream.Write(domainBytes);
     }
 
     private static byte[] BuildAuthIdPlaintext(long? timestamp, uint? random)

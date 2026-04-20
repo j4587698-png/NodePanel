@@ -80,6 +80,12 @@ public sealed record TelemetryBatchPayload
 
 public sealed record UserTrafficDelta
 {
+    public string RuntimeKey { get; init; } = string.Empty;
+
+    public string Protocol { get; init; } = string.Empty;
+
+    public string InboundTag { get; init; } = string.Empty;
+
     public required string UserId { get; init; }
 
     public required long UploadBytes { get; init; }
@@ -114,7 +120,7 @@ public sealed record NodeStatusPayload
 
     public required CertificateStatusPayload Certificate { get; init; }
 
-    public IReadOnlyList<NodeLocalProxyStatusPayload> LocalProxies { get; init; } = Array.Empty<NodeLocalProxyStatusPayload>();
+    public IReadOnlyList<NodeProxyInboundStatusPayload> ProxyInbounds { get; init; } = Array.Empty<NodeProxyInboundStatusPayload>();
 
     public IReadOnlyList<NodeStrategyOutboundStatusPayload> OutboundStrategies { get; init; } = Array.Empty<NodeStrategyOutboundStatusPayload>();
 
@@ -144,7 +150,7 @@ public sealed record CertificateStatusPayload
     public string? Error { get; init; }
 }
 
-public sealed record NodeLocalProxyStatusPayload
+public sealed record NodeProxyInboundStatusPayload
 {
     public string Tag { get; init; } = string.Empty;
 

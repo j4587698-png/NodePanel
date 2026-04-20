@@ -1,10 +1,13 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 
 namespace NodePanel.Core.Runtime;
 
 public static class RoutingProtocols
 {
+    public const string FakeDns = "fakedns";
+    public const string FakeDnsThenOthers = "fakedns+others";
     public const string Http = "http";
     public const string Tls = "tls";
     public const string Quic = "quic";
@@ -45,8 +48,18 @@ public sealed record OutboundRuntime
     public int ToleranceMilliseconds { get; init; } = StrategyOutboundDefaults.ToleranceMilliseconds;
 }
 
-public sealed record RoutingRuleRuntime
+public sealed record RoutingRuleRuntime : IRoutingRuleDefinition
 {
+    private static readonly IReadOnlyDictionary<string, string> EmptyAttributes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyDictionary<string, Regex> EmptyAttributeRegexes =
+        new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyList<Regex> EmptyUserRegexes = Array.Empty<Regex>();
+
+    public bool Enabled => true;
+
+    public string RuleTag { get; init; } = string.Empty;
+
     public IReadOnlyList<string> InboundTags { get; init; } = Array.Empty<string>();
 
     public IReadOnlyList<string> Protocols { get; init; } = Array.Empty<string>();
@@ -55,17 +68,47 @@ public sealed record RoutingRuleRuntime
 
     public IReadOnlyList<string> UserIds { get; init; } = Array.Empty<string>();
 
+    public IReadOnlyList<string> Processes { get; init; } = Array.Empty<string>();
+
     public IReadOnlyList<string> Domains { get; init; } = Array.Empty<string>();
 
     public IReadOnlyList<string> SourceCidrs { get; init; } = Array.Empty<string>();
 
+    public IReadOnlyList<string> DestinationCidrs { get; init; } = Array.Empty<string>();
+
     public IReadOnlyList<string> DestinationPorts { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> SourcePorts { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> LocalCidrs { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> LocalPorts { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> VlessRoutes { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyDictionary<string, string> Attributes { get; init; } = EmptyAttributes;
 
     public IReadOnlyList<RoutingHostMatcher> DomainMatchers { get; init; } = Array.Empty<RoutingHostMatcher>();
 
     public IReadOnlyList<RoutingCidrMatcher> SourceCidrMatchers { get; init; } = Array.Empty<RoutingCidrMatcher>();
 
+    public IReadOnlyList<RoutingCidrMatcher> DestinationCidrMatchers { get; init; } = Array.Empty<RoutingCidrMatcher>();
+
     public IReadOnlyList<RoutingPortMatcher> DestinationPortMatchers { get; init; } = Array.Empty<RoutingPortMatcher>();
+
+    public IReadOnlyList<RoutingPortMatcher> SourcePortMatchers { get; init; } = Array.Empty<RoutingPortMatcher>();
+
+    public IReadOnlyList<RoutingCidrMatcher> LocalCidrMatchers { get; init; } = Array.Empty<RoutingCidrMatcher>();
+
+    public IReadOnlyList<RoutingPortMatcher> LocalPortMatchers { get; init; } = Array.Empty<RoutingPortMatcher>();
+
+    public IReadOnlyList<RoutingPortMatcher> VlessRouteMatchers { get; init; } = Array.Empty<RoutingPortMatcher>();
+
+    internal IReadOnlyDictionary<string, Regex> AttributeRegexes { get; init; } = EmptyAttributeRegexes;
+
+    internal IReadOnlyList<Regex> UserRegexes { get; init; } = EmptyUserRegexes;
+
+    internal IReadOnlyList<RoutingProcessMatcher> ProcessMatchers { get; init; } = Array.Empty<RoutingProcessMatcher>();
 
     public required string OutboundTag { get; init; }
 
@@ -74,12 +117,19 @@ public sealed record RoutingRuleRuntime
         ArgumentNullException.ThrowIfNull(context);
 
         return Matches(InboundTags, context.InboundTag) &&
-               Matches(Protocols, context.DetectedProtocol) &&
+               MatchesProtocols(Protocols, context) &&
                Matches(Networks, context.Network) &&
-               Matches(UserIds, context.UserId) &&
-               MatchesHost(context) &&
-               MatchesSource(context) &&
-               MatchesDestinationPort(context);
+               MatchesDestinationAddress(context) &&
+               MatchesDestinationPort(context) &&
+               MatchesSourceAddress(context) &&
+                MatchesSourcePort(context) &&
+                MatchesLocalAddress(context) &&
+                MatchesLocalPort(context) &&
+                MatchesVlessRoute(context) &&
+                MatchesUsers(context) &&
+                MatchesProcesses(context) &&
+                MatchesAttributes(context) &&
+                MatchesHost(context);
     }
 
     private static bool Matches(IReadOnlyList<string> candidates, string value)
@@ -96,13 +146,157 @@ public sealed record RoutingRuleRuntime
 
         for (var index = 0; index < candidates.Count; index++)
         {
-            if (string.Equals(candidates[index], value, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(candidates[index], value, StringComparison.Ordinal))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private bool MatchesProtocols(IReadOnlyList<string> candidates, DispatchContext context)
+    {
+        if (candidates.Count == 0)
+        {
+            return true;
+        }
+
+        var detectedProtocol = context.DetectedProtocol;
+        var contentProtocol = context.Content.Protocol;
+        if (string.IsNullOrWhiteSpace(detectedProtocol) && string.IsNullOrWhiteSpace(contentProtocol))
+        {
+            return false;
+        }
+
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            var candidate = candidates[index];
+            if (candidate.Length == 0)
+            {
+                continue;
+            }
+
+            if ((!string.IsNullOrWhiteSpace(detectedProtocol) &&
+                 detectedProtocol.StartsWith(candidate, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(contentProtocol) &&
+                 contentProtocol.StartsWith(candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MatchesUsers(DispatchContext context)
+    {
+        if (UserIds.Count == 0 && UserRegexes.Count == 0)
+        {
+            return true;
+        }
+
+        var userIds = GetUserIds(context);
+        if (userIds.Count == 0)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < UserIds.Count; index++)
+        {
+            var candidate = UserIds[index];
+            if (IsUserRegexPattern(candidate))
+            {
+                continue;
+            }
+
+            for (var userIndex = 0; userIndex < userIds.Count; userIndex++)
+            {
+                if (string.Equals(candidate, userIds[userIndex], StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        for (var index = 0; index < UserRegexes.Count; index++)
+        {
+            for (var userIndex = 0; userIndex < userIds.Count; userIndex++)
+            {
+                if (UserRegexes[index].IsMatch(userIds[userIndex]))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> GetUserIds(DispatchContext context)
+    {
+        var identities = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(context.UserId))
+        {
+            identities.Add(context.UserId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.ScopedUserId) &&
+            !identities.Contains(context.ScopedUserId, StringComparer.Ordinal))
+        {
+            identities.Add(context.ScopedUserId);
+        }
+
+        return identities;
+    }
+
+    private bool MatchesProcesses(DispatchContext context)
+    {
+        if (Processes.Count == 0 && ProcessMatchers.Count == 0)
+        {
+            return true;
+        }
+
+        if (ProcessMatchers.Count > 0)
+        {
+            return ProcessMatchers.Any(matcher => matcher.IsMatch(context));
+        }
+
+        foreach (var value in Processes)
+        {
+            if (RoutingProcessMatcher.TryCreate(value, out var matcher) &&
+                matcher.IsMatch(context))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MatchesAttributes(DispatchContext context)
+    {
+        if (AttributeRegexes.Count == 0)
+        {
+            return true;
+        }
+
+        var attributes = context.Content.Attributes;
+        if (attributes.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var (key, pattern) in AttributeRegexes)
+        {
+            if (!attributes.TryGetValue(key, out var value) ||
+                !pattern.IsMatch(value))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool MatchesHost(DispatchContext context)
@@ -135,34 +329,43 @@ public sealed record RoutingRuleRuntime
         return false;
     }
 
-    private bool MatchesSource(DispatchContext context)
+    private bool MatchesDestinationAddress(DispatchContext context)
+    {
+        if (DestinationCidrs.Count == 0 && DestinationCidrMatchers.Count == 0)
+        {
+            return true;
+        }
+
+        return MatchesAddresses(
+            GetDestinationAddresses(context),
+            DestinationCidrMatchers,
+            DestinationCidrs);
+    }
+
+    private bool MatchesSourceAddress(DispatchContext context)
     {
         if (SourceCidrs.Count == 0 && SourceCidrMatchers.Count == 0)
         {
             return true;
         }
 
-        var sourceAddress = GetSourceAddress(context);
-        if (sourceAddress is null)
+        return MatchesAddresses(
+            GetSourceAddresses(context),
+            SourceCidrMatchers,
+            SourceCidrs);
+    }
+
+    private bool MatchesLocalAddress(DispatchContext context)
+    {
+        if (LocalCidrs.Count == 0 && LocalCidrMatchers.Count == 0)
         {
-            return false;
+            return true;
         }
 
-        if (SourceCidrMatchers.Count > 0)
-        {
-            return SourceCidrMatchers.Any(matcher => matcher.IsMatch(sourceAddress));
-        }
-
-        foreach (var value in SourceCidrs)
-        {
-            if (RoutingCidrMatcher.TryCreate(value, out var matcher, out _) &&
-                matcher.IsMatch(sourceAddress))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return MatchesAddresses(
+            GetLocalAddresses(context),
+            LocalCidrMatchers,
+            LocalCidrs);
     }
 
     private bool MatchesDestinationPort(DispatchContext context)
@@ -195,8 +398,108 @@ public sealed record RoutingRuleRuntime
         return false;
     }
 
+    private bool MatchesSourcePort(DispatchContext context)
+    {
+        if (SourcePorts.Count == 0 && SourcePortMatchers.Count == 0)
+        {
+            return true;
+        }
+
+        var port = GetSourcePort(context);
+        if (port <= 0)
+        {
+            return false;
+        }
+
+        if (SourcePortMatchers.Count > 0)
+        {
+            return SourcePortMatchers.Any(matcher => matcher.IsMatch(port));
+        }
+
+        foreach (var value in SourcePorts)
+        {
+            if (RoutingPortMatcher.TryCreate(value, out var matcher, out _) &&
+                matcher.IsMatch(port))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MatchesLocalPort(DispatchContext context)
+    {
+        if (LocalPorts.Count == 0 && LocalPortMatchers.Count == 0)
+        {
+            return true;
+        }
+
+        var port = GetLocalPort(context);
+        if (port <= 0)
+        {
+            return false;
+        }
+
+        if (LocalPortMatchers.Count > 0)
+        {
+            return LocalPortMatchers.Any(matcher => matcher.IsMatch(port));
+        }
+
+        foreach (var value in LocalPorts)
+        {
+            if (RoutingPortMatcher.TryCreate(value, out var matcher, out _) &&
+                matcher.IsMatch(port))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MatchesVlessRoute(DispatchContext context)
+    {
+        if (VlessRoutes.Count == 0 && VlessRouteMatchers.Count == 0)
+        {
+            return true;
+        }
+
+        var port = GetVlessRoutePort(context);
+        if (port <= 0)
+        {
+            return false;
+        }
+
+        if (VlessRouteMatchers.Count > 0)
+        {
+            return VlessRouteMatchers.Any(matcher => matcher.IsMatch(port));
+        }
+
+        foreach (var value in VlessRoutes)
+        {
+            if (RoutingPortMatcher.TryCreate(value, out var matcher, out _) &&
+                matcher.IsMatch(port))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string GetEffectiveHost(DispatchContext context)
     {
+        if (!string.IsNullOrWhiteSpace(context.RouteTargetHost))
+        {
+            return NormalizeHostToken(context.RouteTargetHost);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.TargetHost))
+        {
+            return NormalizeHostToken(context.TargetHost);
+        }
+
         if (!string.IsNullOrWhiteSpace(context.DetectedDomain))
         {
             return NormalizeHostToken(context.DetectedDomain);
@@ -215,21 +518,189 @@ public sealed record RoutingRuleRuntime
         return string.Empty;
     }
 
-    private static IPAddress? GetSourceAddress(DispatchContext context)
+    private static bool MatchesAddresses(
+        IReadOnlyList<IPAddress> addresses,
+        IReadOnlyList<RoutingCidrMatcher> matchers,
+        IReadOnlyList<string> values)
     {
-        if (context.SourceEndPoint is not IPEndPoint ipEndPoint)
+        if (addresses.Count == 0)
         {
-            return null;
+            return false;
         }
 
-        var address = ipEndPoint.Address;
-        return address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        if (matchers.Count > 0)
+        {
+            for (var matcherIndex = 0; matcherIndex < matchers.Count; matcherIndex++)
+            {
+                for (var addressIndex = 0; addressIndex < addresses.Count; addressIndex++)
+                {
+                    if (matchers[matcherIndex].IsMatch(addresses[addressIndex]))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        foreach (var value in values)
+        {
+            if (!RoutingCidrMatcher.TryCreate(value, out var matcher, out _))
+            {
+                continue;
+            }
+
+            for (var addressIndex = 0; addressIndex < addresses.Count; addressIndex++)
+            {
+                if (matcher.IsMatch(addresses[addressIndex]))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
+    private static IReadOnlyList<IPAddress> GetSourceAddresses(DispatchContext context)
+        => MergeAddresses(
+            context.SourceAddresses,
+            context.SourceEndPoint is IPEndPoint ipEndPoint ? ipEndPoint.Address : null);
+
+    private static IReadOnlyList<IPAddress> GetDestinationAddresses(DispatchContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(context.RouteTargetHost))
+        {
+            return TryParseAddress(context.RouteTargetHost, out var routeTargetAddress)
+                ? [routeTargetAddress]
+                : Array.Empty<IPAddress>();
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.TargetHost))
+        {
+            return TryParseAddress(context.TargetHost, out var targetAddress)
+                ? [targetAddress]
+                : Array.Empty<IPAddress>();
+        }
+
+        IPAddress? originalDestinationAddress = null;
+        IPAddress? inboundOriginalDestinationAddress = null;
+        if (TryParseAddress(context.OriginalDestinationHost, out var address))
+        {
+            originalDestinationAddress = address;
+        }
+
+        if (TryParseAddress(context.InboundOriginalDestinationHost, out address))
+        {
+            inboundOriginalDestinationAddress = address;
+        }
+
+        return MergeAddresses(
+            context.TargetAddresses,
+            originalDestinationAddress,
+            inboundOriginalDestinationAddress);
+    }
+
+    private static IReadOnlyList<IPAddress> GetLocalAddresses(DispatchContext context)
+        => MergeAddresses(
+            context.LocalAddresses,
+            context.LocalEndPoint is IPEndPoint ipEndPoint ? ipEndPoint.Address : null);
+
+    private static IReadOnlyList<IPAddress> MergeAddresses(
+        IReadOnlyList<IPAddress> addresses,
+        IPAddress? primaryAddress = null,
+        IPAddress? secondaryAddress = null)
+    {
+        if (addresses.Count == 0 &&
+            primaryAddress is null &&
+            secondaryAddress is null)
+        {
+            return Array.Empty<IPAddress>();
+        }
+
+        var normalized = new List<IPAddress>(
+            addresses.Count +
+            (primaryAddress is null ? 0 : 1) +
+            (secondaryAddress is null ? 0 : 1));
+
+        for (var index = 0; index < addresses.Count; index++)
+        {
+            AddNormalizedAddress(normalized, addresses[index]);
+        }
+
+        AddNormalizedAddress(normalized, primaryAddress);
+        AddNormalizedAddress(normalized, secondaryAddress);
+        return normalized.Count == 0 ? Array.Empty<IPAddress>() : normalized;
+    }
+
+    private static void AddNormalizedAddress(List<IPAddress> addresses, IPAddress? address)
+    {
+        if (address is null)
+        {
+            return;
+        }
+
+        var normalized = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        if (!addresses.Contains(normalized))
+        {
+            addresses.Add(normalized);
+        }
+    }
+
+    private static int GetSourcePort(DispatchContext context)
+        => context.SourceEndPoint is IPEndPoint ipEndPoint ? ipEndPoint.Port : 0;
+
+    private static int GetLocalPort(DispatchContext context)
+        => context.LocalEndPoint is IPEndPoint ipEndPoint ? ipEndPoint.Port : 0;
+
+    private static int GetVlessRoutePort(DispatchContext context)
+        => context.VlessRoutePort;
+
     private static int GetDestinationPort(DispatchContext context)
-        => context.OriginalDestinationPort > 0
+    {
+        if (context.RouteTargetPort > 0)
+        {
+            return context.RouteTargetPort;
+        }
+
+        if (context.TargetPort > 0)
+        {
+            return context.TargetPort;
+        }
+
+        return context.OriginalDestinationPort > 0
             ? context.OriginalDestinationPort
             : context.InboundOriginalDestinationPort;
+    }
+
+    private static bool TryParseAddress(string? value, out IPAddress address)
+    {
+        address = IPAddress.None;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        if (normalized.Length > 1 &&
+            normalized[0] == '[' &&
+            normalized[^1] == ']')
+        {
+            normalized = normalized[1..^1];
+        }
+
+        if (!IPAddress.TryParse(normalized, out var parsed))
+        {
+            return false;
+        }
+
+        address = parsed.IsIPv4MappedToIPv6 ? parsed.MapToIPv4() : parsed;
+        return true;
+    }
+
+    private static bool IsUserRegexPattern(string value)
+        => value.StartsWith("regexp:", StringComparison.Ordinal);
 
     private static string NormalizeHostToken(string? value)
     {
@@ -250,11 +721,190 @@ public sealed record RoutingRuleRuntime
     }
 }
 
-public sealed record RoutingHostMatcher
+public enum RoutingHostMatchKind
 {
+    Plain = 0,
+    Regex = 1,
+    Domain = 2,
+    Full = 3
+}
+
+public enum RoutingProcessMatchKind
+{
+    Name = 0,
+    AbsolutePath = 1,
+    Folder = 2,
+    CurrentExecutable = 3
+}
+
+public sealed record RoutingProcessMatcher
+{
+    private const string SelfToken = "self/";
+    private const string XrayToken = "xray/";
+
+    public required RoutingProcessMatchKind Kind { get; init; }
+
     public required string Pattern { get; init; }
 
-    public bool WildcardSubdomain { get; init; }
+    public required string NormalizedRule { get; init; }
+
+    public bool IsMatch(DispatchContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return Kind switch
+        {
+            RoutingProcessMatchKind.Name => string.Equals(
+                GetEffectiveProcessName(context),
+                Pattern,
+                StringComparison.Ordinal),
+            RoutingProcessMatchKind.AbsolutePath => string.Equals(
+                NormalizeProcessPath(context.ProcessPath),
+                Pattern,
+                StringComparison.Ordinal),
+            RoutingProcessMatchKind.Folder => NormalizeProcessPath(context.ProcessPath)
+                .StartsWith(Pattern, StringComparison.Ordinal),
+            RoutingProcessMatchKind.CurrentExecutable => context.ProcessIsCurrentExecutable,
+            _ => false
+        };
+    }
+
+    public static bool TryCreate(string value, out RoutingProcessMatcher matcher)
+    {
+        matcher = default!;
+        var normalized = NormalizeRuleToken(value);
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        if (string.Equals(normalized, SelfToken, StringComparison.Ordinal) ||
+            string.Equals(normalized, XrayToken, StringComparison.Ordinal))
+        {
+            matcher = new RoutingProcessMatcher
+            {
+                Kind = RoutingProcessMatchKind.CurrentExecutable,
+                Pattern = normalized,
+                NormalizedRule = normalized
+            };
+            return true;
+        }
+
+        if (normalized.EndsWith("/", StringComparison.Ordinal))
+        {
+            matcher = new RoutingProcessMatcher
+            {
+                Kind = RoutingProcessMatchKind.Folder,
+                Pattern = normalized,
+                NormalizedRule = normalized
+            };
+            return true;
+        }
+
+        if (normalized.Contains('/', StringComparison.Ordinal))
+        {
+            matcher = new RoutingProcessMatcher
+            {
+                Kind = RoutingProcessMatchKind.AbsolutePath,
+                Pattern = normalized,
+                NormalizedRule = normalized
+            };
+            return true;
+        }
+
+        var processName = NormalizeProcessName(normalized);
+        if (processName.Length == 0)
+        {
+            return false;
+        }
+
+        matcher = new RoutingProcessMatcher
+        {
+            Kind = RoutingProcessMatchKind.Name,
+            Pattern = processName,
+            NormalizedRule = normalized
+        };
+        return true;
+    }
+
+    public static bool TryNormalizeRule(string value, out string normalizedRule)
+    {
+        if (TryCreate(value, out var matcher))
+        {
+            normalizedRule = matcher.NormalizedRule;
+            return true;
+        }
+
+        normalizedRule = string.Empty;
+        return false;
+    }
+
+    private static string GetEffectiveProcessName(DispatchContext context)
+    {
+        var processName = NormalizeProcessName(context.ProcessName);
+        if (processName.Length > 0)
+        {
+            return processName;
+        }
+
+        var processPath = NormalizeProcessPath(context.ProcessPath);
+        if (processPath.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var separator = processPath.LastIndexOf('/');
+        var fileName = separator >= 0 ? processPath[(separator + 1)..] : processPath;
+        return NormalizeProcessName(fileName);
+    }
+
+    private static string NormalizeProcessName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Trim();
+        return normalized.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? normalized[..^4]
+            : normalized;
+    }
+
+    private static string NormalizeProcessPath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Trim().Replace('\\', '/');
+    }
+
+    private static string NormalizeRuleToken(string? value)
+        => NormalizeProcessPath(value);
+}
+
+public sealed record RoutingHostMatcher
+{
+    private const string RegexpPrefix = "regexp:";
+    private const string DomainPrefix = "domain:";
+    private const string FullPrefix = "full:";
+    private const string KeywordPrefix = "keyword:";
+    private const string DotlessPrefix = "dotless:";
+
+    public required RoutingHostMatchKind Kind { get; init; }
+
+    public required string Pattern { get; init; }
+
+    private Regex? CompiledRegex { get; init; }
+
+    private string Prefix { get; init; } = string.Empty;
+
+    private string SourcePattern { get; init; } = string.Empty;
+
+    internal string NormalizedRule
+        => Prefix.Length == 0 ? SourcePattern : Prefix + SourcePattern;
 
     public bool IsMatch(string value)
     {
@@ -264,42 +914,78 @@ public sealed record RoutingHostMatcher
             return false;
         }
 
-        if (!WildcardSubdomain)
+        return Kind switch
         {
-            return string.Equals(Pattern, normalizedValue, StringComparison.Ordinal);
-        }
-
-        return normalizedValue.Length > Pattern.Length &&
-               normalizedValue.EndsWith("." + Pattern, StringComparison.Ordinal);
+            RoutingHostMatchKind.Plain => normalizedValue.Contains(Pattern, StringComparison.Ordinal),
+            RoutingHostMatchKind.Regex => CompiledRegex is not null && CompiledRegex.IsMatch(normalizedValue),
+            RoutingHostMatchKind.Domain => IsDomainMatch(normalizedValue, Pattern),
+            RoutingHostMatchKind.Full => string.Equals(Pattern, normalizedValue, StringComparison.Ordinal),
+            _ => false
+        };
     }
 
     public static bool TryCreate(string value, out RoutingHostMatcher matcher)
     {
-        var normalized = NormalizeHostToken(value);
-        if (normalized.Length == 0)
+        matcher = default!;
+        if (string.IsNullOrWhiteSpace(value))
         {
-            matcher = default!;
             return false;
         }
 
-        if (normalized.StartsWith("*.", StringComparison.Ordinal))
+        var normalized = value.Trim();
+        if (normalized.Length == 0)
         {
-            var suffix = normalized[2..];
-            if (suffix.Length == 0 || suffix.Contains('*', StringComparison.Ordinal))
-            {
-                matcher = default!;
-                return false;
-            }
+            return false;
+        }
 
-            matcher = new RoutingHostMatcher
-            {
-                Pattern = suffix,
-                WildcardSubdomain = true
-            };
+        if (TryStripPrefix(normalized, RegexpPrefix, out var regexPattern))
+        {
+            return TryCreateRegex(regexPattern, RegexpPrefix, out matcher);
+        }
+
+        if (TryStripPrefix(normalized, DomainPrefix, out var domainPattern))
+        {
+            return TryCreateLiteral(domainPattern, RoutingHostMatchKind.Domain, DomainPrefix, out matcher);
+        }
+
+        if (TryStripPrefix(normalized, FullPrefix, out var fullPattern))
+        {
+            return TryCreateLiteral(fullPattern, RoutingHostMatchKind.Full, FullPrefix, out matcher);
+        }
+
+        if (TryStripPrefix(normalized, KeywordPrefix, out var keywordPattern))
+        {
+            return TryCreateLiteral(keywordPattern, RoutingHostMatchKind.Plain, KeywordPrefix, out matcher);
+        }
+
+        if (TryStripPrefix(normalized, DotlessPrefix, out var dotlessPattern))
+        {
+            return TryCreateDotless(dotlessPattern, out matcher);
+        }
+
+        return TryCreateLiteral(normalized, RoutingHostMatchKind.Plain, string.Empty, out matcher);
+    }
+
+    public static bool TryNormalizeRule(string value, out string normalizedRule)
+    {
+        if (TryCreate(value, out var matcher))
+        {
+            normalizedRule = matcher.NormalizedRule;
             return true;
         }
 
-        if (normalized.Contains('*', StringComparison.Ordinal))
+        normalizedRule = string.Empty;
+        return false;
+    }
+
+    private static bool TryCreateLiteral(
+        string value,
+        RoutingHostMatchKind kind,
+        string prefix,
+        out RoutingHostMatcher matcher)
+    {
+        var pattern = NormalizeHostToken(value);
+        if (pattern.Length == 0)
         {
             matcher = default!;
             return false;
@@ -307,10 +993,87 @@ public sealed record RoutingHostMatcher
 
         matcher = new RoutingHostMatcher
         {
-            Pattern = normalized,
-            WildcardSubdomain = false
+            Kind = kind,
+            Pattern = pattern,
+            Prefix = prefix,
+            SourcePattern = pattern
         };
         return true;
+    }
+
+    private static bool TryCreateRegex(string value, string prefix, out RoutingHostMatcher matcher)
+    {
+        var pattern = value.Trim();
+        if (pattern.Length == 0)
+        {
+            matcher = default!;
+            return false;
+        }
+
+        try
+        {
+            matcher = new RoutingHostMatcher
+            {
+                Kind = RoutingHostMatchKind.Regex,
+                Pattern = pattern,
+                Prefix = prefix,
+                SourcePattern = pattern,
+                CompiledRegex = new Regex(pattern, RegexOptions.CultureInvariant)
+            };
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            matcher = default!;
+            return false;
+        }
+    }
+
+    private static bool TryCreateDotless(string value, out RoutingHostMatcher matcher)
+    {
+        var pattern = value.Trim();
+        if (pattern.Contains('.', StringComparison.Ordinal))
+        {
+            matcher = default!;
+            return false;
+        }
+
+        var regexPattern = pattern.Length == 0
+            ? "^[^.]*$"
+            : "^[^.]*" + pattern + "[^.]*$";
+        if (!TryCreateRegex(regexPattern, DotlessPrefix, out matcher))
+        {
+            return false;
+        }
+
+        matcher = matcher with
+        {
+            SourcePattern = pattern
+        };
+        return true;
+    }
+
+    private static bool TryStripPrefix(string value, string prefix, out string pattern)
+    {
+        if (value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            pattern = value[prefix.Length..];
+            return true;
+        }
+
+        pattern = string.Empty;
+        return false;
+    }
+
+    private static bool IsDomainMatch(string value, string pattern)
+    {
+        if (!value.EndsWith(pattern, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return value.Length == pattern.Length ||
+               value[value.Length - pattern.Length - 1] == '.';
     }
 
     private static string NormalizeHostToken(string? value)
@@ -400,6 +1163,8 @@ public sealed record RoutingCidrMatcher
 
     public required int PrefixLength { get; init; }
 
+    public bool ReverseMatch { get; init; }
+
     public bool IsMatch(IPAddress address)
     {
         var normalizedAddress = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
@@ -412,27 +1177,43 @@ public sealed record RoutingCidrMatcher
         var networkBytes = NetworkAddress.GetAddressBytes();
         var fullBytes = PrefixLength / 8;
         var remainingBits = PrefixLength % 8;
+        var isMatch = true;
 
         for (var index = 0; index < fullBytes; index++)
         {
             if (candidateBytes[index] != networkBytes[index])
             {
-                return false;
+                isMatch = false;
+                break;
             }
         }
 
-        if (remainingBits == 0)
+        if (isMatch && remainingBits > 0)
         {
-            return true;
+            var mask = (byte)(0xFF << (8 - remainingBits));
+            isMatch = (candidateBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask);
         }
 
-        var mask = (byte)(0xFF << (8 - remainingBits));
-        return (candidateBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask);
+        return isMatch != ReverseMatch;
     }
 
     public static bool TryCreate(string value, out RoutingCidrMatcher matcher, out string? error)
     {
         var normalized = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        if (normalized.Length == 0)
+        {
+            matcher = default!;
+            error = "Routing source CIDR matcher cannot be empty.";
+            return false;
+        }
+
+        var reverseMatch = false;
+        if (normalized.StartsWith("!", StringComparison.Ordinal))
+        {
+            reverseMatch = true;
+            normalized = normalized[1..].Trim();
+        }
+
         if (normalized.Length == 0)
         {
             matcher = default!;
@@ -454,7 +1235,8 @@ public sealed record RoutingCidrMatcher
             matcher = new RoutingCidrMatcher
             {
                 NetworkAddress = exactAddress,
-                PrefixLength = exactAddress.AddressFamily == AddressFamily.InterNetwork ? 32 : 128
+                PrefixLength = exactAddress.AddressFamily == AddressFamily.InterNetwork ? 32 : 128,
+                ReverseMatch = reverseMatch
             };
             error = null;
             return true;
@@ -482,7 +1264,8 @@ public sealed record RoutingCidrMatcher
         matcher = new RoutingCidrMatcher
         {
             NetworkAddress = ApplyNetworkMask(address, prefixLength),
-            PrefixLength = prefixLength
+            PrefixLength = prefixLength,
+            ReverseMatch = reverseMatch
         };
         error = null;
         return true;
@@ -544,9 +1327,26 @@ public sealed record OutboundRuntimePlan
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        if (TryPickRoute(context, out var route))
+        {
+            outboundTag = route.OutboundTag;
+            return true;
+        }
+
+        outboundTag = DefaultOutboundTag;
+        return !string.IsNullOrWhiteSpace(outboundTag);
+    }
+
+    public bool TryPickRoute(DispatchContext context, out OutboundRouteDecision route)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
         if (!string.IsNullOrWhiteSpace(context.OutboundTag))
         {
-            outboundTag = context.OutboundTag.Trim();
+            route = new OutboundRouteDecision
+            {
+                OutboundTag = context.OutboundTag.Trim()
+            };
             return true;
         }
 
@@ -555,13 +1355,17 @@ public sealed record OutboundRuntimePlan
         {
             if (RoutingRules[index].IsMatch(normalizedContext))
             {
-                outboundTag = RoutingRules[index].OutboundTag;
+                route = new OutboundRouteDecision
+                {
+                    OutboundTag = RoutingRules[index].OutboundTag,
+                    RuleTag = RoutingRules[index].RuleTag
+                };
                 return true;
             }
         }
 
-        outboundTag = DefaultOutboundTag;
-        return !string.IsNullOrWhiteSpace(outboundTag);
+        route = default!;
+        return false;
     }
 
     private static DispatchContext NormalizeContext(DispatchContext context)
@@ -571,9 +1375,13 @@ public sealed record OutboundRuntimePlan
             DetectedProtocol = RoutingProtocols.Normalize(context.DetectedProtocol),
             Network = RoutingNetworks.Normalize(context.Network),
             UserId = NormalizeTag(context.UserId),
+            ScopedUserId = NormalizeTag(context.ScopedUserId),
             DetectedDomain = NormalizeHostToken(context.DetectedDomain),
             OriginalDestinationHost = NormalizeHostToken(context.OriginalDestinationHost),
-            InboundOriginalDestinationHost = NormalizeHostToken(context.InboundOriginalDestinationHost)
+            TargetHost = NormalizeHostToken(context.TargetHost),
+            RouteTargetHost = NormalizeHostToken(context.RouteTargetHost),
+            InboundOriginalDestinationHost = NormalizeHostToken(context.InboundOriginalDestinationHost),
+            Content = NormalizeContent(context.Content)
         };
 
     private static string NormalizeTag(string? value)
@@ -595,6 +1403,36 @@ public sealed record OutboundRuntimePlan
         }
 
         return normalized;
+    }
+
+    private static DispatchContent NormalizeContent(DispatchContent content)
+    {
+        if (string.IsNullOrWhiteSpace(content.Protocol) &&
+            content.Attributes.Count == 0 &&
+            !content.SkipDnsResolve)
+        {
+            return DispatchContent.Empty;
+        }
+
+        var normalizedAttributes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in content.Attributes)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            normalizedAttributes[key.Trim()] = value ?? string.Empty;
+        }
+
+        return new DispatchContent
+        {
+            Protocol = string.IsNullOrWhiteSpace(content.Protocol)
+                ? string.Empty
+                : content.Protocol.Trim().ToLowerInvariant(),
+            Attributes = normalizedAttributes,
+            SkipDnsResolve = content.SkipDnsResolve
+        };
     }
 }
 
@@ -642,7 +1480,8 @@ public static class OutboundRuntimePlanner
         IReadOnlyList<IRoutingRuleDefinition> routingRules,
         IReadOnlyList<string> supportedOutboundProtocols,
         out OutboundRuntimePlan plan,
-        out string? error)
+        out string? error,
+        IReadOnlyList<string>? additionalKnownOutboundTags = null)
     {
         ArgumentNullException.ThrowIfNull(outbounds);
         ArgumentNullException.ThrowIfNull(routingRules);
@@ -655,8 +1494,12 @@ public static class OutboundRuntimePlanner
             return false;
         }
 
-        var normalizedRules = NormalizeRules(routingRules, normalizedOutbounds, out error);
-        if (normalizedRules is null)
+        if (!TryNormalizeRules(
+                routingRules,
+                normalizedOutbounds,
+                additionalKnownOutboundTags,
+                out var normalizedRules,
+                out error))
         {
             plan = OutboundRuntimePlan.Empty;
             return false;
@@ -669,6 +1512,33 @@ public static class OutboundRuntimePlanner
             DefaultOutboundTag = normalizedOutbounds[0].Tag
         };
         error = null;
+        return true;
+    }
+
+    internal static bool TryNormalizeRules(
+        IReadOnlyList<IRoutingRuleDefinition> routingRules,
+        IReadOnlyList<OutboundRuntime> outbounds,
+        out IReadOnlyList<RoutingRuleRuntime> normalizedRules,
+        out string? error)
+    {
+        return TryNormalizeRules(routingRules, outbounds, additionalKnownOutboundTags: null, out normalizedRules, out error);
+    }
+
+    internal static bool TryNormalizeRules(
+        IReadOnlyList<IRoutingRuleDefinition> routingRules,
+        IReadOnlyList<OutboundRuntime> outbounds,
+        IReadOnlyList<string>? additionalKnownOutboundTags,
+        out IReadOnlyList<RoutingRuleRuntime> normalizedRules,
+        out string? error)
+    {
+        var normalized = NormalizeRules(routingRules, outbounds, additionalKnownOutboundTags, out error);
+        if (normalized is null)
+        {
+            normalizedRules = Array.Empty<RoutingRuleRuntime>();
+            return false;
+        }
+
+        normalizedRules = normalized;
         return true;
     }
 
@@ -799,11 +1669,24 @@ public static class OutboundRuntimePlanner
     private static IReadOnlyList<RoutingRuleRuntime>? NormalizeRules(
         IReadOnlyList<IRoutingRuleDefinition> routingRules,
         IReadOnlyList<OutboundRuntime> outbounds,
+        IReadOnlyList<string>? additionalKnownOutboundTags,
         out string? error)
     {
         var knownOutboundTags = new HashSet<string>(
             outbounds.Select(static outbound => outbound.Tag),
             StringComparer.OrdinalIgnoreCase);
+        if (additionalKnownOutboundTags is not null)
+        {
+            foreach (var dynamicTag in additionalKnownOutboundTags)
+            {
+                var normalizedTag = NormalizeTag(dynamicTag);
+                if (!string.IsNullOrWhiteSpace(normalizedTag))
+                {
+                    knownOutboundTags.Add(normalizedTag);
+                }
+            }
+        }
+
         var normalized = new List<RoutingRuleRuntime>(routingRules.Count);
 
         for (var index = 0; index < routingRules.Count; index++)
@@ -827,13 +1710,24 @@ public static class OutboundRuntimePlanner
                 return null;
             }
 
+            var userIds = NormalizeUserValues(rule.UserIds);
+            var userRegexes = BuildUserRegexes(userIds);
+            var processes = NormalizeProcessValues(rule.Processes);
+            var processMatchers = BuildProcessMatchers(processes);
+
             var domainMatchers = BuildHostMatchers(rule.Domains, out error);
             if (error is not null)
             {
                 return null;
             }
 
-            var sourceCidrMatchers = BuildSourceCidrMatchers(rule.SourceCidrs, out error);
+            var sourceCidrMatchers = BuildCidrMatchers(rule.SourceCidrs, "source", out error);
+            if (error is not null)
+            {
+                return null;
+            }
+
+            var destinationCidrMatchers = BuildCidrMatchers(rule.DestinationCidrs, "destination", out error);
             if (error is not null)
             {
                 return null;
@@ -845,23 +1739,121 @@ public static class OutboundRuntimePlanner
                 return null;
             }
 
-            normalized.Add(new RoutingRuleRuntime
+            var sourcePortMatchers = BuildPortMatchers(rule.SourcePorts, out error);
+            if (error is not null)
             {
+                return null;
+            }
+
+            var localCidrMatchers = BuildCidrMatchers(rule.LocalCidrs, "local", out error);
+            if (error is not null)
+            {
+                return null;
+            }
+
+            var localPortMatchers = BuildPortMatchers(rule.LocalPorts, out error);
+            if (error is not null)
+            {
+                return null;
+            }
+
+            var vlessRouteMatchers = BuildPortMatchers(rule.VlessRoutes, out error);
+            if (error is not null)
+            {
+                return null;
+            }
+
+            var normalizedAttributes = NormalizeAttributeValues(rule.Attributes);
+            var attributeRegexes = BuildAttributeRegexes(normalizedAttributes, out error);
+            if (error is not null)
+            {
+                return null;
+            }
+
+            var normalizedRule = new RoutingRuleRuntime
+            {
+                RuleTag = NormalizeRuleTag(rule.RuleTag),
                 InboundTags = NormalizeValues(rule.InboundTags, NormalizeTag),
                 Protocols = NormalizeValues(rule.Protocols, RoutingProtocols.Normalize),
                 Networks = NormalizeValues(rule.Networks, RoutingNetworks.Normalize),
-                UserIds = NormalizeValues(rule.UserIds, NormalizeTag),
+                UserIds = userIds,
+                Processes = processes,
                 Domains = NormalizeValues(rule.Domains, NormalizeDomainPattern),
                 SourceCidrs = NormalizeValues(rule.SourceCidrs, NormalizeTag),
+                DestinationCidrs = NormalizeValues(rule.DestinationCidrs, NormalizeTag),
                 DestinationPorts = NormalizeValues(rule.DestinationPorts, NormalizeTag),
+                SourcePorts = NormalizeValues(rule.SourcePorts, NormalizeTag),
+                LocalCidrs = NormalizeValues(rule.LocalCidrs, NormalizeTag),
+                LocalPorts = NormalizeValues(rule.LocalPorts, NormalizeTag),
+                VlessRoutes = NormalizeValues(rule.VlessRoutes, NormalizeTag),
+                Attributes = normalizedAttributes,
                 DomainMatchers = domainMatchers,
                 SourceCidrMatchers = sourceCidrMatchers,
+                DestinationCidrMatchers = destinationCidrMatchers,
                 DestinationPortMatchers = destinationPortMatchers,
+                SourcePortMatchers = sourcePortMatchers,
+                LocalCidrMatchers = localCidrMatchers,
+                LocalPortMatchers = localPortMatchers,
+                VlessRouteMatchers = vlessRouteMatchers,
+                AttributeRegexes = attributeRegexes,
+                UserRegexes = userRegexes,
+                ProcessMatchers = processMatchers,
                 OutboundTag = outboundTag
-            });
+            };
+
+            if (!HasEffectiveFields(normalizedRule))
+            {
+                error = $"Routing rule '{outboundTag}' has no effective fields.";
+                return null;
+            }
+
+            normalized.Add(normalizedRule);
         }
 
         error = null;
+        return normalized;
+    }
+
+    private static bool HasEffectiveFields(RoutingRuleRuntime rule)
+        => rule.InboundTags.Count > 0 ||
+           rule.Protocols.Count > 0 ||
+           rule.Networks.Count > 0 ||
+           rule.UserIds.Count > 0 ||
+           rule.UserRegexes.Count > 0 ||
+           rule.Processes.Count > 0 ||
+           rule.ProcessMatchers.Count > 0 ||
+           rule.Domains.Count > 0 ||
+           rule.DomainMatchers.Count > 0 ||
+           rule.SourceCidrs.Count > 0 ||
+           rule.SourceCidrMatchers.Count > 0 ||
+           rule.DestinationCidrs.Count > 0 ||
+           rule.DestinationCidrMatchers.Count > 0 ||
+           rule.DestinationPorts.Count > 0 ||
+           rule.DestinationPortMatchers.Count > 0 ||
+           rule.SourcePorts.Count > 0 ||
+           rule.SourcePortMatchers.Count > 0 ||
+           rule.LocalCidrs.Count > 0 ||
+           rule.LocalCidrMatchers.Count > 0 ||
+           rule.LocalPorts.Count > 0 ||
+           rule.LocalPortMatchers.Count > 0 ||
+           rule.VlessRoutes.Count > 0 ||
+           rule.VlessRouteMatchers.Count > 0 ||
+           rule.AttributeRegexes.Count > 0;
+
+    private static IReadOnlyDictionary<string, string> NormalizeAttributeValues(
+        IReadOnlyDictionary<string, string> values)
+    {
+        var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in values)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            normalized[key.Trim()] = value?.Trim() ?? string.Empty;
+        }
+
         return normalized;
     }
 
@@ -889,15 +1881,56 @@ public static class OutboundRuntimePlanner
     private static string NormalizeTag(string? value)
         => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 
-    private static string NormalizeDomainPattern(string value)
+    private static string NormalizeRuleTag(string? value)
+        => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private static IReadOnlyList<string> NormalizeUserValues(IReadOnlyList<string> values)
     {
-        var normalized = NormalizeHostToken(value);
-        if (normalized.StartsWith("*.", StringComparison.Ordinal))
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = new List<string>(values.Count);
+
+        for (var index = 0; index < values.Count; index++)
         {
-            return "*." + NormalizeHostToken(normalized[2..]);
+            var value = NormalizeTag(values[index]);
+            if (value.Length == 0 || !seen.Add(value))
+            {
+                continue;
+            }
+
+            normalized.Add(value);
         }
 
         return normalized;
+    }
+
+    private static IReadOnlyList<string> NormalizeProcessValues(IReadOnlyList<string> values)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = new List<string>(values.Count);
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            if (!RoutingProcessMatcher.TryNormalizeRule(values[index], out var value) ||
+                value.Length == 0 ||
+                !seen.Add(value))
+            {
+                continue;
+            }
+
+            normalized.Add(value);
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeDomainPattern(string value)
+    {
+        if (RoutingHostMatcher.TryNormalizeRule(value, out var normalized))
+        {
+            return normalized;
+        }
+
+        return string.Empty;
     }
 
     private static string NormalizeCidr(string? value)
@@ -946,8 +1979,47 @@ public static class OutboundRuntimePlanner
         return matchers;
     }
 
-    private static IReadOnlyList<RoutingCidrMatcher> BuildSourceCidrMatchers(
+    private static IReadOnlyList<Regex> BuildUserRegexes(IReadOnlyList<string> values)
+    {
+        var matchers = new List<Regex>();
+        foreach (var value in values)
+        {
+            if (!value.StartsWith("regexp:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var pattern = value["regexp:".Length..];
+            try
+            {
+                matchers.Add(new Regex(pattern, RegexOptions.CultureInvariant));
+            }
+            catch (ArgumentException)
+            {
+                // xray-core ignores invalid regexp user items instead of failing the rule.
+            }
+        }
+
+        return matchers;
+    }
+
+    private static IReadOnlyList<RoutingProcessMatcher> BuildProcessMatchers(IReadOnlyList<string> values)
+    {
+        var matchers = new List<RoutingProcessMatcher>(values.Count);
+        foreach (var value in values)
+        {
+            if (RoutingProcessMatcher.TryCreate(value, out var matcher))
+            {
+                matchers.Add(matcher);
+            }
+        }
+
+        return matchers;
+    }
+
+    private static IReadOnlyList<RoutingCidrMatcher> BuildCidrMatchers(
         IReadOnlyList<string> values,
+        string matcherScope,
         out string? error)
     {
         var matchers = new List<RoutingCidrMatcher>(values.Count);
@@ -960,6 +2032,7 @@ public static class OutboundRuntimePlanner
 
             if (!RoutingCidrMatcher.TryCreate(value, out var matcher, out error))
             {
+                error = $"Routing {matcherScope} CIDR matcher is invalid: {value}.";
                 return Array.Empty<RoutingCidrMatcher>();
             }
 
@@ -988,6 +2061,35 @@ public static class OutboundRuntimePlanner
             }
 
             matchers.Add(matcher);
+        }
+
+        error = null;
+        return matchers;
+    }
+
+    private static IReadOnlyDictionary<string, Regex> BuildAttributeRegexes(
+        IReadOnlyDictionary<string, string> values,
+        out string? error)
+    {
+        var matchers = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in values)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var normalizedKey = key.Trim();
+            var pattern = value?.Trim() ?? string.Empty;
+            try
+            {
+                matchers[normalizedKey] = new Regex(pattern, RegexOptions.CultureInvariant);
+            }
+            catch (ArgumentException)
+            {
+                error = $"Routing attribute matcher is invalid for key '{normalizedKey}'.";
+                return new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+            }
         }
 
         error = null;

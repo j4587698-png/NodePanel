@@ -69,6 +69,7 @@ public sealed class FreedomOutboundHandler : IOutboundHandler
         using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         connectCts.CancelAfter(TimeSpan.FromSeconds(context.ConnectTimeoutSeconds));
         var endPoints = await OutboundSocketDialer.ResolveTcpEndPointsAsync(
+            context,
             resolvedDestination.Host,
             resolvedDestination.Port,
             AddressFamily.Unspecified,
@@ -169,6 +170,7 @@ public sealed class FreedomOutboundHandler : IOutboundHandler
                 _dnsResolver,
                 linkedCts.Token).ConfigureAwait(false);
             var remoteEndPoint = await ResolveRemoteEndPointAsync(
+                _context,
                 resolvedDestination.Host,
                 resolvedDestination.Port,
                 AddressFamily.Unspecified,
@@ -424,6 +426,7 @@ public sealed class FreedomOutboundHandler : IOutboundHandler
             => host + ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         private static async ValueTask<IPEndPoint> ResolveRemoteEndPointAsync(
+            DispatchContext context,
             string host,
             int port,
             AddressFamily addressFamily,
@@ -431,6 +434,7 @@ public sealed class FreedomOutboundHandler : IOutboundHandler
             CancellationToken cancellationToken)
         {
             var endPoints = await OutboundSocketDialer.ResolveTcpEndPointsAsync(
+                context,
                 host,
                 port,
                 addressFamily,

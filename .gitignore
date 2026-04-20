@@ -11,9 +11,12 @@ Thumbs.db
 **/obj/
 artifacts/
 TestResults/
+*.metaproj
+*.metaproj.tmp
 
 # Local runtime / temp
 .codex-build/
+.codex-verify/
 .dotnet/
 .tmp/
 .certs/

@@ -99,6 +99,7 @@ public sealed class PanelFormNullSafetyTests
         form.Inbounds[0].ListenAddress = null!;
         form.Inbounds[1].Host = null!;
         form.Inbounds[1].Path = null!;
+        form.RoutingResources = null!;
 
         var success = form.TryToRequest(out var request, out var error);
 
@@ -111,6 +112,9 @@ public sealed class PanelFormNullSafetyTests
         Assert.Equal(string.Empty, request.Config.Inbounds[0].ListenAddress);
         Assert.Equal(string.Empty, request.Config.Inbounds[1].Host);
         Assert.Equal(string.Empty, request.Config.Inbounds[1].Path);
+        Assert.Equal(string.Empty, request.Config.RoutingResources.ResourceDirectory);
+        Assert.Equal(string.Empty, request.Config.RoutingResources.GeoSitePath);
+        Assert.Equal(string.Empty, request.Config.RoutingResources.GeoIpPath);
     }
 
     [Fact]
@@ -274,6 +278,23 @@ public sealed class PanelFormNullSafetyTests
     }
 
     [Fact]
+    public void RoutingResourceFormInput_to_config_accepts_null_text_fields()
+    {
+        var form = new RoutingResourceFormInput
+        {
+            ResourceDirectory = null!,
+            GeoSitePath = null!,
+            GeoIpPath = null!
+        };
+
+        var config = form.ToConfig();
+
+        Assert.Equal(string.Empty, config.ResourceDirectory);
+        Assert.Equal(string.Empty, config.GeoSitePath);
+        Assert.Equal(string.Empty, config.GeoIpPath);
+    }
+
+    [Fact]
     public void PanelHttpsSettingsFormInput_normalize_accepts_null_strings()
     {
         var form = new PanelHttpsSettingsFormInput
@@ -319,7 +340,7 @@ public sealed class PanelFormNullSafetyTests
                         CheckIntervalMinutes = 99999,
                         ExternalTimeoutSeconds = 99999
                     },
-                    Limits = new TrojanInboundLimits
+                    Limits = new InboundLimitsConfig
                     {
                         GlobalBytesPerSecond = -1,
                         ConnectTimeoutSeconds = 999,

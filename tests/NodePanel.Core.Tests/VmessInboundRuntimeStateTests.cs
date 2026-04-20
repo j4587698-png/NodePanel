@@ -67,8 +67,7 @@ public sealed class VmessInboundRuntimeStateTests
         => new(
             users,
             fallbackSeedFactory,
-            new VmessSessionHistory(),
-            new VmessAuthIdHistory());
+            new VmessSessionHistory());
 
     private static VmessUser CreateUser(string uuid)
         => new()

@@ -45,10 +45,7 @@ public sealed class VlessVmessMuxIntegrationTests
                 new VlessInboundSessionOptions
                 {
                     InboundTag = "vless-edge",
-                    UsersByUuid = new Dictionary<string, VlessUser>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        [uuid] = user
-                    }
+                    RuntimeState = new VlessInboundRuntimeState([user])
                 },
                 cts.Token);
         }, cts.Token);
@@ -456,7 +453,7 @@ public sealed class VlessVmessMuxIntegrationTests
 
             if (_currentChunk is null || _currentChunkOffset >= _currentChunk.Length)
             {
-                var nextChunk = await ReadNextChunkAsync(cancellationToken).ConfigureAwait(false);
+                var nextChunk = await ReadNextChunkAsync(cancellationToken);
                 if (nextChunk is null)
                 {
                     _completed = true;

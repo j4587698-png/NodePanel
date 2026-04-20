@@ -1,0 +1,21 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <_NodePanelSerializedBuildProject>$(MSBuildProjectDirectory)\build\NodePanel.Build\NodePanel.Build.proj</_NodePanelSerializedBuildProject>
+    <_NodePanelSerializedBuildProperties>Configuration=$(Configuration);Platform=AnyCPU</_NodePanelSerializedBuildProperties>
+  </PropertyGroup>
+
+  <Target Name="_PrepareNodePanelSerializedBuild"
+          BeforeTargets="Build;Rebuild;Clean"
+          Condition="Exists('$(_NodePanelSerializedBuildProject)')">
+    <ItemGroup>
+      <ProjectReference Remove="@(ProjectReference)" />
+      <ProjectReference Include="$(_NodePanelSerializedBuildProject)">
+        <AdditionalProperties>$(_NodePanelSerializedBuildProperties)</AdditionalProperties>
+        <Configuration>$(Configuration)</Configuration>
+        <Platform>AnyCPU</Platform>
+        <SkipNonexistentProjects>False</SkipNonexistentProjects>
+        <ToolsVersion></ToolsVersion>
+      </ProjectReference>
+    </ItemGroup>
+  </Target>
+</Project>

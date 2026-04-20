@@ -269,7 +269,22 @@ public sealed class PanelStateStore
 
                 return new PanelMutationResult
                 {
-                    State = state with { TrafficRecords = records.Values.OrderBy(r => r.UserId, StringComparer.Ordinal).ToArray() }
+                    State = state with
+                    {
+                        TrafficRecords = records.Values.OrderBy(r => r.UserId, StringComparer.Ordinal).ToArray(),
+                        ScopedTrafficRecords = state.ScopedTrafficRecords
+                            .Select(record => string.Equals(record.UserId, id, StringComparison.Ordinal)
+                                ? record with
+                                {
+                                    UploadBytes = 0,
+                                    DownloadBytes = 0,
+                                    LastResetAt = DateTimeOffset.UtcNow
+                                }
+                                : record)
+                            .OrderBy(static record => record.UserId, StringComparer.Ordinal)
+                            .ThenBy(static record => record.RuntimeKey, StringComparer.Ordinal)
+                            .ToArray()
+                    }
                 };
             },
             userId.Trim(),
@@ -285,6 +300,7 @@ public sealed class PanelStateStore
             {
                 var d = (IReadOnlyList<UserTrafficDelta>)boxedState;
                 var records = state.TrafficRecords.ToDictionary(r => r.UserId, StringComparer.Ordinal);
+                var scopedRecords = state.ScopedTrafficRecords.ToDictionary(r => r.RuntimeKey, StringComparer.Ordinal);
                 
                 foreach (var delta in d)
                 {
@@ -306,13 +322,46 @@ public sealed class PanelStateStore
                             LastResetAt = DateTimeOffset.UtcNow
                         };
                     }
+
+                    var scope = ResolveTrafficScope(delta);
+                    if (scope.RuntimeKey.Length == 0 ||
+                        scope.Protocol.Length == 0 ||
+                        scope.InboundTag.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (scopedRecords.TryGetValue(scope.RuntimeKey, out var scopedExisting))
+                    {
+                        scopedRecords[scope.RuntimeKey] = scopedExisting with
+                        {
+                            UploadBytes = scopedExisting.UploadBytes + delta.UploadBytes,
+                            DownloadBytes = scopedExisting.DownloadBytes + delta.DownloadBytes
+                        };
+                    }
+                    else
+                    {
+                        scopedRecords[scope.RuntimeKey] = new PanelScopedTrafficRecord
+                        {
+                            UserId = scope.UserId,
+                            Protocol = scope.Protocol,
+                            InboundTag = scope.InboundTag,
+                            UploadBytes = delta.UploadBytes,
+                            DownloadBytes = delta.DownloadBytes,
+                            LastResetAt = DateTimeOffset.UtcNow
+                        };
+                    }
                 }
 
                 return new PanelMutationResult
                 {
                     State = state with
                     {
-                        TrafficRecords = records.Values.OrderBy(r => r.UserId, StringComparer.Ordinal).ToArray()
+                        TrafficRecords = records.Values.OrderBy(r => r.UserId, StringComparer.Ordinal).ToArray(),
+                        ScopedTrafficRecords = scopedRecords.Values
+                            .OrderBy(static record => record.UserId, StringComparer.Ordinal)
+                            .ThenBy(static record => record.RuntimeKey, StringComparer.Ordinal)
+                            .ToArray()
                     }
                 };
             },
@@ -415,6 +464,33 @@ public sealed class PanelStateStore
         };
     }
 
+    private static PanelScopedTrafficRecord ResolveTrafficScope(UserTrafficDelta delta)
+    {
+        var normalizedUserId = string.IsNullOrWhiteSpace(delta.UserId) ? string.Empty : delta.UserId.Trim();
+        var normalizedProtocol = string.IsNullOrWhiteSpace(delta.Protocol) ? string.Empty : delta.Protocol.Trim().ToLowerInvariant();
+        var normalizedInboundTag = string.IsNullOrWhiteSpace(delta.InboundTag) ? string.Empty : delta.InboundTag.Trim();
+        var normalizedRuntimeKey = string.IsNullOrWhiteSpace(delta.RuntimeKey) ? string.Empty : delta.RuntimeKey.Trim();
+        var computedRuntimeKey = RuntimeUserKeys.Create(normalizedProtocol, normalizedInboundTag, normalizedUserId);
+
+        if (RuntimeUserKeys.TryParse(normalizedRuntimeKey, out var parsedProtocol, out var parsedInboundTag, out var parsedUserId))
+        {
+            normalizedProtocol = normalizedProtocol.Length == 0 ? parsedProtocol : normalizedProtocol;
+            normalizedInboundTag = normalizedInboundTag.Length == 0 ? parsedInboundTag : normalizedInboundTag;
+            normalizedUserId = normalizedUserId.Length == 0 ? parsedUserId : normalizedUserId;
+        }
+        else if (computedRuntimeKey.IndexOf('\0') >= 0)
+        {
+            normalizedRuntimeKey = computedRuntimeKey;
+        }
+
+        return new PanelScopedTrafficRecord
+        {
+            UserId = normalizedUserId,
+            Protocol = normalizedProtocol,
+            InboundTag = normalizedInboundTag
+        };
+    }
+
     private static NodeServiceConfig NormalizeNodeConfig(NodeServiceConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -441,6 +517,7 @@ public sealed class PanelStateStore
             Inbounds = NormalizeInbounds(config.Inbounds),
             Users = Array.Empty<TrojanUserConfig>(),
             Fallbacks = Array.Empty<TrojanFallbackConfig>(),
+            RoutingResources = NormalizeRoutingResources(config.RoutingResources),
             Certificate = config.Certificate with
             {
                 Mode = CertificateModes.Normalize(config.Certificate.Mode),
@@ -525,6 +602,14 @@ public sealed class PanelStateStore
                 .ToArray()
         };
     }
+
+    private static RoutingResourceOptions NormalizeRoutingResources(RoutingResourceOptions routingResources)
+        => routingResources with
+        {
+            ResourceDirectory = routingResources.ResourceDirectory.Trim(),
+            GeoSitePath = routingResources.GeoSitePath.Trim(),
+            GeoIpPath = routingResources.GeoIpPath.Trim()
+        };
 
     private static string NormalizeListenAddress(string value)
         => string.IsNullOrWhiteSpace(value) ? "0.0.0.0" : value.Trim();
@@ -611,6 +696,16 @@ public sealed class PanelStateStore
                 .ToArray(),
             TrafficRecords = (state.TrafficRecords ?? Array.Empty<PanelUserTrafficRecord>())
                 .OrderBy(static r => r.UserId, StringComparer.Ordinal)
+                .ToArray(),
+            ScopedTrafficRecords = (state.ScopedTrafficRecords ?? Array.Empty<PanelScopedTrafficRecord>())
+                .Select(static record => record with
+                {
+                    UserId = string.IsNullOrWhiteSpace(record.UserId) ? string.Empty : record.UserId.Trim(),
+                    Protocol = string.IsNullOrWhiteSpace(record.Protocol) ? string.Empty : record.Protocol.Trim().ToLowerInvariant(),
+                    InboundTag = string.IsNullOrWhiteSpace(record.InboundTag) ? string.Empty : record.InboundTag.Trim()
+                })
+                .OrderBy(static record => record.UserId, StringComparer.Ordinal)
+                .ThenBy(static record => record.RuntimeKey, StringComparer.Ordinal)
                 .ToArray()
         };
 

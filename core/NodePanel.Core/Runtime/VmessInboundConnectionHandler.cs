@@ -5,16 +5,14 @@ namespace NodePanel.Core.Runtime;
 
 public sealed class VmessInboundConnectionHandler
 {
-    private const int InitialProbeBytes = 4096;
-    private static readonly TimeSpan SniffProbeTimeout = TimeSpan.FromMilliseconds(200);
-
     private readonly IDispatcher _dispatcher;
+    private readonly IRuntimeSniffer _runtimeSniffer;
     private readonly TrojanMuxInboundServer _trojanMuxInboundServer;
     private readonly VmessUdpRelay _vmessUdpRelay;
-    private readonly RateLimiterRegistry _rateLimiterRegistry;
-    private readonly RelayService _relayService;
-    private readonly SessionRegistry _sessionRegistry;
-    private readonly TrafficRegistry _trafficRegistry;
+    private readonly IRuntimeRateLimiterRegistry _rateLimiterRegistry;
+    private readonly IRuntimeRelayService _relayService;
+    private readonly IRuntimeSessionRegistry _sessionRegistry;
+    private readonly IRuntimeTrafficRegistry _trafficRegistry;
     private readonly VmessHandshakeReader _vmessHandshakeReader;
 
     public VmessInboundConnectionHandler(
@@ -22,10 +20,34 @@ public sealed class VmessInboundConnectionHandler
         VmessHandshakeReader vmessHandshakeReader,
         TrojanMuxInboundServer trojanMuxInboundServer,
         VmessUdpRelay vmessUdpRelay,
-        SessionRegistry sessionRegistry,
-        RelayService relayService,
-        RateLimiterRegistry rateLimiterRegistry,
-        TrafficRegistry trafficRegistry)
+        IRuntimeSessionRegistry sessionRegistry,
+        IRuntimeRelayService relayService,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        IFakeDnsEngine? fakeDnsEngine = null)
+        : this(
+            dispatcher,
+            vmessHandshakeReader,
+            trojanMuxInboundServer,
+            vmessUdpRelay,
+            sessionRegistry,
+            relayService,
+            rateLimiterRegistry,
+            trafficRegistry,
+            new DefaultRuntimeSniffer(fakeDnsEngine))
+    {
+    }
+
+    internal VmessInboundConnectionHandler(
+        IDispatcher dispatcher,
+        VmessHandshakeReader vmessHandshakeReader,
+        TrojanMuxInboundServer trojanMuxInboundServer,
+        VmessUdpRelay vmessUdpRelay,
+        IRuntimeSessionRegistry sessionRegistry,
+        IRuntimeRelayService relayService,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        IRuntimeSniffer runtimeSniffer)
     {
         _dispatcher = dispatcher;
         _vmessHandshakeReader = vmessHandshakeReader;
@@ -35,6 +57,7 @@ public sealed class VmessInboundConnectionHandler
         _relayService = relayService;
         _rateLimiterRegistry = rateLimiterRegistry;
         _trafficRegistry = trafficRegistry;
+        _runtimeSniffer = runtimeSniffer;
     }
 
     internal async Task HandleAsync(Stream stream, VmessInboundSessionOptions options, CancellationToken cancellationToken)
@@ -46,12 +69,13 @@ public sealed class VmessInboundConnectionHandler
 
         var request = await _vmessHandshakeReader.ReadAsync(
             stream,
-            options.Users,
+            options.ResolveUsers(),
             options.DrainOnHandshakeFailure,
             options.RuntimeState,
             handshakeCts.Token).ConfigureAwait(false);
+        var sessionOptions = options.WithUserLevel(request.User.Level);
 
-        using var session = OpenTrackedSession(request.User, options);
+        using var session = OpenTrackedSession(request.User, sessionOptions);
         var vmessStream = VmessHandshakeReader.CreateDataStream(stream, request);
         var responseStarted = false;
 
@@ -62,7 +86,7 @@ public sealed class VmessInboundConnectionHandler
                 await VmessHandshakeReader.WriteResponseAsync(stream, request, handshakeCts.Token).ConfigureAwait(false);
                 responseStarted = true;
                 handshakeCts.CancelAfter(Timeout.InfiniteTimeSpan);
-                await _vmessUdpRelay.RelayAsync(vmessStream, request, options, cancellationToken).ConfigureAwait(false);
+                await _vmessUdpRelay.RelayAsync(vmessStream, request, sessionOptions, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -74,8 +98,8 @@ public sealed class VmessInboundConnectionHandler
                 await _trojanMuxInboundServer.HandleAsync(
                     vmessStream,
                     request.User,
-                    VmessDispatchContextFactory.Create(request.User, options),
-                    options.ConnectionIdleSeconds,
+                    VmessDispatchContextFactory.Create(request.User, sessionOptions),
+                    sessionOptions.ConnectionIdleSeconds,
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -85,50 +109,26 @@ public sealed class VmessInboundConnectionHandler
                 throw new NotSupportedException($"Unsupported VMess command: {request.Command}.");
             }
 
-            Stream relayStream = vmessStream;
-
-            var dispatchContext = VmessDispatchContextFactory.Create(request.User, options);
             var dispatchDestination = new DispatchDestination
             {
                 Host = request.TargetHost,
                 Port = request.TargetPort,
                 Network = DispatchNetwork.Tcp
             };
-            dispatchContext = dispatchContext with
-            {
-                OriginalDestinationHost = request.TargetHost,
-                OriginalDestinationPort = request.TargetPort
-            };
+            var dispatchContext = DispatchContextTargeting.SetOriginalAndTarget(
+                VmessDispatchContextFactory.Create(request.User, sessionOptions),
+                dispatchDestination);
 
-            if (options.Sniffing.Enabled && !options.Sniffing.MetadataOnly)
-            {
-                var sniffPayload = await ReadSniffPayloadAsync(vmessStream, cancellationToken).ConfigureAwait(false);
-                if (sniffPayload.Length > 0)
-                {
-                    relayStream = new PrefixedReadStream(vmessStream, sniffPayload);
-                    var sniffing = TrojanSniffingEvaluator.Evaluate(
-                        options.Sniffing,
-                        sniffPayload,
-                        DispatchNetwork.Tcp,
-                        dispatchDestination);
-
-                    dispatchContext = dispatchContext with
-                    {
-                        DetectedProtocol = sniffing.Protocol,
-                        DetectedDomain = sniffing.Domain
-                    };
-
-                    if (sniffing.OverrideDestination is not null)
-                    {
-                        dispatchDestination = sniffing.OverrideDestination;
-                    }
-                }
-            }
-
-            await using var remoteStream = await _dispatcher.DispatchTcpAsync(
+            var dispatchResult = await RuntimeTcpDispatchPipeline.DispatchAsync(
+                _dispatcher,
+                _runtimeSniffer,
+                options.Sniffing,
+                vmessStream,
                 dispatchContext,
                 dispatchDestination,
+                cancellationToken,
                 handshakeCts.Token).ConfigureAwait(false);
+            await using var remoteStream = dispatchResult.OutboundStream;
             await VmessHandshakeReader.WriteResponseAsync(stream, request, handshakeCts.Token).ConfigureAwait(false);
             responseStarted = true;
             handshakeCts.CancelAfter(Timeout.InfiniteTimeSpan);
@@ -137,13 +137,13 @@ public sealed class VmessInboundConnectionHandler
             var globalGate = _rateLimiterRegistry.GlobalGate;
 
             await _relayService.RelayAsync(
-                relayStream,
+                dispatchResult.InboundStream,
                 remoteStream,
                 request.User,
                 userGate,
                 globalGate,
                 _trafficRegistry,
-                options,
+                sessionOptions,
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -158,7 +158,7 @@ public sealed class VmessInboundConnectionHandler
     private IDisposable OpenTrackedSession(VmessUser user, VmessInboundSessionOptions options)
     {
         var remoteIp = ExtractRemoteIp(options.RemoteEndPoint);
-        if (!_sessionRegistry.TryOpenSession(user.UserId, remoteIp, user.DeviceLimit, out var lease) || lease is null)
+        if (!_sessionRegistry.TryOpenSession(RuntimeUserKeys.Get(user), remoteIp, user.DeviceLimit, out var lease) || lease is null)
         {
             throw new UnauthorizedAccessException("VMess user device limit exceeded.");
         }
@@ -180,22 +180,5 @@ public sealed class VmessInboundConnectionHandler
         }
 
         return address.ToString();
-    }
-
-    private static async Task<byte[]> ReadSniffPayloadAsync(Stream stream, CancellationToken cancellationToken)
-    {
-        var buffer = new byte[InitialProbeBytes];
-        using var sniffCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        sniffCts.CancelAfter(SniffProbeTimeout);
-
-        try
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), sniffCts.Token).ConfigureAwait(false);
-            return read == 0 ? Array.Empty<byte>() : buffer.AsSpan(0, read).ToArray();
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return Array.Empty<byte>();
-        }
     }
 }

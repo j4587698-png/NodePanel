@@ -12,6 +12,116 @@ public interface IDnsResolver
     ValueTask<IReadOnlyList<IPAddress>> ResolveAsync(string host, CancellationToken cancellationToken);
 }
 
+public interface IDnsLookupResolver : IDnsResolver
+{
+    ValueTask<DnsLookupResult> LookupAsync(
+        string host,
+        DnsLookupOptions options,
+        CancellationToken cancellationToken);
+}
+
+public sealed record DnsLookupOptions
+{
+    public static DnsLookupOptions Default { get; } = new();
+
+    public bool IPv4Enable { get; init; } = true;
+
+    public bool IPv6Enable { get; init; } = true;
+
+    public bool FakeEnable { get; init; }
+}
+
+public sealed record DnsLookupResult
+{
+    public IReadOnlyList<IPAddress> Addresses { get; init; } = Array.Empty<IPAddress>();
+
+    public uint TtlSeconds { get; init; } = DnsResolutionDefaults.DefaultTtl;
+
+    public byte ResponseCode { get; init; } = DnsResponseCodes.Success;
+
+    public bool IsEmptyResponse { get; init; }
+
+    public bool IsFakeResponse { get; init; }
+}
+
+public static class DnsResolutionDefaults
+{
+    public const uint DefaultTtl = 300;
+}
+
+public sealed class DnsResponseCodeException : Exception
+{
+    public DnsResponseCodeException(
+        byte responseCode,
+        string? message = null,
+        Exception? innerException = null)
+        : base(message ?? $"DNS lookup failed with response code {responseCode}.", innerException)
+    {
+        ResponseCode = responseCode;
+    }
+
+    public byte ResponseCode { get; }
+}
+
+public static class DnsResolverExtensions
+{
+    public static async ValueTask<DnsLookupResult> LookupAsync(
+        this IDnsResolver resolver,
+        string host,
+        DnsLookupOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+
+        var effectiveOptions = options ?? DnsLookupOptions.Default;
+        if (resolver is IDnsLookupResolver lookupResolver)
+        {
+            return await lookupResolver.LookupAsync(host, effectiveOptions, cancellationToken).ConfigureAwait(false);
+        }
+
+        var addresses = await resolver.ResolveAsync(host, cancellationToken).ConfigureAwait(false);
+        var filtered = FilterAddresses(addresses, effectiveOptions);
+        return new DnsLookupResult
+        {
+            Addresses = filtered,
+            IsEmptyResponse = filtered.Count == 0
+        };
+    }
+
+    public static Exception CreateResolutionException(byte responseCode)
+        => responseCode switch
+        {
+            DnsResponseCodes.NameError => new SocketException((int)SocketError.HostNotFound),
+            DnsResponseCodes.Success => new InvalidOperationException("DNS response code 0 does not represent a resolution failure."),
+            _ => new DnsResponseCodeException(responseCode)
+        };
+
+    public static byte GetResponseCode(Exception exception)
+        => exception switch
+        {
+            DnsResponseCodeException dnsException => dnsException.ResponseCode,
+            SocketException { SocketErrorCode: SocketError.HostNotFound or SocketError.NoData } => DnsResponseCodes.NameError,
+            _ => DnsResponseCodes.Success
+        };
+
+    internal static IReadOnlyList<IPAddress> FilterAddresses(
+        IReadOnlyList<IPAddress> addresses,
+        DnsLookupOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(addresses);
+        ArgumentNullException.ThrowIfNull(options);
+
+        return addresses
+            .Where(address =>
+                (options.IPv4Enable && address.AddressFamily == AddressFamily.InterNetwork) ||
+                (options.IPv6Enable && address.AddressFamily == AddressFamily.InterNetworkV6))
+            .Select(static address => address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address)
+            .Distinct()
+            .ToArray();
+    }
+}
+
 public interface IDnsRuntimeSettingsProvider
 {
     DnsRuntimeSettings GetCurrentDnsSettings();
@@ -28,6 +138,8 @@ public sealed record DnsRuntimeSettings
     public int CacheTtlSeconds { get; init; } = 30;
 
     public IReadOnlyList<DnsHttpServerRuntime> Servers { get; init; } = Array.Empty<DnsHttpServerRuntime>();
+
+    public IReadOnlyList<FakeDnsPoolRuntime> FakeDnsPools { get; init; } = Array.Empty<FakeDnsPoolRuntime>();
 }
 
 public sealed record DnsHttpServerRuntime
@@ -57,7 +169,7 @@ public static class DnsModes
     }
 }
 
-public sealed class SystemDnsResolver : IDnsResolver
+public sealed class SystemDnsResolver : IDnsLookupResolver
 {
     public static SystemDnsResolver Instance { get; } = new();
 
@@ -66,61 +178,130 @@ public sealed class SystemDnsResolver : IDnsResolver
     }
 
     public async ValueTask<IReadOnlyList<IPAddress>> ResolveAsync(string host, CancellationToken cancellationToken)
+        => (await LookupAsync(host, DnsLookupOptions.Default, cancellationToken).ConfigureAwait(false)).Addresses;
+
+    public async ValueTask<DnsLookupResult> LookupAsync(
+        string host,
+        DnsLookupOptions options,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentNullException.ThrowIfNull(options);
 
-        if (IPAddress.TryParse(host, out var ipAddress))
+        var normalizedHost = host.Trim();
+        if (IPAddress.TryParse(normalizedHost, out var ipAddress))
         {
-            return
-            [
-                ipAddress
-            ];
+            var literalAddresses = DnsResolverExtensions.FilterAddresses([ipAddress], options);
+            return new DnsLookupResult
+            {
+                Addresses = literalAddresses,
+                IsEmptyResponse = literalAddresses.Count == 0
+            };
         }
 
-        return await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
+        var addresses = await Dns.GetHostAddressesAsync(normalizedHost, cancellationToken).ConfigureAwait(false);
+        var filtered = DnsResolverExtensions.FilterAddresses(addresses, options);
+        return new DnsLookupResult
+        {
+            Addresses = filtered,
+            IsEmptyResponse = filtered.Count == 0
+        };
     }
 }
 
-public sealed class RuntimeDnsResolver : IDnsResolver
+public sealed class RuntimeDnsResolver : IDnsLookupResolver
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
 
     private readonly ConcurrentDictionary<string, DnsCacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient _httpClient;
+    private readonly IFakeDnsEngine? _fakeDnsEngine;
     private readonly IDnsRuntimeSettingsProvider? _settingsProvider;
 
     public RuntimeDnsResolver(
         IDnsRuntimeSettingsProvider? settingsProvider = null,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        IFakeDnsEngine? fakeDnsEngine = null)
     {
         _settingsProvider = settingsProvider;
         _httpClient = httpClient ?? CreateDefaultHttpClient();
+        _fakeDnsEngine = fakeDnsEngine;
     }
 
     public async ValueTask<IReadOnlyList<IPAddress>> ResolveAsync(string host, CancellationToken cancellationToken)
     {
+        var result = await LookupAsync(host, DnsLookupOptions.Default, cancellationToken).ConfigureAwait(false);
+        if (result.ResponseCode != DnsResponseCodes.Success)
+        {
+            throw DnsResolverExtensions.CreateResolutionException(result.ResponseCode);
+        }
+
+        return result.Addresses;
+    }
+
+    public async ValueTask<DnsLookupResult> LookupAsync(
+        string host,
+        DnsLookupOptions options,
+        CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentNullException.ThrowIfNull(options);
 
         var normalizedHost = host.Trim();
         if (IPAddress.TryParse(normalizedHost, out var ipAddress))
         {
-            return
-            [
-                ipAddress
-            ];
+            var literalAddresses = DnsResolverExtensions.FilterAddresses([ipAddress], options);
+            return new DnsLookupResult
+            {
+                Addresses = literalAddresses,
+                IsEmptyResponse = literalAddresses.Count == 0
+            };
         }
 
         var settings = _settingsProvider?.GetCurrentDnsSettings() ?? DnsRuntimeSettings.Default;
+        var fakeResult = ResolveByFakeDns(normalizedHost, options);
+        if (fakeResult is not null)
+        {
+            return fakeResult;
+        }
+
         return DnsModes.Normalize(settings.Mode) switch
         {
-            DnsModes.Http => await ResolveByHttpAsync(normalizedHost, settings, cancellationToken).ConfigureAwait(false),
-            _ => await SystemDnsResolver.Instance.ResolveAsync(normalizedHost, cancellationToken).ConfigureAwait(false)
+            DnsModes.Http => await ResolveByHttpAsync(normalizedHost, settings, options, cancellationToken).ConfigureAwait(false),
+            _ => await SystemDnsResolver.Instance.LookupAsync(normalizedHost, options, cancellationToken).ConfigureAwait(false)
         };
     }
 
-    private async Task<IReadOnlyList<IPAddress>> ResolveByHttpAsync(
+    private DnsLookupResult? ResolveByFakeDns(string host, DnsLookupOptions options)
+    {
+        if (!options.FakeEnable || _fakeDnsEngine is null)
+        {
+            return null;
+        }
+
+        var addresses = _fakeDnsEngine.GetFakeIPForDomain(host, options.IPv4Enable, options.IPv6Enable);
+        if (addresses.Count == 0)
+        {
+            return new DnsLookupResult
+            {
+                TtlSeconds = FakeDnsDefaults.DefaultTtlSeconds,
+                IsEmptyResponse = true,
+                IsFakeResponse = true
+            };
+        }
+
+        return new DnsLookupResult
+        {
+            Addresses = addresses,
+            TtlSeconds = FakeDnsDefaults.DefaultTtlSeconds,
+            IsFakeResponse = true
+        };
+    }
+
+    private async Task<DnsLookupResult> ResolveByHttpAsync(
         string host,
         DnsRuntimeSettings settings,
+        DnsLookupOptions options,
         CancellationToken cancellationToken)
     {
         if (settings.Servers.Count == 0)
@@ -128,25 +309,29 @@ public sealed class RuntimeDnsResolver : IDnsResolver
             throw new InvalidOperationException("HTTP DNS mode requires at least one configured server.");
         }
 
-        var cacheKey = BuildCacheKey(host, settings);
+        var cacheKey = BuildCacheKey(host, settings, options);
         if (TryGetCached(cacheKey, out var cached))
         {
             return cached;
         }
 
         Exception? lastError = null;
+        DnsLookupResult? lastDnsResult = null;
         foreach (var server in settings.Servers)
         {
             try
             {
-                var addresses = await ResolveByHttpServerAsync(host, server, settings, cancellationToken).ConfigureAwait(false);
-                if (addresses.Count == 0)
+                var result = await ResolveByHttpServerAsync(host, server, settings, options, cancellationToken).ConfigureAwait(false);
+                if (result.ResponseCode == DnsResponseCodes.Success)
                 {
-                    continue;
+                    if (result.Addresses.Count > 0 || result.IsEmptyResponse)
+                    {
+                        Cache(cacheKey, result, settings);
+                        return result;
+                    }
                 }
 
-                Cache(cacheKey, addresses, settings);
-                return addresses;
+                lastDnsResult = result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -158,60 +343,114 @@ public sealed class RuntimeDnsResolver : IDnsResolver
             }
         }
 
+        if (lastDnsResult is not null)
+        {
+            return lastDnsResult;
+        }
+
         if (lastError is not null)
         {
             throw lastError;
         }
 
-        throw new SocketException((int)SocketError.HostNotFound);
+        return new DnsLookupResult
+        {
+            IsEmptyResponse = true
+        };
     }
 
-    private async Task<IReadOnlyList<IPAddress>> ResolveByHttpServerAsync(
+    private async Task<DnsLookupResult> ResolveByHttpServerAsync(
         string host,
         DnsHttpServerRuntime server,
         DnsRuntimeSettings settings,
+        DnsLookupOptions options,
         CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linkedCts.CancelAfter(ResolveTimeout(settings.TimeoutSeconds));
 
-        var ipv4Task = QueryRecordAsync(host, "A", server, linkedCts.Token);
-        var ipv6Task = QueryRecordAsync(host, "AAAA", server, linkedCts.Token);
+        var tasks = new List<Task<DnsRecordLookupResult>>(2);
+        if (options.IPv4Enable)
+        {
+            tasks.Add(QueryRecordAsync(host, "A", server, linkedCts.Token));
+        }
 
-        var addresses = new List<IPAddress>(4);
+        if (options.IPv6Enable)
+        {
+            tasks.Add(QueryRecordAsync(host, "AAAA", server, linkedCts.Token));
+        }
+
+        if (tasks.Count == 0)
+        {
+            return new DnsLookupResult
+            {
+                IsEmptyResponse = true
+            };
+        }
+
+        var records = new List<DnsRecordLookupResult>(tasks.Count);
         Exception? lastError = null;
 
-        try
+        foreach (var task in tasks)
         {
-            addresses.AddRange(await ipv4Task.ConfigureAwait(false));
-        }
-        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            lastError = ex;
-        }
-
-        try
-        {
-            addresses.AddRange(await ipv6Task.ConfigureAwait(false));
-        }
-        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            lastError ??= ex;
+            try
+            {
+                records.Add(await task.ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError ??= ex;
+            }
         }
 
-        if (addresses.Count > 0)
+        if (records.Count > 0)
         {
-            return addresses
+            var successfulAddresses = records
+                .Where(static record => record.ResponseCode == DnsResponseCodes.Success)
+                .SelectMany(static record => record.Addresses)
                 .Distinct()
                 .ToArray();
+            if (successfulAddresses.Length > 0)
+            {
+                return new DnsLookupResult
+                {
+                    Addresses = successfulAddresses,
+                    TtlSeconds = records
+                        .Where(static record => record.ResponseCode == DnsResponseCodes.Success && record.Addresses.Count > 0)
+                        .Select(static record => record.TtlSeconds)
+                        .DefaultIfEmpty(DnsResolutionDefaults.DefaultTtl)
+                        .Min(),
+                    IsEmptyResponse = false
+                };
+            }
+
+            if (records.Any(static record => record.ResponseCode == DnsResponseCodes.Success && record.IsEmptyResponse))
+            {
+                return new DnsLookupResult
+                {
+                    TtlSeconds = records
+                        .Where(static record => record.ResponseCode == DnsResponseCodes.Success)
+                        .Select(static record => record.TtlSeconds)
+                        .DefaultIfEmpty(DnsResolutionDefaults.DefaultTtl)
+                        .Min(),
+                    IsEmptyResponse = true
+                };
+            }
+
+            var responseCode = records
+                .Select(static record => record.ResponseCode)
+                .FirstOrDefault(static code => code != DnsResponseCodes.Success);
+            if (responseCode != DnsResponseCodes.Success)
+            {
+                return new DnsLookupResult
+                {
+                    ResponseCode = responseCode
+                };
+            }
         }
 
         if (lastError is not null)
@@ -219,10 +458,13 @@ public sealed class RuntimeDnsResolver : IDnsResolver
             throw lastError;
         }
 
-        return Array.Empty<IPAddress>();
+        return new DnsLookupResult
+        {
+            IsEmptyResponse = true
+        };
     }
 
-    private async Task<IReadOnlyList<IPAddress>> QueryRecordAsync(
+    private async Task<DnsRecordLookupResult> QueryRecordAsync(
         string host,
         string recordType,
         DnsHttpServerRuntime server,
@@ -245,42 +487,44 @@ public sealed class RuntimeDnsResolver : IDnsResolver
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        return ParseAddresses(document.RootElement, recordType);
+        return ParseRecordLookupResult(document.RootElement, recordType);
     }
 
-    private void Cache(string cacheKey, IReadOnlyList<IPAddress> addresses, DnsRuntimeSettings settings)
+    private void Cache(string cacheKey, DnsLookupResult result, DnsRuntimeSettings settings)
     {
-        if (settings.CacheTtlSeconds <= 0 || addresses.Count == 0)
+        if (settings.CacheTtlSeconds <= 0 ||
+            (result.Addresses.Count == 0 && !result.IsEmptyResponse) ||
+            result.ResponseCode != DnsResponseCodes.Success)
         {
             return;
         }
 
         _cache[cacheKey] = new DnsCacheEntry(
-            addresses,
+            result,
             DateTimeOffset.UtcNow.AddSeconds(settings.CacheTtlSeconds));
     }
 
-    private bool TryGetCached(string cacheKey, out IReadOnlyList<IPAddress> addresses)
+    private bool TryGetCached(string cacheKey, out DnsLookupResult result)
     {
         if (_cache.TryGetValue(cacheKey, out var cached) &&
             cached.ExpiresAt > DateTimeOffset.UtcNow)
         {
-            addresses = cached.Addresses;
+            result = cached.Result;
             return true;
         }
 
         _cache.TryRemove(cacheKey, out _);
-        addresses = Array.Empty<IPAddress>();
+        result = new DnsLookupResult();
         return false;
     }
 
     private static TimeSpan ResolveTimeout(int timeoutSeconds)
         => timeoutSeconds > 0 ? TimeSpan.FromSeconds(timeoutSeconds) : DefaultTimeout;
 
-    private static string BuildCacheKey(string host, DnsRuntimeSettings settings)
+    private static string BuildCacheKey(string host, DnsRuntimeSettings settings, DnsLookupOptions options)
         => string.Create(
-            host.Length + settings.Mode.Length + 1 + settings.Servers.Sum(static server => server.Url.Length + 1),
-            (Host: host, Settings: settings),
+            host.Length + settings.Mode.Length + 5 + settings.Servers.Sum(static server => server.Url.Length + 1),
+            (Host: host, Settings: settings, Options: options),
             static (span, state) =>
             {
                 var offset = 0;
@@ -296,6 +540,11 @@ public sealed class RuntimeDnsResolver : IDnsResolver
                     server.Url.AsSpan().CopyTo(span[offset..]);
                     offset += server.Url.Length;
                 }
+
+                span[offset++] = '|';
+                span[offset++] = state.Options.IPv4Enable ? '4' : '-';
+                span[offset++] = state.Options.IPv6Enable ? '6' : '-';
+                span[offset] = state.Options.FakeEnable ? 'f' : '-';
             });
 
     private static string BuildQueryUri(string baseUrl, string host, string recordType)
@@ -324,9 +573,11 @@ public sealed class RuntimeDnsResolver : IDnsResolver
         };
     }
 
-    private static IReadOnlyList<IPAddress> ParseAddresses(JsonElement root, string recordType)
+    private static DnsRecordLookupResult ParseRecordLookupResult(JsonElement root, string recordType)
     {
         var addresses = new List<IPAddress>(4);
+        uint? minTtl = null;
+        var responseCode = ReadResponseCode(root);
 
         if (TryGetPropertyIgnoreCase(root, "addresses", out var addressesElement) &&
             addressesElement.ValueKind == JsonValueKind.Array)
@@ -336,6 +587,10 @@ public sealed class RuntimeDnsResolver : IDnsResolver
                 if (TryReadAddress(item, out var address))
                 {
                     addresses.Add(address);
+                    if (TryReadTtl(item, out var ttl))
+                    {
+                        minTtl = !minTtl.HasValue || ttl < minTtl.Value ? ttl : minTtl.Value;
+                    }
                 }
             }
         }
@@ -362,14 +617,69 @@ public sealed class RuntimeDnsResolver : IDnsResolver
                         TryReadAddress(dataElement, out var address))
                     {
                         addresses.Add(address);
+                        if (TryReadTtl(item, out var ttl))
+                        {
+                            minTtl = !minTtl.HasValue || ttl < minTtl.Value ? ttl : minTtl.Value;
+                        }
                     }
                 }
             }
         }
 
-        return addresses
+        var filtered = FilterRecordAddresses(
+            addresses
             .Distinct()
-            .ToArray();
+            .ToArray(),
+            recordType);
+        return new DnsRecordLookupResult(
+            filtered,
+            minTtl ?? DnsResolutionDefaults.DefaultTtl,
+            responseCode,
+            responseCode == DnsResponseCodes.Success && filtered.Count == 0);
+    }
+
+    private static byte ReadResponseCode(JsonElement root)
+    {
+        if (!TryGetPropertyIgnoreCase(root, "status", out var statusElement) &&
+            !TryGetPropertyIgnoreCase(root, "rcode", out statusElement) &&
+            !TryGetPropertyIgnoreCase(root, "responseCode", out statusElement))
+        {
+            return DnsResponseCodes.Success;
+        }
+
+        if (statusElement.ValueKind == JsonValueKind.Number &&
+            statusElement.TryGetInt32(out var numericCode) &&
+            numericCode >= 0 &&
+            numericCode <= byte.MaxValue)
+        {
+            return (byte)numericCode;
+        }
+
+        if (statusElement.ValueKind == JsonValueKind.String &&
+            byte.TryParse(statusElement.GetString(), out var parsedCode))
+        {
+            return parsedCode;
+        }
+
+        return DnsResponseCodes.Success;
+    }
+
+    private static IReadOnlyList<IPAddress> FilterRecordAddresses(
+        IReadOnlyList<IPAddress> addresses,
+        string recordType)
+    {
+        ArgumentNullException.ThrowIfNull(addresses);
+
+        return recordType.ToUpperInvariant() switch
+        {
+            "A" => addresses
+                .Where(static address => address.AddressFamily == AddressFamily.InterNetwork)
+                .ToArray(),
+            "AAAA" => addresses
+                .Where(static address => address.AddressFamily == AddressFamily.InterNetworkV6)
+                .ToArray(),
+            _ => addresses.ToArray()
+        };
     }
 
     private static bool MatchesRecordType(JsonElement element, string recordType)
@@ -417,6 +727,29 @@ public sealed class RuntimeDnsResolver : IDnsResolver
         return false;
     }
 
+    private static bool TryReadTtl(JsonElement element, out uint ttl)
+    {
+        if (element.ValueKind == JsonValueKind.Object &&
+            (TryGetPropertyIgnoreCase(element, "ttl", out var ttlElement) ||
+             TryGetPropertyIgnoreCase(element, "TTL", out ttlElement)))
+        {
+            if (ttlElement.ValueKind == JsonValueKind.Number &&
+                ttlElement.TryGetUInt32(out ttl))
+            {
+                return true;
+            }
+
+            if (ttlElement.ValueKind == JsonValueKind.String &&
+                uint.TryParse(ttlElement.GetString(), out ttl))
+            {
+                return true;
+            }
+        }
+
+        ttl = 0;
+        return false;
+    }
+
     private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
     {
         if (element.ValueKind == JsonValueKind.Object)
@@ -435,5 +768,11 @@ public sealed class RuntimeDnsResolver : IDnsResolver
         return false;
     }
 
-    private sealed record DnsCacheEntry(IReadOnlyList<IPAddress> Addresses, DateTimeOffset ExpiresAt);
+    private sealed record DnsRecordLookupResult(
+        IReadOnlyList<IPAddress> Addresses,
+        uint TtlSeconds,
+        byte ResponseCode,
+        bool IsEmptyResponse);
+
+    private sealed record DnsCacheEntry(DnsLookupResult Result, DateTimeOffset ExpiresAt);
 }

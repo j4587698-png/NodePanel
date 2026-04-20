@@ -440,7 +440,7 @@
             </div>
             @if (runtimeStatus is null)
             {
-                <p class="muted">节点尚未上报遥测数据。节点上线并完成至少一次 telemetry flush 后，这里会显示主机资源、本地代理、远程入站和策略出站状态。</p>
+                <p class="muted">节点尚未上报遥测数据。节点上线并完成至少一次 telemetry flush 后，这里会显示主机资源、代理入站、远程入站和策略出站状态。</p>
             }
             else
             {
@@ -515,16 +515,16 @@
                     </section>
 
                     <section class="runtime-panel">
-                        <h4>本地代理</h4>
-                        <p class="muted runtime-panel__subtitle">service 本机开放给客户端或系统使用的本地代理入口。</p>
-                        @if (runtimeStatus.LocalProxies.Count == 0)
+                        <h4>代理入站</h4>
+                        <p class="muted runtime-panel__subtitle">service 本机开放给客户端或系统使用的代理入站入口。</p>
+                        @if (runtimeStatus.ProxyInbounds.Count == 0)
                         {
-                            <p class="muted">当前没有启用的本地代理。</p>
+                            <p class="muted">当前没有启用的代理入站。</p>
                         }
                         else
                         {
                             <div class="runtime-list">
-                                @foreach (var proxy in runtimeStatus.LocalProxies)
+                                @foreach (var proxy in runtimeStatus.ProxyInbounds)
                                 {
                                     <article class="runtime-item">
                                         <div class="runtime-item__header">
@@ -1270,9 +1270,18 @@
                                 <label><span>协议 (CSV)</span><input name="Form.RoutingRules[@index].Protocols" data-name-template="Form.RoutingRules[__INDEX__].Protocols" value="@rule.Protocols" placeholder="http, tls, bittorrent" /></label>
                                 <label><span>网络 (CSV)</span><input name="Form.RoutingRules[@index].Networks" data-name-template="Form.RoutingRules[__INDEX__].Networks" value="@rule.Networks" placeholder="tcp, udp" /></label>
                                 <label><span>用户 ID (CSV)</span><input name="Form.RoutingRules[@index].UserIds" data-name-template="Form.RoutingRules[__INDEX__].UserIds" value="@rule.UserIds" placeholder="user-a, user-b" /></label>
+                                <label><span>进程 (CSV)</span><input name="Form.RoutingRules[@index].Processes" data-name-template="Form.RoutingRules[__INDEX__].Processes" value="@rule.Processes" placeholder="curl.exe, /usr/bin/, self/" /></label>
                                 <label><span>域名 (CSV)</span><input name="Form.RoutingRules[@index].Domains" data-name-template="Form.RoutingRules[__INDEX__].Domains" value="@rule.Domains" placeholder="example.com, geosite:cn" /></label>
                                 <label><span>源 CIDR (CSV)</span><input name="Form.RoutingRules[@index].SourceCidrs" data-name-template="Form.RoutingRules[__INDEX__].SourceCidrs" value="@rule.SourceCidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" /></label>
+                                <label><span>目标 CIDR (CSV)</span><input name="Form.RoutingRules[@index].DestinationCidrs" data-name-template="Form.RoutingRules[__INDEX__].DestinationCidrs" value="@rule.DestinationCidrs" placeholder="198.51.100.0/24, geoip:cn" /></label>
+                            </div>
+                            <div class="section-divider"></div>
+                            <div class="form-grid">
+                                <label><span>源端口 (CSV)</span><input name="Form.RoutingRules[@index].SourcePorts" data-name-template="Form.RoutingRules[__INDEX__].SourcePorts" value="@rule.SourcePorts" placeholder="50000, 53000-54000" /></label>
                                 <label><span>目标端口 (CSV)</span><input name="Form.RoutingRules[@index].DestinationPorts" data-name-template="Form.RoutingRules[__INDEX__].DestinationPorts" value="@rule.DestinationPorts" placeholder="80,443,10000-20000" /></label>
+                                <label><span>本地 CIDR (CSV)</span><input name="Form.RoutingRules[@index].LocalCidrs" data-name-template="Form.RoutingRules[__INDEX__].LocalCidrs" value="@rule.LocalCidrs" placeholder="127.0.0.0/8, ::1/128" /></label>
+                                <label><span>本地端口 (CSV)</span><input name="Form.RoutingRules[@index].LocalPorts" data-name-template="Form.RoutingRules[__INDEX__].LocalPorts" value="@rule.LocalPorts" placeholder="10808-10810" /></label>
+                                <label><span>VLESS Route (CSV)</span><input name="Form.RoutingRules[@index].VlessRoutes" data-name-template="Form.RoutingRules[__INDEX__].VlessRoutes" value="@rule.VlessRoutes" placeholder="4360-4370" /></label>
                                 <label><span>目标出站 Tag</span><input name="Form.RoutingRules[@index].OutboundTag" data-name-template="Form.RoutingRules[__INDEX__].OutboundTag" value="@rule.OutboundTag" placeholder="proxy" /></label>
                             </div>
                         </div>
@@ -1280,6 +1289,20 @@
                 </div>
             </div>
 
+            <h4 class="advanced-panel">路由资源</h4>
+            <div class="config-block advanced-panel">
+                <div class="config-block__header">
+                    <div>
+                        <h5>Routing Resources</h5>
+                        <p class="muted">用于 geosite:、geoip: 和 ext-* 规则的资源展开。只配置资源目录时，service 会优先在该目录下查找 geosite.dat 和 geoip.dat；单独文件路径可以覆盖默认定位。</p>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label><span>资源目录</span><input asp-for="Form.RoutingResources.ResourceDirectory" placeholder="/usr/local/share/xray / C:\xray\config" /></label>
+                    <label><span>GeoSite 文件</span><input asp-for="Form.RoutingResources.GeoSitePath" placeholder="geosite.dat / /opt/xray/geosite.dat" /></label>
+                    <label><span>GeoIP 文件</span><input asp-for="Form.RoutingResources.GeoIpPath" placeholder="geoip.dat / /opt/xray/geoip.dat" /></label>
+                </div>
+            </div>
             <details class="advanced-toggle">
                 <summary>高级兼容设置</summary>
                 <div class="advanced-toggle__body">
@@ -1500,9 +1523,18 @@
             <label><span>协议 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Protocols" placeholder="http, tls, bittorrent" /></label>
             <label><span>网络 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Networks" placeholder="tcp, udp" /></label>
             <label><span>用户 ID (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].UserIds" placeholder="user-a, user-b" /></label>
+            <label><span>进程 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Processes" placeholder="curl.exe, /usr/bin/, self/" /></label>
             <label><span>域名 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].Domains" placeholder="example.com, geosite:cn" /></label>
             <label><span>源 CIDR (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].SourceCidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" /></label>
+            <label><span>目标 CIDR (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].DestinationCidrs" placeholder="198.51.100.0/24, geoip:cn" /></label>
+        </div>
+        <div class="section-divider"></div>
+        <div class="form-grid">
+            <label><span>源端口 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].SourcePorts" placeholder="50000, 53000-54000" /></label>
             <label><span>目标端口 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].DestinationPorts" placeholder="80,443,10000-20000" /></label>
+            <label><span>本地 CIDR (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].LocalCidrs" placeholder="127.0.0.0/8, ::1/128" /></label>
+            <label><span>本地端口 (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].LocalPorts" placeholder="10808-10810" /></label>
+            <label><span>VLESS Route (CSV)</span><input data-name-template="Form.RoutingRules[__INDEX__].VlessRoutes" placeholder="4360-4370" /></label>
             <label><span>目标出站 Tag</span><input data-name-template="Form.RoutingRules[__INDEX__].OutboundTag" placeholder="proxy" /></label>
         </div>
     </div>

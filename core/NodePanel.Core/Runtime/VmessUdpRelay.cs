@@ -5,17 +5,33 @@ namespace NodePanel.Core.Runtime;
 public sealed class VmessUdpRelay
 {
     private readonly IDispatcher _dispatcher;
-    private readonly RateLimiterRegistry _rateLimiterRegistry;
-    private readonly TrafficRegistry _trafficRegistry;
+    private readonly IRuntimeSniffer _runtimeSniffer;
+    private readonly IRuntimeRateLimiterRegistry _rateLimiterRegistry;
+    private readonly IRuntimeTrafficRegistry _trafficRegistry;
 
     public VmessUdpRelay(
         IDispatcher dispatcher,
-        RateLimiterRegistry rateLimiterRegistry,
-        TrafficRegistry trafficRegistry)
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        IFakeDnsEngine? fakeDnsEngine = null)
+        : this(
+            dispatcher,
+            rateLimiterRegistry,
+            trafficRegistry,
+            new DefaultRuntimeSniffer(fakeDnsEngine))
+    {
+    }
+
+    internal VmessUdpRelay(
+        IDispatcher dispatcher,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        IRuntimeSniffer runtimeSniffer)
     {
         _dispatcher = dispatcher;
         _rateLimiterRegistry = rateLimiterRegistry;
         _trafficRegistry = trafficRegistry;
+        _runtimeSniffer = runtimeSniffer;
     }
 
     internal async Task RelayAsync(
@@ -34,18 +50,15 @@ public sealed class VmessUdpRelay
 
         var userGate = _rateLimiterRegistry.GetUserGate(request.User);
         var globalGate = _rateLimiterRegistry.GlobalGate;
-        var dispatchContext = VmessDispatchContextFactory.Create(request.User, options);
         var destination = new DispatchDestination
         {
             Host = request.TargetHost,
             Port = request.TargetPort,
             Network = DispatchNetwork.Udp
         };
-        dispatchContext = dispatchContext with
-        {
-            OriginalDestinationHost = request.TargetHost,
-            OriginalDestinationPort = request.TargetPort
-        };
+        var dispatchContext = DispatchContextTargeting.SetOriginalAndTarget(
+            VmessDispatchContextFactory.Create(request.User, options),
+            destination);
 
         var firstPacket = await vmessStream.ReadPacketAsync(linkedCts.Token).ConfigureAwait(false);
         if (firstPacket is null)
@@ -54,38 +67,31 @@ public sealed class VmessUdpRelay
         }
 
         activityTimer.Update();
-        await userGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
-        await globalGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
 
-        if (options.Sniffing.Enabled && !options.Sniffing.MetadataOnly)
+        var dispatchResult = await RuntimeUdpDispatchPipeline.DispatchAsync(
+            _dispatcher,
+            _runtimeSniffer,
+            options.Sniffing,
+            firstPacket,
+            dispatchContext,
+            destination,
+            linkedCts.Token).ConfigureAwait(false);
+        destination = dispatchResult.Destination;
+
+        await using var udpTransport = dispatchResult.Transport;
+        var handleFlowLocally = !RuntimeUdpTransportClassifier.IsFlowControlled(udpTransport);
+        if (handleFlowLocally)
         {
-            var sniffing = TrojanSniffingEvaluator.Evaluate(
-                options.Sniffing,
-                firstPacket,
-                DispatchNetwork.Udp,
-                destination);
-
-            dispatchContext = dispatchContext with
-            {
-                DetectedProtocol = sniffing.Protocol,
-                DetectedDomain = sniffing.Domain
-            };
-
-            if (sniffing.OverrideDestination is not null)
-            {
-                destination = sniffing.OverrideDestination with
-                {
-                    Network = DispatchNetwork.Udp
-                };
-            }
+            await userGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
+            await globalGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
         }
 
-        await using var udpTransport = await _dispatcher.DispatchUdpAsync(
-            dispatchContext,
-            linkedCts.Token).ConfigureAwait(false);
         await udpTransport.SendAsync(destination, firstPacket, linkedCts.Token).ConfigureAwait(false);
         activityTimer.Update();
-        _trafficRegistry.RecordUpload(request.User.UserId, firstPacket.Length);
+        if (handleFlowLocally)
+        {
+            _trafficRegistry.RecordUpload(request.User, firstPacket.Length);
+        }
 
         var requestTask = RunRequestLoopAsync(
             vmessStream,
@@ -94,6 +100,7 @@ public sealed class VmessUdpRelay
             request.User,
             userGate,
             globalGate,
+            handleFlowLocally,
             activityTimer,
             linkedCts.Token);
 
@@ -103,6 +110,7 @@ public sealed class VmessUdpRelay
             request.User,
             userGate,
             globalGate,
+            handleFlowLocally,
             writeLock,
             activityTimer,
             linkedCts.Token);
@@ -129,6 +137,7 @@ public sealed class VmessUdpRelay
         VmessUser user,
         ByteRateGate userGate,
         ByteRateGate globalGate,
+        bool handleFlowLocally,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
     {
@@ -141,12 +150,18 @@ public sealed class VmessUdpRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(packet.Length, cancellationToken).ConfigureAwait(false);
-            await globalGate.WaitAsync(packet.Length, cancellationToken).ConfigureAwait(false);
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(packet.Length, cancellationToken).ConfigureAwait(false);
+                await globalGate.WaitAsync(packet.Length, cancellationToken).ConfigureAwait(false);
+            }
             await udpTransport.SendAsync(destination, packet, cancellationToken).ConfigureAwait(false);
 
             activityTimer.Update();
-            _trafficRegistry.RecordUpload(user.UserId, packet.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordUpload(user, packet.Length);
+            }
         }
     }
 
@@ -156,6 +171,7 @@ public sealed class VmessUdpRelay
         VmessUser user,
         ByteRateGate userGate,
         ByteRateGate globalGate,
+        bool handleFlowLocally,
         SemaphoreSlim writeLock,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
@@ -169,13 +185,17 @@ public sealed class VmessUdpRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
-            await globalGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+                await globalGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+            }
 
             await WritePacketAsync(
                 vmessStream,
                 user,
                 datagram.Payload,
+                handleFlowLocally,
                 writeLock,
                 activityTimer,
                 cancellationToken).ConfigureAwait(false);
@@ -186,6 +206,7 @@ public sealed class VmessUdpRelay
         VmessDataStream vmessStream,
         VmessUser user,
         ReadOnlyMemory<byte> payload,
+        bool handleFlowLocally,
         SemaphoreSlim writeLock,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
@@ -195,7 +216,10 @@ public sealed class VmessUdpRelay
         {
             await vmessStream.WritePacketAsync(payload, cancellationToken).ConfigureAwait(false);
             activityTimer.Update();
-            _trafficRegistry.RecordDownload(user.UserId, payload.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordDownload(user, payload.Length);
+            }
         }
         finally
         {

@@ -47,7 +47,7 @@ internal sealed record TestTrojanConnectionOptions : ITrojanInboundConnectionOpt
 
     public EndPoint? OriginalDestinationEndPoint { get; init; }
 
-    public ITrojanSniffingDefinition Sniffing { get; init; } = TrojanSniffingRuntime.Disabled;
+    public IRuntimeSniffingDefinition Sniffing { get; init; } = RuntimeSniffingOptions.Disabled;
 
     public IReadOnlyDictionary<string, TrojanUser> UsersByHash { get; init; }
         = new Dictionary<string, TrojanUser>(StringComparer.Ordinal);
@@ -55,7 +55,7 @@ internal sealed record TestTrojanConnectionOptions : ITrojanInboundConnectionOpt
     public bool TryAuthenticate(string passwordHash, out TrojanUser? user)
         => UsersByHash.TryGetValue(passwordHash, out user);
 
-    public IReadOnlyList<ITrojanFallbackDefinition> Fallbacks { get; init; } = Array.Empty<ITrojanFallbackDefinition>();
+    public IReadOnlyList<IRuntimeFallbackDefinition> Fallbacks { get; init; } = Array.Empty<IRuntimeFallbackDefinition>();
 
     public static IReadOnlyDictionary<string, TrojanUser> CreateUsers(params (string UserId, string Password, long BytesPerSecond)[] users)
         => CreateUsersWithDeviceLimit(

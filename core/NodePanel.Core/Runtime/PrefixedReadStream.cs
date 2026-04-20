@@ -1,6 +1,6 @@
 namespace NodePanel.Core.Runtime;
 
-internal sealed class PrefixedReadStream : Stream
+internal sealed class PrefixedReadStream : Stream, IInnerStreamAccessor, IReplayablePrefixStream
 {
     private readonly Stream _innerStream;
     private readonly byte[] _prefixBuffer;
@@ -21,7 +21,21 @@ internal sealed class PrefixedReadStream : Stream
 
     public override bool CanWrite => _innerStream.CanWrite;
 
-    internal Stream InnerStream => _innerStream;
+    public Stream InnerStream => _innerStream;
+
+    public int RemainingReplayablePrefixBytes
+    {
+        get
+        {
+            var remaining = RemainingLocalPrefixBytes;
+            if (_innerStream is IReplayablePrefixStream replayable)
+            {
+                remaining += replayable.RemainingReplayablePrefixBytes;
+            }
+
+            return remaining;
+        }
+    }
 
     public override long Length => throw new NotSupportedException();
 
@@ -75,6 +89,21 @@ internal sealed class PrefixedReadStream : Stream
     public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         => _innerStream.WriteAsync(buffer, cancellationToken);
 
+    public int SkipReplayablePrefix(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+        var skipped = Math.Min(count, RemainingLocalPrefixBytes);
+        _prefixOffset += skipped;
+
+        if (skipped == count || _innerStream is not IReplayablePrefixStream replayable)
+        {
+            return skipped;
+        }
+
+        return skipped + replayable.SkipReplayablePrefix(count - skipped);
+    }
+
     private bool TryReadPrefix(Span<byte> destination, out int read)
     {
         if (_prefixOffset >= _prefixBuffer.Length)
@@ -88,4 +117,6 @@ internal sealed class PrefixedReadStream : Stream
         _prefixOffset += read;
         return true;
     }
+
+    private int RemainingLocalPrefixBytes => _prefixBuffer.Length - _prefixOffset;
 }

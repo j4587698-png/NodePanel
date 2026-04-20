@@ -67,7 +67,7 @@ public sealed class WebSocketServerHandshakeTests
             static async acceptedStream =>
             {
                 var buffer = new byte["trojan-header".Length];
-                var read = await acceptedStream.ReadAsync(buffer, CancellationToken.None).ConfigureAwait(false);
+                var read = await acceptedStream.ReadAsync(buffer, CancellationToken.None);
                 return Encoding.ASCII.GetString(buffer.AsSpan(0, read));
             });
 
@@ -128,7 +128,7 @@ public sealed class WebSocketServerHandshakeTests
             var connectTask = client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
             var serverClientTask = listener.AcceptTcpClientAsync();
 
-            await Task.WhenAll(connectTask, serverClientTask).ConfigureAwait(false);
+            await Task.WhenAll(connectTask, serverClientTask);
             return new WebSocketHandshakeScenario(client, serverClientTask.Result);
         }
 
@@ -137,8 +137,8 @@ public sealed class WebSocketServerHandshakeTests
             WebSocketServerHandshakeOptions options,
             Func<Stream, Task<string>>? onAccepted = null)
         {
-            await _clientStream.WriteAsync(Encoding.ASCII.GetBytes(request), CancellationToken.None).ConfigureAwait(false);
-            await _clientStream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            await _clientStream.WriteAsync(Encoding.ASCII.GetBytes(request), CancellationToken.None);
+            await _clientStream.FlushAsync(CancellationToken.None);
 
             Exception? serverException = null;
             string? acceptedPayload = null;
@@ -150,11 +150,11 @@ public sealed class WebSocketServerHandshakeTests
                     await using var acceptedStream = await WebSocketServerHandshake.AcceptAsync(
                         _serverStream,
                         options,
-                        CancellationToken.None).ConfigureAwait(false);
+                        CancellationToken.None);
 
                     if (onAccepted is not null)
                     {
-                        acceptedPayload = await onAccepted(acceptedStream).ConfigureAwait(false);
+                        acceptedPayload = await onAccepted(acceptedStream);
                     }
                 }
                 catch (Exception ex)
@@ -163,16 +163,16 @@ public sealed class WebSocketServerHandshakeTests
                 }
             });
 
-            var responseText = await ReadHttpHeadersAsync(_clientStream, CancellationToken.None).ConfigureAwait(false);
-            await serverTask.ConfigureAwait(false);
+            var responseText = await ReadHttpHeadersAsync(_clientStream, CancellationToken.None);
+            await serverTask;
 
             return new WebSocketHandshakeResult(responseText, acceptedPayload, serverException);
         }
 
         public async ValueTask DisposeAsync()
         {
-            await _clientStream.DisposeAsync().ConfigureAwait(false);
-            await _serverStream.DisposeAsync().ConfigureAwait(false);
+            await _clientStream.DisposeAsync();
+            await _serverStream.DisposeAsync();
             _client.Dispose();
             _serverClient.Dispose();
         }
@@ -184,7 +184,7 @@ public sealed class WebSocketServerHandshakeTests
 
             while (true)
             {
-                var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                var line = await reader.ReadLineAsync(cancellationToken);
                 if (line is null)
                 {
                     break;

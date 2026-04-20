@@ -4,29 +4,49 @@ namespace NodePanel.Core.Runtime;
 public sealed class TrojanUdpAssociateRelay
 {
     private readonly IDispatcher _dispatcher;
-    private readonly RateLimiterRegistry _rateLimiterRegistry;
-    private readonly TrafficRegistry _trafficRegistry;
+    private readonly IRuntimeSniffer _runtimeSniffer;
+    private readonly IRuntimeRateLimiterRegistry _rateLimiterRegistry;
+    private readonly IRuntimeTrafficRegistry _trafficRegistry;
     private readonly TrojanUdpPacketReader _udpPacketReader;
     private readonly TrojanUdpPacketWriter _udpPacketWriter;
 
     public TrojanUdpAssociateRelay(
         IDispatcher dispatcher,
-        RateLimiterRegistry rateLimiterRegistry,
-        TrafficRegistry trafficRegistry,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
         TrojanUdpPacketReader udpPacketReader,
-        TrojanUdpPacketWriter udpPacketWriter)
+        TrojanUdpPacketWriter udpPacketWriter,
+        IFakeDnsEngine? fakeDnsEngine = null)
+        : this(
+            dispatcher,
+            rateLimiterRegistry,
+            trafficRegistry,
+            udpPacketReader,
+            udpPacketWriter,
+            new DefaultRuntimeSniffer(fakeDnsEngine))
+    {
+    }
+
+    internal TrojanUdpAssociateRelay(
+        IDispatcher dispatcher,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        TrojanUdpPacketReader udpPacketReader,
+        TrojanUdpPacketWriter udpPacketWriter,
+        IRuntimeSniffer runtimeSniffer)
     {
         _dispatcher = dispatcher;
         _rateLimiterRegistry = rateLimiterRegistry;
         _trafficRegistry = trafficRegistry;
         _udpPacketReader = udpPacketReader;
         _udpPacketWriter = udpPacketWriter;
+        _runtimeSniffer = runtimeSniffer;
     }
 
     public async Task RelayAsync(
         Stream stream,
         TrojanUser user,
-        ITrojanInboundConnectionOptions options,
+        IRuntimeInboundConnectionOptions options,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -38,7 +58,6 @@ public sealed class TrojanUdpAssociateRelay
         using var writeLock = new SemaphoreSlim(1, 1);
         var userGate = _rateLimiterRegistry.GetUserGate(user);
         var globalGate = _rateLimiterRegistry.GlobalGate;
-        var dispatchContext = TrojanDispatchContextFactory.Create(user, options);
         var firstPacket = await _udpPacketReader.ReadAsync(stream, linkedCts.Token).ConfigureAwait(false);
         if (firstPacket is null)
         {
@@ -46,8 +65,6 @@ public sealed class TrojanUdpAssociateRelay
         }
 
         activityTimer.Update();
-        await userGate.WaitAsync(firstPacket.Payload.Length, linkedCts.Token).ConfigureAwait(false);
-        await globalGate.WaitAsync(firstPacket.Payload.Length, linkedCts.Token).ConfigureAwait(false);
 
         var firstDestination = new DispatchDestination
         {
@@ -55,41 +72,37 @@ public sealed class TrojanUdpAssociateRelay
             Port = firstPacket.DestinationPort,
             Network = DispatchNetwork.Udp
         };
-        dispatchContext = dispatchContext with
+        var dispatchContext = DispatchContextTargeting.SetOriginalAndTarget(
+            TrojanDispatchContextFactory.Create(user, options),
+            firstDestination);
+
+        var dispatchResult = await RuntimeUdpDispatchPipeline.DispatchAsync(
+            _dispatcher,
+            _runtimeSniffer,
+            options.Sniffing,
+            firstPacket.Payload,
+            dispatchContext,
+            firstDestination,
+            linkedCts.Token).ConfigureAwait(false);
+        firstDestination = dispatchResult.Destination;
+
+        await using var udpTransport = dispatchResult.Transport;
+        var handleFlowLocally = !RuntimeUdpTransportClassifier.IsFlowControlled(udpTransport);
+        if (handleFlowLocally)
         {
-            OriginalDestinationHost = firstPacket.DestinationHost,
-            OriginalDestinationPort = firstPacket.DestinationPort
-        };
-
-        if (options.Sniffing.Enabled && !options.Sniffing.MetadataOnly)
-        {
-            var sniffing = TrojanSniffingEvaluator.Evaluate(
-                options.Sniffing,
-                firstPacket.Payload,
-                DispatchNetwork.Udp,
-                firstDestination);
-
-            dispatchContext = dispatchContext with
-            {
-                DetectedProtocol = sniffing.Protocol,
-                DetectedDomain = sniffing.Domain
-            };
-
-            if (sniffing.OverrideDestination is not null)
-            {
-                firstDestination = sniffing.OverrideDestination;
-            }
+            await userGate.WaitAsync(firstPacket.Payload.Length, linkedCts.Token).ConfigureAwait(false);
+            await globalGate.WaitAsync(firstPacket.Payload.Length, linkedCts.Token).ConfigureAwait(false);
         }
 
-        await using var udpTransport = await _dispatcher.DispatchUdpAsync(
-            dispatchContext,
-            linkedCts.Token).ConfigureAwait(false);
         await udpTransport.SendAsync(
             firstDestination,
             firstPacket.Payload,
             linkedCts.Token).ConfigureAwait(false);
         activityTimer.Update();
-        _trafficRegistry.RecordUpload(user.UserId, firstPacket.Payload.Length);
+        if (handleFlowLocally)
+        {
+            _trafficRegistry.RecordUpload(user, firstPacket.Payload.Length);
+        }
 
         var requestTask = RunRequestLoopAsync(
             stream,
@@ -97,6 +110,7 @@ public sealed class TrojanUdpAssociateRelay
             user,
             userGate,
             globalGate,
+            handleFlowLocally,
             activityTimer,
             linkedCts.Token);
 
@@ -106,6 +120,7 @@ public sealed class TrojanUdpAssociateRelay
             user,
             userGate,
             globalGate,
+            handleFlowLocally,
             writeLock,
             activityTimer,
             linkedCts.Token);
@@ -131,6 +146,7 @@ public sealed class TrojanUdpAssociateRelay
         TrojanUser user,
         ByteRateGate userGate,
         ByteRateGate globalGate,
+        bool handleFlowLocally,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
     {
@@ -143,8 +159,11 @@ public sealed class TrojanUdpAssociateRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(packet.Payload.Length, cancellationToken).ConfigureAwait(false);
-            await globalGate.WaitAsync(packet.Payload.Length, cancellationToken).ConfigureAwait(false);
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(packet.Payload.Length, cancellationToken).ConfigureAwait(false);
+                await globalGate.WaitAsync(packet.Payload.Length, cancellationToken).ConfigureAwait(false);
+            }
 
             await udpTransport.SendAsync(
                 new DispatchDestination
@@ -157,7 +176,10 @@ public sealed class TrojanUdpAssociateRelay
                 cancellationToken).ConfigureAwait(false);
 
             activityTimer.Update();
-            _trafficRegistry.RecordUpload(user.UserId, packet.Payload.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordUpload(user, packet.Payload.Length);
+            }
         }
     }
 
@@ -167,6 +189,7 @@ public sealed class TrojanUdpAssociateRelay
         TrojanUser user,
         ByteRateGate userGate,
         ByteRateGate globalGate,
+        bool handleFlowLocally,
         SemaphoreSlim writeLock,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
@@ -180,8 +203,11 @@ public sealed class TrojanUdpAssociateRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
-            await globalGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+                await globalGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+            }
 
             await WritePacketAsync(
                 stream,
@@ -192,6 +218,7 @@ public sealed class TrojanUdpAssociateRelay
                     DestinationPort = datagram.SourcePort,
                     Payload = datagram.Payload
                 },
+                handleFlowLocally,
                 writeLock,
                 activityTimer,
                 cancellationToken).ConfigureAwait(false);
@@ -202,6 +229,7 @@ public sealed class TrojanUdpAssociateRelay
         Stream clientStream,
         TrojanUser user,
         TrojanUdpPacket packet,
+        bool handleFlowLocally,
         SemaphoreSlim writeLock,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
@@ -211,7 +239,10 @@ public sealed class TrojanUdpAssociateRelay
         {
             await _udpPacketWriter.WriteAsync(clientStream, packet, cancellationToken).ConfigureAwait(false);
             activityTimer.Update();
-            _trafficRegistry.RecordDownload(user.UserId, packet.Payload.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordDownload(user, packet.Payload.Length);
+            }
         }
         finally
         {

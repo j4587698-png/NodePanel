@@ -1,9 +1,4 @@
 using System.Net;
-using System.Net.Security;
-using System.Net.Sockets;
-using System.Runtime.ExceptionServices;
-using System.Security.Authentication;
-using System.Text;
 using NodePanel.Core.Transport;
 
 namespace NodePanel.Core.Runtime;
@@ -21,192 +16,206 @@ public sealed class TrojanInboundServer
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var listeners = options.Plan.TlsListeners;
-        if (listeners.Count == 0)
+        var quicTlsListeners = options.Plan.TlsListeners
+            .Where(static listener => RuntimeSplitHttpInboundPlanning.IsHttp3Only(listener.ApplicationProtocols))
+            .ToArray();
+        var tlsListeners = options.Plan.TlsListeners
+            .Where(static listener => !RuntimeSplitHttpInboundPlanning.IsHttp3Only(listener.ApplicationProtocols))
+            .ToArray();
+        var realityListeners = options.Plan.RealityListeners;
+        var plainListeners = options.Plan.PlainListeners.ToArray();
+        var mkcpListeners = plainListeners
+            .Where(static listener => listener.MkcpInbound is not null)
+            .ToArray();
+        plainListeners = plainListeners
+            .Where(static listener => listener.MkcpInbound is null)
+            .ToArray();
+        if (realityListeners.Any(static listener => RuntimeSplitHttpInboundPlanning.IsHttp3Only(listener.ApplicationProtocols)))
+        {
+            throw new NotSupportedException("Trojan SplitHTTP h3-only inbound currently only supports TLS security and cannot run on REALITY listeners.");
+        }
+
+        if (tlsListeners.Length == 0 &&
+            quicTlsListeners.Length == 0 &&
+            realityListeners.Count == 0 &&
+            plainListeners.Length == 0 &&
+            mkcpListeners.Length == 0)
         {
             return;
         }
 
-        var tlsOptions = options.Tls ?? throw new InvalidOperationException("Trojan inbound server requires TLS options when listeners are configured.");
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var tasks = new List<Task>(capacity: 4);
+        if (plainListeners.Length > 0)
+        {
+            tasks.Add(RunPlainAsync(options, plainListeners, linkedCts.Token));
+        }
 
-        var activeListeners = new List<ListenerRuntime>(listeners.Count);
+        if (mkcpListeners.Length > 0)
+        {
+            tasks.Add(RunMkcpAsync(options, mkcpListeners, linkedCts.Token));
+        }
+
+        if (tlsListeners.Length > 0)
+        {
+            var tlsOptions = options.Tls ?? throw new InvalidOperationException("Trojan inbound server requires TLS options when TLS listeners are configured.");
+            tasks.Add(RunTlsAsync(options, tlsListeners, tlsOptions, linkedCts.Token));
+        }
+
+        if (quicTlsListeners.Length > 0)
+        {
+            var tlsOptions = options.Tls ?? throw new InvalidOperationException("Trojan inbound server requires TLS options when QUIC TLS listeners are configured.");
+            tasks.Add(RunQuicTlsAsync(options, quicTlsListeners, tlsOptions, linkedCts.Token));
+        }
+
+        if (realityListeners.Count > 0)
+        {
+            var realityOptions = options.Reality ?? throw new InvalidOperationException("Trojan inbound server requires REALITY options when REALITY listeners are configured.");
+            tasks.Add(RunRealityAsync(options, realityOptions, linkedCts.Token));
+        }
+
+        var taskArray = tasks.ToArray();
         try
         {
-            foreach (var listener in listeners)
-            {
-                var handle = ListenerHandle.Create(listener.Binding);
-                activeListeners.Add(new ListenerRuntime(listener, handle));
-                InvokeSafely(options.Callbacks.ListenerStarted, listener);
-            }
-
-            var acceptTasks = activeListeners
-                .Select(listener => AcceptLoopAsync(listener, tlsOptions, options, cancellationToken))
-                .ToArray();
-            var acceptGroup = Task.WhenAll(acceptTasks);
-            var firstLoopCompletion = Task.WhenAny(acceptTasks);
-            var stopSignal = WaitForCancellationAsync(cancellationToken);
-
-            var completed = await Task.WhenAny(firstLoopCompletion, stopSignal).ConfigureAwait(false);
-
-            foreach (var listener in activeListeners)
-            {
-                listener.Handle.Stop();
-            }
-
-            try
-            {
-                await acceptGroup.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-            }
-
-            if (completed == stopSignal || cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-
-            if (acceptGroup.Exception is not null)
-            {
-                var exception = acceptGroup.Exception.InnerExceptions.Count == 1
-                    ? acceptGroup.Exception.InnerExceptions[0]
-                    : acceptGroup.Exception;
-                ExceptionDispatchInfo.Capture(exception).Throw();
-            }
-
-            throw new InvalidOperationException("Trojan inbound accept loop ended unexpectedly.");
+            await Task.WhenAny(taskArray).ConfigureAwait(false);
+            linkedCts.Cancel();
+            await Task.WhenAll(taskArray.Select(task => InboundServerRuntimeSupport.ObserveCancellationAsync(task, linkedCts.Token))).ConfigureAwait(false);
         }
-        finally
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            foreach (var listener in activeListeners)
-            {
-                listener.Handle.Dispose();
-            }
         }
     }
 
-    private async Task AcceptLoopAsync(
-        ListenerRuntime listener,
-        TrojanInboundTlsOptions tlsOptions,
+    private Task RunTlsAsync(
         TrojanInboundServerOptions options,
+        IReadOnlyList<TrojanTlsListenerRuntime> listeners,
+        RuntimeTlsOptions tlsOptions,
+        CancellationToken cancellationToken)
+        => InboundServerRuntimeSupport.RunTlsServerAsync(
+            listeners,
+            tlsOptions,
+            options.Callbacks.ListenerStarted,
+            static listener => listener.Binding,
+            static listener => listener.AcceptProxyProtocol,
+            static listener => listener.Inbounds.Any(static inbound => inbound.ReceiveOriginalDestination),
+            static listener => listener.ApplicationProtocols,
+            options.Callbacks.ClientHelloRejected,
+            options.Callbacks.UnknownServerNameRejected,
+            options.Callbacks.ConnectionError,
+            (listener, acceptedConnection, token) => HandleTlsConnectionAsync(
+                options,
+                listener,
+                acceptedConnection,
+                token),
+            "Trojan inbound accept loop ended unexpectedly.",
+            cancellationToken);
+
+    private Task RunQuicTlsAsync(
+        TrojanInboundServerOptions options,
+        IReadOnlyList<TrojanTlsListenerRuntime> listeners,
+        RuntimeTlsOptions tlsOptions,
         CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            AcceptedConnection connection;
-            try
-            {
-                connection = await listener.Handle.AcceptAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (SocketException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-
-            _ = Task.Run(
-                () => HandleAcceptedConnectionAsync(connection, tlsOptions, options, listener.Definition, cancellationToken),
-                CancellationToken.None);
-        }
+        ValidateQuicListeners(listeners);
+        return InboundServerRuntimeSupport.RunQuicTlsServerAsync(
+            listeners,
+            tlsOptions,
+            options.Callbacks.ListenerStarted,
+            static listener => listener.Binding,
+            static listener => listener.ApplicationProtocols,
+            static listener => listener.SplitHttpInbound!.QuicOptions,
+            options.Callbacks.UnknownServerNameRejected,
+            options.Callbacks.ConnectionError,
+            (listener, acceptedConnection, token) => HandleQuicConnectionAsync(
+                options,
+                listener,
+                acceptedConnection,
+                token),
+            "Trojan QUIC inbound accept loop ended unexpectedly.",
+            cancellationToken);
     }
 
-    private async Task HandleAcceptedConnectionAsync(
-        AcceptedConnection connection,
-        TrojanInboundTlsOptions tlsOptions,
+    private Task RunPlainAsync(
         TrojanInboundServerOptions options,
+        IReadOnlyList<TrojanTlsListenerRuntime> listeners,
+        CancellationToken cancellationToken)
+        => InboundServerRuntimeSupport.RunAsync(
+            listeners,
+            static listener => listener.Binding,
+            options.Callbacks.ListenerStarted,
+            (listener, handle, token) => InboundServerRuntimeSupport.AcceptLoopAsync(
+                listener,
+                handle,
+                (connection, definition, innerToken) => HandleAcceptedPlainConnectionAsync(connection, definition, options, innerToken),
+                token),
+            "Trojan inbound accept loop ended unexpectedly.",
+            cancellationToken);
+
+    private Task RunMkcpAsync(
+        TrojanInboundServerOptions options,
+        IReadOnlyList<TrojanTlsListenerRuntime> listeners,
+        CancellationToken cancellationToken)
+        => RuntimeKcpInboundServer.RunAsync(
+            listeners,
+            options.Callbacks.ListenerStarted,
+            static listener => listener.Binding,
+            options.Callbacks.ConnectionError,
+            (listener, connection, token) => HandleAcceptedMkcpConnectionAsync(
+                options,
+                listener,
+                connection,
+                token),
+            "Trojan mKCP inbound receive loop ended unexpectedly.",
+            cancellationToken);
+
+    private Task RunRealityAsync(
+        TrojanInboundServerOptions options,
+        RuntimeRealityServerOptions realityOptions,
+        CancellationToken cancellationToken)
+        => InboundServerRuntimeSupport.RunRealityServerAsync(
+            options.Plan.RealityListeners,
+            realityOptions,
+            options.Callbacks.ListenerStarted,
+            static listener => listener.Binding,
+            static listener => listener.AcceptProxyProtocol,
+            static listener => listener.Inbounds.Any(static inbound => inbound.ReceiveOriginalDestination),
+            static listener => listener.ApplicationProtocols,
+            options.Callbacks.ClientHelloRejected,
+            options.Callbacks.UnknownServerNameRejected,
+            options.Callbacks.ConnectionError,
+            (listener, acceptedConnection, token) => HandleTlsConnectionAsync(
+                options,
+                listener,
+                acceptedConnection,
+                token),
+            "Trojan inbound accept loop ended unexpectedly.",
+            cancellationToken);
+
+    private async Task HandleAcceptedPlainConnectionAsync(
+        AcceptedConnection connection,
         TrojanTlsListenerRuntime listener,
+        TrojanInboundServerOptions options,
         CancellationToken cancellationToken)
     {
         await using var connectionLease = connection;
-        var networkStream = connection.Stream;
-        var effectiveRemoteEndPoint = connection.RemoteEndPoint;
-        var effectiveLocalEndPoint = connection.LocalEndPoint;
-        IPEndPoint? originalDestinationEndPoint = null;
-
-        if ((listener.RawTlsInbound?.ReceiveOriginalDestination == true ||
-             listener.WebSocketInbound?.ReceiveOriginalDestination == true) &&
-            OriginalTcpDestinationResolver.TryResolve(connection.Socket, out var resolvedOriginalDestination))
-        {
-            originalDestinationEndPoint = resolvedOriginalDestination;
-        }
+        var errorRemoteEndPoint = connection.LogRemoteEndPoint ?? connection.RemoteEndPoint;
 
         try
         {
-            if (listener.AcceptProxyProtocol)
-            {
-                var proxyHeader = await ProxyProtocolReader.ReadAsync(networkStream, cancellationToken).ConfigureAwait(false);
-                effectiveRemoteEndPoint = proxyHeader.RemoteEndPoint;
-                effectiveLocalEndPoint = proxyHeader.LocalEndPoint;
-            }
-
-            Stream tlsTransportStream = networkStream;
-            if (tlsOptions.ClientHelloPolicy.Enabled)
-            {
-                var handshakePayload = await TrojanTlsClientHelloReader.ReadAsync(networkStream, cancellationToken).ConfigureAwait(false);
-                if (handshakePayload.Length == 0)
-                {
-                    return;
-                }
-
-                TrojanTlsClientHelloMetadata? clientHelloMetadata = null;
-                if (TrojanTlsClientHelloParser.TryParse(handshakePayload, out var parsedMetadata))
-                {
-                    clientHelloMetadata = parsedMetadata;
-                }
-
-                if (TrojanClientHelloPolicyEvaluator.ShouldReject(
-                        tlsOptions.ClientHelloPolicy,
-                        clientHelloMetadata,
-                        out var decision))
-                {
-                    InvokeSafely(
-                        options.Callbacks.ClientHelloRejected,
-                        new TrojanInboundClientHelloRejectionContext
-                        {
-                            RemoteEndPoint = connection.LogRemoteEndPoint ?? effectiveRemoteEndPoint,
-                            Metadata = clientHelloMetadata,
-                            Reason = decision.Reason
-                        });
-                    return;
-                }
-
-                tlsTransportStream = new PrefixedReadStream(networkStream, handshakePayload);
-            }
-
-            using var sslStream = new SslStream(tlsTransportStream, leaveInnerStreamOpen: false);
-            await sslStream.AuthenticateAsServerAsync(
-                BuildAuthenticationOptions(listener, tlsOptions.Certificate),
-                cancellationToken).ConfigureAwait(false);
-
-            if (TrojanTlsServerNamePolicy.ShouldReject(
-                    tlsOptions.ServerNamePolicy,
-                    tlsOptions.Certificate,
-                    sslStream.TargetHostName))
-            {
-                InvokeSafely(
-                    options.Callbacks.UnknownServerNameRejected,
-                    new TrojanInboundSniRejectionContext
-                    {
-                        RemoteEndPoint = connection.LogRemoteEndPoint ?? effectiveRemoteEndPoint,
-                        RequestedServerName = sslStream.TargetHostName ?? string.Empty
-                    });
-                return;
-            }
+            var acceptedConnection = await PlainInboundConnectionAcceptor.AcceptAsync(
+                    connection,
+                    listener.AcceptProxyProtocol,
+                    listener.Inbounds.Any(static inbound => inbound.ReceiveOriginalDestination),
+                    remoteEndPoint => errorRemoteEndPoint = connection.LogRemoteEndPoint ?? remoteEndPoint,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await using var acceptedConnectionLease = acceptedConnection;
+            errorRemoteEndPoint = acceptedConnection.RemoteEndPoint;
 
             await HandleTlsConnectionAsync(
-                sslStream,
                 options,
                 listener,
-                effectiveRemoteEndPoint,
-                effectiveLocalEndPoint,
-                originalDestinationEndPoint,
+                acceptedConnection,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -214,80 +223,63 @@ public sealed class TrojanInboundServer
         }
         catch (Exception ex)
         {
-            InvokeSafely(
+            InboundServerRuntimeSupport.InvokeSafely(
                 options.Callbacks.ConnectionError,
-                new TrojanInboundConnectionErrorContext
+                new RuntimeInboundConnectionErrorContext
                 {
                     Exception = ex,
-                    RemoteEndPoint = connection.LogRemoteEndPoint ?? effectiveRemoteEndPoint
+                    RemoteEndPoint = errorRemoteEndPoint
                 });
         }
     }
 
-    private static SslServerAuthenticationOptions BuildAuthenticationOptions(
-        TrojanTlsListenerRuntime listener,
-        System.Security.Cryptography.X509Certificates.X509Certificate2 certificate)
-    {
-        var options = new SslServerAuthenticationOptions
-        {
-            ServerCertificate = certificate,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-            CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck,
-            ClientCertificateRequired = false
-        };
-
-        if (listener.ApplicationProtocols.Count > 0)
-        {
-            options.ApplicationProtocols = listener.ApplicationProtocols
-                .Where(static value => !string.IsNullOrWhiteSpace(value))
-                .Select(static value => new SslApplicationProtocol(value))
-                .ToList();
-        }
-
-        return options;
-    }
-
     private async Task HandleTlsConnectionAsync(
-        SslStream sslStream,
         TrojanInboundServerOptions options,
         TrojanTlsListenerRuntime listener,
-        EndPoint? remoteEndPoint,
-        EndPoint? localEndPoint,
-        IPEndPoint? originalDestinationEndPoint,
+        TlsAcceptedConnectionContext authenticatedConnection,
         CancellationToken cancellationToken)
     {
-        var negotiatedAlpn = Encoding.ASCII.GetString(sslStream.NegotiatedApplicationProtocol.Protocol.Span);
-
-        if (!listener.IsShared)
-        {
-            var inbound = listener.RawTlsInbound ?? listener.WebSocketInbound ?? throw new InvalidOperationException("Trojan listener has no inbound definition.");
-            await HandleResolvedInboundAsync(
-                sslStream,
-                options,
-                inbound,
-                sslStream.TargetHostName ?? string.Empty,
-                negotiatedAlpn,
-                remoteEndPoint,
-                localEndPoint,
-                originalDestinationEndPoint,
-                cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        var initialPayload = await ReadInitialPayloadAsync(sslStream, cancellationToken).ConfigureAwait(false);
-        var prefixedStream = new PrefixedReadStream(sslStream, initialPayload);
-        var inboundSelection = TrojanInboundRuntimePlanner.SelectInbound(listener, initialPayload)
-            ?? throw new InvalidOperationException("Trojan shared listener could not resolve an inbound transport.");
+        var (stream, inboundSelection) = await InboundServerRuntimeSupport.ResolveTlsInboundAsync(
+                authenticatedConnection.Stream,
+                listener,
+                static current => current.Inbounds,
+                static (current, payload) => TrojanInboundRuntimePlanner.SelectInbound(current, payload),
+                "Trojan listener has no inbound definition.",
+                "Trojan shared listener could not resolve an inbound transport.",
+                cancellationToken)
+            .ConfigureAwait(false);
 
         await HandleResolvedInboundAsync(
-            prefixedStream,
+            stream,
             options,
             inboundSelection,
-            sslStream.TargetHostName ?? string.Empty,
-            negotiatedAlpn,
-            remoteEndPoint,
-            localEndPoint,
-            originalDestinationEndPoint,
+            authenticatedConnection.ServerName,
+            authenticatedConnection.NegotiatedAlpn,
+            authenticatedConnection.RemoteEndPoint,
+            authenticatedConnection.LocalEndPoint,
+            authenticatedConnection.OriginalDestinationEndPoint,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleAcceptedMkcpConnectionAsync(
+        TrojanInboundServerOptions options,
+        TrojanTlsListenerRuntime listener,
+        AcceptedConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var connectionLease = connection;
+        var inbound = listener.MkcpInbound
+                      ?? throw new InvalidOperationException("Trojan mKCP listener is missing its mKCP inbound definition.");
+
+        await HandleResolvedInboundAsync(
+            connection.Stream,
+            options,
+            inbound,
+            serverName: string.Empty,
+            alpn: string.Empty,
+            connection.RemoteEndPoint,
+            connection.LocalEndPoint,
+            originalDestinationEndPoint: null,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -302,101 +294,75 @@ public sealed class TrojanInboundServer
         IPEndPoint? originalDestinationEndPoint,
         CancellationToken cancellationToken)
     {
-        if (string.Equals(inbound.Transport, InboundTransports.Wss, StringComparison.Ordinal))
-        {
-            await using var webSocketStream = await WebSocketServerHandshake.AcceptAsync(
-                stream,
-                new WebSocketServerHandshakeOptions
-                {
-                    Host = inbound.Host,
-                    Path = inbound.Path,
-                    EarlyDataBytes = inbound.EarlyDataBytes,
-                    HeartbeatPeriodSeconds = inbound.HeartbeatPeriodSeconds
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            await _trojanInboundConnectionHandler.HandleAsync(
-                webSocketStream,
-                CreateSessionOptions(options, inbound, serverName, alpn, remoteEndPoint, localEndPoint, originalDestinationEndPoint),
-                cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        await _trojanInboundConnectionHandler.HandleAsync(
+        var sessionOptions = RuntimeTlsInboundSessionOptionsFactory.Create(
+            options,
+            inbound,
+            serverName,
+            alpn,
+            remoteEndPoint,
+            localEndPoint,
+            originalDestinationEndPoint);
+        await InboundServerRuntimeSupport.HandleTransportAsync(
             stream,
-            CreateSessionOptions(options, inbound, serverName, alpn, remoteEndPoint, localEndPoint, originalDestinationEndPoint),
+            inbound,
+            static current => current.InternetStack,
+            static current => current.Host,
+            static current => current.Path,
+            static current => current.EarlyDataBytes,
+            static current => current.HeartbeatPeriodSeconds,
+            static current => current.Grpc,
+            static current => current.SplitHttp,
+            (transportStream, token) => _trojanInboundConnectionHandler.HandleAsync(
+                transportStream,
+                sessionOptions,
+                token),
+            cancellationToken,
+            exception => InboundServerRuntimeSupport.InvokeSafely(
+                options.Callbacks.ConnectionError,
+                new RuntimeInboundConnectionErrorContext
+                {
+                    Exception = exception,
+                    RemoteEndPoint = remoteEndPoint
+                })).ConfigureAwait(false);
+    }
+
+    private async Task HandleQuicConnectionAsync(
+        TrojanInboundServerOptions options,
+        TrojanTlsListenerRuntime listener,
+        QuicAcceptedConnectionContext acceptedConnection,
+        CancellationToken cancellationToken)
+    {
+        var inbound = listener.SplitHttpInbound
+            ?? throw new InvalidOperationException("Trojan QUIC listener requires a SplitHTTP inbound definition.");
+
+        var sessionOptions = RuntimeTlsInboundSessionOptionsFactory.Create(
+            options,
+            inbound,
+            acceptedConnection.ServerName,
+            acceptedConnection.NegotiatedAlpn,
+            acceptedConnection.RemoteEndPoint,
+            acceptedConnection.LocalEndPoint,
+            originalDestinationEndPoint: null);
+        await InboundServerRuntimeSupport.HandleQuicTransportAsync(
+            acceptedConnection.Connection,
+            inbound,
+            static current => current.InternetStack,
+            static current => current.ApplicationProtocols,
+            static current => current.SplitHttp,
+            (transportStream, token) => _trojanInboundConnectionHandler.HandleAsync(
+                transportStream,
+                sessionOptions,
+                token),
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static TrojanInboundSessionOptions CreateSessionOptions(
-        TrojanInboundServerOptions options,
-        TrojanTlsInboundRuntime inbound,
-        string serverName,
-        string alpn,
-        EndPoint? remoteEndPoint,
-        EndPoint? localEndPoint,
-        IPEndPoint? originalDestinationEndPoint)
-        => new()
-        {
-            InboundTag = inbound.Tag,
-            HandshakeTimeoutSeconds = inbound.HandshakeTimeoutSeconds,
-            ConnectTimeoutSeconds = options.Limits.ConnectTimeoutSeconds,
-            ConnectionIdleSeconds = options.Limits.ConnectionIdleSeconds,
-            UplinkOnlySeconds = options.Limits.UplinkOnlySeconds,
-            DownlinkOnlySeconds = options.Limits.DownlinkOnlySeconds,
-            ServerName = serverName,
-            Alpn = alpn,
-            RemoteEndPoint = remoteEndPoint,
-            LocalEndPoint = localEndPoint,
-            OriginalDestinationEndPoint = inbound.ReceiveOriginalDestination ? originalDestinationEndPoint : null,
-            UseCone = options.UseCone,
-            ReceiveOriginalDestination = inbound.ReceiveOriginalDestination,
-            Sniffing = inbound.Sniffing,
-            UsersByHash = inbound.UsersByHash,
-            Fallbacks = inbound.Fallbacks
-        };
-
-    private static async Task<byte[]> ReadInitialPayloadAsync(Stream stream, CancellationToken cancellationToken)
+    private static void ValidateQuicListeners(IReadOnlyList<TrojanTlsListenerRuntime> listeners)
     {
-        var buffer = new byte[4096];
-        var read = 0;
-
-        while (read < 64)
+        if (listeners.Any(static listener =>
+                listener.AcceptProxyProtocol ||
+                listener.Inbounds.Any(static inbound => inbound.ReceiveOriginalDestination)))
         {
-            var current = await stream.ReadAsync(buffer.AsMemory(read, buffer.Length - read), cancellationToken).ConfigureAwait(false);
-            if (current == 0)
-            {
-                break;
-            }
-
-            read += current;
-            if (read == buffer.Length)
-            {
-                break;
-            }
-        }
-
-        return read == buffer.Length ? buffer : buffer.AsSpan(0, read).ToArray();
-    }
-
-    private static Task WaitForCancellationAsync(CancellationToken cancellationToken)
-        => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-
-    private static void InvokeSafely<TContext>(Action<TContext>? callback, TContext context)
-    {
-        if (callback is null)
-        {
-            return;
-        }
-
-        try
-        {
-            callback(context);
-        }
-        catch
-        {
+            throw new NotSupportedException("Trojan QUIC SplitHTTP inbound does not support PROXY protocol or original destination recovery.");
         }
     }
-
-    private sealed record ListenerRuntime(TrojanTlsListenerRuntime Definition, ListenerHandle Handle);
 }

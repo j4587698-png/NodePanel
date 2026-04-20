@@ -76,6 +76,79 @@ internal sealed class VmessDataStream : Stream
         => throw new NotSupportedException();
 }
 
+internal sealed class VmessClientDataStream : Stream
+{
+    private readonly Stream _inner;
+    private readonly VmessBodyReader _reader;
+    private readonly VmessBodyWriter _writer;
+
+    private bool _requestCompleted;
+
+    public VmessClientDataStream(Stream inner, VmessRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        _inner = inner;
+        _reader = VmessBodyReader.CreateResponseReader(inner, request);
+        _writer = VmessBodyWriter.CreateRequestWriter(inner, request);
+    }
+
+    public override bool CanRead => true;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => true;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    internal ValueTask<byte[]?> ReadPacketAsync(CancellationToken cancellationToken)
+        => _reader.ReadPacketAsync(cancellationToken);
+
+    internal ValueTask WritePacketAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        => _writer.WritePacketAsync(payload, cancellationToken);
+
+    public async ValueTask CompleteRequestAsync(CancellationToken cancellationToken)
+    {
+        if (_requestCompleted)
+        {
+            return;
+        }
+
+        _requestCompleted = true;
+        await _writer.CompleteAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+        => ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        => _reader.ReadStreamAsync(buffer, cancellationToken);
+
+    public override void Write(byte[] buffer, int offset, int count)
+        => WriteAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        => _writer.WriteStreamAsync(buffer, cancellationToken);
+
+    public override void Flush()
+        => _inner.Flush();
+
+    public override Task FlushAsync(CancellationToken cancellationToken)
+        => _inner.FlushAsync(cancellationToken);
+
+    public override long Seek(long offset, SeekOrigin origin)
+        => throw new NotSupportedException();
+
+    public override void SetLength(long value)
+        => throw new NotSupportedException();
+}
+
 internal sealed class VmessBodyReader
 {
     private readonly Stream _inner;
@@ -112,6 +185,25 @@ internal sealed class VmessBodyReader
         var framed = VmessBodyCodecFactory.RequiresFraming(security, request.Option);
         var payloadCipher = VmessBodyCodecFactory.CreatePayloadCipher(security, request.RequestBodyKey, request.RequestBodyIv);
         var frameOptions = VmessBodyCodecFactory.CreateRequestFrameOptions(request, security, framed);
+
+        return new VmessBodyReader(
+            inner,
+            payloadCipher,
+            frameOptions.SizeCodec,
+            frameOptions.PaddingGenerator,
+            transferType,
+            framed);
+    }
+
+    public static VmessBodyReader CreateResponseReader(Stream inner, VmessRequest request)
+    {
+        var security = VmessBodyCodecFactory.NormalizeSecurity(request.Security);
+        var transferType = VmessBodyCodecFactory.GetTransferType(request.Command);
+        var framed = VmessBodyCodecFactory.RequiresFraming(security, request.Option);
+        var responseBodyKey = VmessHandshakeReader.DeriveResponseBodyKey(request.RequestBodyKey);
+        var responseBodyIv = VmessHandshakeReader.DeriveResponseBodyIv(request.RequestBodyIv);
+        var payloadCipher = VmessBodyCodecFactory.CreatePayloadCipher(security, responseBodyKey, responseBodyIv);
+        var frameOptions = VmessBodyCodecFactory.CreateResponseFrameOptions(request, security, framed, responseBodyIv);
 
         return new VmessBodyReader(
             inner,
@@ -267,6 +359,23 @@ internal sealed class VmessBodyWriter
         var responseBodyIv = VmessHandshakeReader.DeriveResponseBodyIv(request.RequestBodyIv);
         var payloadCipher = VmessBodyCodecFactory.CreatePayloadCipher(security, responseBodyKey, responseBodyIv);
         var frameOptions = VmessBodyCodecFactory.CreateResponseFrameOptions(request, security, framed, responseBodyIv);
+
+        return new VmessBodyWriter(
+            inner,
+            payloadCipher,
+            frameOptions.SizeCodec,
+            frameOptions.PaddingGenerator,
+            transferType,
+            framed);
+    }
+
+    public static VmessBodyWriter CreateRequestWriter(Stream inner, VmessRequest request)
+    {
+        var security = VmessBodyCodecFactory.NormalizeSecurity(request.Security);
+        var transferType = VmessBodyCodecFactory.GetTransferType(request.Command);
+        var framed = VmessBodyCodecFactory.RequiresFraming(security, request.Option);
+        var payloadCipher = VmessBodyCodecFactory.CreatePayloadCipher(security, request.RequestBodyKey, request.RequestBodyIv);
+        var frameOptions = VmessBodyCodecFactory.CreateRequestFrameOptions(request, security, framed);
 
         return new VmessBodyWriter(
             inner,

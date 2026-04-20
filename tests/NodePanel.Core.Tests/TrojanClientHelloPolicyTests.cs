@@ -11,7 +11,7 @@ public sealed class TrojanClientHelloPolicyTests
     {
         var payload = BuildTlsClientHello("edge.example.com", ["h2", "http/1.1"]);
 
-        var parsed = TrojanTlsClientHelloParser.TryParse(payload, out var metadata);
+        var parsed = RuntimeTlsClientHelloParser.TryParse(payload, out var metadata);
 
         Assert.True(parsed);
         Assert.Equal("edge.example.com", metadata.ServerName);
@@ -32,9 +32,9 @@ public sealed class TrojanClientHelloPolicyTests
     public void ShouldReject_applies_allow_and_block_rules_from_parsed_client_hello()
     {
         var payload = BuildTlsClientHello("edge.example.com", ["h2", "http/1.1"]);
-        Assert.True(TrojanTlsClientHelloParser.TryParse(payload, out var metadata));
+        Assert.True(RuntimeTlsClientHelloParser.TryParse(payload, out var metadata));
 
-        var allowedPolicy = new TrojanClientHelloPolicyRuntime
+        var allowedPolicy = new RuntimeTlsClientHelloPolicyOptions
         {
             Enabled = true,
             AllowedServerNames = ["*.example.com"],
@@ -42,13 +42,13 @@ public sealed class TrojanClientHelloPolicyTests
             AllowedJa3 = [metadata.Ja3Hash]
         };
 
-        var allowedRejected = TrojanClientHelloPolicyEvaluator.ShouldReject(
+        var allowedRejected = RuntimeTlsClientHelloPolicyEvaluator.ShouldReject(
             allowedPolicy,
             metadata,
             out var allowedDecision);
 
-        var blockedRejected = TrojanClientHelloPolicyEvaluator.ShouldReject(
-            new TrojanClientHelloPolicyRuntime
+        var blockedRejected = RuntimeTlsClientHelloPolicyEvaluator.ShouldReject(
+            new RuntimeTlsClientHelloPolicyOptions
             {
                 Enabled = true,
                 BlockedJa3 = [metadata.Ja3Hash]

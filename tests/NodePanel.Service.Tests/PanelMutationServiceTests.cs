@@ -1,4 +1,5 @@
 using System.Net.Security;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Http;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NodePanel.ControlPlane.Configuration;
+using NodePanel.ControlPlane.Protocol;
 using NodePanel.Core.Runtime;
 using NodePanel.Panel.Configuration;
 using NodePanel.Panel.Models;
@@ -660,6 +662,30 @@ public sealed class PanelMutationServiceTests
                 })
             .ExecuteAffrowsAsync(CancellationToken.None);
 
+        await harness.DatabaseService.FSql.InsertOrUpdate<ScopedTrafficRecordEntity>()
+            .SetSource(
+                new ScopedTrafficRecordEntity
+                {
+                    UserId = "user-a",
+                    Protocol = "trojan",
+                    InboundTag = "in-trojan",
+                    UploadBytes = 60,
+                    DownloadBytes = 40
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        await harness.DatabaseService.FSql.InsertOrUpdate<ScopedTrafficRecordEntity>()
+            .SetSource(
+                new ScopedTrafficRecordEntity
+                {
+                    UserId = "user-a",
+                    Protocol = "vless",
+                    InboundTag = "in-vless",
+                    UploadBytes = 30,
+                    DownloadBytes = 20
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
         var order = await harness.MutationService.CreateOrderAsync(
             "user-a",
             "reset-pack",
@@ -673,6 +699,10 @@ public sealed class PanelMutationServiceTests
         var traffic = await harness.DatabaseService.FSql.Select<TrafficRecordEntity>()
             .Where(item => item.UserId == "user-a")
             .FirstAsync(CancellationToken.None);
+        var scopedTraffic = await harness.DatabaseService.FSql.Select<ScopedTrafficRecordEntity>()
+            .Where(item => item.UserId == "user-a")
+            .OrderBy(item => item.Protocol)
+            .ToListAsync(CancellationToken.None);
 
         Assert.Equal("starter", user.PlanName);
         Assert.Equal("month", user.Cycle);
@@ -680,6 +710,181 @@ public sealed class PanelMutationServiceTests
         Assert.NotNull(traffic);
         Assert.Equal(0L, traffic!.UploadBytes);
         Assert.Equal(0L, traffic.DownloadBytes);
+        Assert.NotNull(traffic.LastResetAt);
+        Assert.Collection(
+            scopedTraffic,
+            item =>
+            {
+                Assert.Equal("trojan", item.Protocol);
+                Assert.Equal("in-trojan", item.InboundTag);
+                Assert.Equal(0L, item.UploadBytes);
+                Assert.Equal(0L, item.DownloadBytes);
+                Assert.NotNull(item.LastResetAt);
+            },
+            item =>
+            {
+                Assert.Equal("vless", item.Protocol);
+                Assert.Equal("in-vless", item.InboundTag);
+                Assert.Equal(0L, item.UploadBytes);
+                Assert.Equal(0L, item.DownloadBytes);
+                Assert.NotNull(item.LastResetAt);
+            });
+    }
+
+    [Fact]
+    public async Task NetworkAccountingService_process_traffic_persists_scoped_records_without_losing_user_totals()
+    {
+        using var harness = new PanelMutationHarness();
+        var trojanRuntimeKey = RuntimeUserKeys.Create("trojan", "in-a", "shared-user");
+        var vlessRuntimeKey = RuntimeUserKeys.Create("vless", "in-b", "shared-user");
+
+        await harness.MutationService.SaveNodeAsync(
+            "node-a",
+            new UpsertNodeRequest
+            {
+                DisplayName = "Node A",
+                TrafficMultiplier = 2.0m,
+                Config = new NodeServiceConfig()
+            },
+            CancellationToken.None);
+
+        var service = new NetworkAccountingService(
+            harness.DatabaseService,
+            harness.MutationService,
+            NullLogger<NetworkAccountingService>.Instance);
+
+        service.EnqueueTrafficDelta(
+            "node-a",
+            [
+                new UserTrafficDelta
+                {
+                    RuntimeKey = trojanRuntimeKey,
+                    Protocol = "trojan",
+                    InboundTag = "in-a",
+                    UserId = "shared-user",
+                    UploadBytes = 100,
+                    DownloadBytes = 20
+                },
+                new UserTrafficDelta
+                {
+                    RuntimeKey = trojanRuntimeKey,
+                    Protocol = "trojan",
+                    InboundTag = "in-a",
+                    UserId = "shared-user",
+                    UploadBytes = 25,
+                    DownloadBytes = 5
+                },
+                new UserTrafficDelta
+                {
+                    RuntimeKey = vlessRuntimeKey,
+                    Protocol = "vless",
+                    InboundTag = "in-b",
+                    UserId = "shared-user",
+                    UploadBytes = 40,
+                    DownloadBytes = 10
+                }
+            ]);
+
+        await InvokeProcessTrafficAsync(service);
+
+        var traffic = await harness.DatabaseService.FSql.Select<TrafficRecordEntity>()
+            .Where(item => item.UserId == "shared-user")
+            .FirstAsync(CancellationToken.None);
+        var scopedTraffic = await harness.DatabaseService.FSql.Select<ScopedTrafficRecordEntity>()
+            .Where(item => item.UserId == "shared-user")
+            .OrderBy(item => item.Protocol)
+            .ToListAsync(CancellationToken.None);
+
+        Assert.NotNull(traffic);
+        Assert.Equal(330L, traffic!.UploadBytes);
+        Assert.Equal(70L, traffic.DownloadBytes);
+        Assert.Collection(
+            scopedTraffic,
+            item =>
+            {
+                Assert.Equal("trojan", item.Protocol);
+                Assert.Equal("in-a", item.InboundTag);
+                Assert.Equal("shared-user", item.UserId);
+                Assert.Equal(250L, item.UploadBytes);
+                Assert.Equal(50L, item.DownloadBytes);
+            },
+            item =>
+            {
+                Assert.Equal("vless", item.Protocol);
+                Assert.Equal("in-b", item.InboundTag);
+                Assert.Equal("shared-user", item.UserId);
+                Assert.Equal(80L, item.UploadBytes);
+                Assert.Equal(20L, item.DownloadBytes);
+            });
+    }
+
+    [Fact]
+    public async Task BuildStateViewAsync_exposes_persisted_scoped_traffic_records_by_user()
+    {
+        using var harness = new PanelMutationHarness();
+
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(Array.Empty<string>()),
+            CancellationToken.None);
+
+        await harness.MutationService.SaveUserAsync(
+            "user-b",
+            CreateUserRequest(Array.Empty<string>()) with
+            {
+                DisplayName = "User B",
+                SubscriptionToken = "sub-token-b",
+                TrojanPassword = "trojan-password-b"
+            },
+            CancellationToken.None);
+
+        await harness.DatabaseService.FSql.InsertOrUpdate<ScopedTrafficRecordEntity>()
+            .SetSource(
+                new ScopedTrafficRecordEntity
+                {
+                    UserId = "user-a",
+                    Protocol = "vless",
+                    InboundTag = "in-b",
+                    UploadBytes = 20,
+                    DownloadBytes = 10
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        await harness.DatabaseService.FSql.InsertOrUpdate<ScopedTrafficRecordEntity>()
+            .SetSource(
+                new ScopedTrafficRecordEntity
+                {
+                    UserId = "user-a",
+                    Protocol = "trojan",
+                    InboundTag = "in-a",
+                    UploadBytes = 50,
+                    DownloadBytes = 5
+                })
+            .ExecuteAffrowsAsync(CancellationToken.None);
+
+        var view = await harness.CreateQueryService().BuildStateViewAsync(CancellationToken.None);
+
+        Assert.True(view.ScopedTrafficRecordsByUser.ContainsKey("user-a"));
+        Assert.True(view.ScopedTrafficRecordsByUser.ContainsKey("user-b"));
+        Assert.Collection(
+            view.ScopedTrafficRecordsByUser["user-a"],
+            item =>
+            {
+                Assert.Equal("trojan", item.Protocol);
+                Assert.Equal("in-a", item.InboundTag);
+                Assert.Equal(RuntimeUserKeys.Create("trojan", "in-a", "user-a"), item.RuntimeKey);
+                Assert.Equal(50L, item.UploadBytes);
+                Assert.Equal(5L, item.DownloadBytes);
+            },
+            item =>
+            {
+                Assert.Equal("vless", item.Protocol);
+                Assert.Equal("in-b", item.InboundTag);
+                Assert.Equal(RuntimeUserKeys.Create("vless", "in-b", "user-a"), item.RuntimeKey);
+                Assert.Equal(20L, item.UploadBytes);
+                Assert.Equal(10L, item.DownloadBytes);
+            });
+        Assert.Empty(view.ScopedTrafficRecordsByUser["user-b"]);
     }
 
     [Fact]
@@ -808,6 +1013,17 @@ public sealed class PanelMutationServiceTests
                 TransferEnableBytes = 1024
             }
         };
+
+    private static async Task InvokeProcessTrafficAsync(NetworkAccountingService service)
+    {
+        var method = typeof(NetworkAccountingService).GetMethod("ProcessTrafficAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var task = method!.Invoke(service, [CancellationToken.None]) as Task;
+        Assert.NotNull(task);
+
+        await task!;
+    }
 
     private static byte[] CreateTestCertificatePfx(
         string commonName,

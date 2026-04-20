@@ -5,6 +5,8 @@ public interface IInboundProtocolRuntimePlan
     string Protocol { get; }
 
     bool RequiresCertificate { get; }
+
+    bool RequiresReality { get; }
 }
 
 public sealed record InboundRuntimePlanCollection
@@ -15,6 +17,8 @@ public sealed record InboundRuntimePlanCollection
         = new Dictionary<string, IInboundProtocolRuntimePlan>(StringComparer.OrdinalIgnoreCase);
 
     public bool RequiresCertificate => Plans.Values.Any(static plan => plan.RequiresCertificate);
+
+    public bool RequiresReality => Plans.Values.Any(static plan => plan.RequiresReality);
 
     public bool TryGet(string? protocol, out IInboundProtocolRuntimePlan plan)
     {

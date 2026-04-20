@@ -5,6 +5,8 @@ namespace NodePanel.Core.Runtime;
 
 public static class TrojanFallbackCompatibility
 {
+    private const int LinuxUnixDomainSocketPathLength = 108;
+
     public const string DefaultNetworkType = "tcp";
     public const string ServeNetworkType = "serve";
     public const string ServeWsNoneDestination = "serve-ws-none";
@@ -98,31 +100,56 @@ public static class TrojanFallbackCompatibility
 
     public static EndPoint CreateUnixEndPoint(string destination)
     {
+        return new UnixDomainSocketEndPoint(
+            NormalizeUnixSocketPath(
+                destination,
+                OperatingSystem.IsLinux() || OperatingSystem.IsAndroid()));
+    }
+
+    internal static string NormalizeUnixSocketPath(string destination, bool linuxLikePlatform)
+    {
         if (string.IsNullOrWhiteSpace(destination))
         {
             throw new InvalidDataException("Trojan fallback destination is empty.");
         }
 
         var trimmed = destination.Trim();
-        if ((OperatingSystem.IsLinux() || OperatingSystem.IsAndroid()) && trimmed.StartsWith("@", StringComparison.Ordinal))
+        if (!linuxLikePlatform || !trimmed.StartsWith("@", StringComparison.Ordinal))
         {
-            var abstractName = trimmed.StartsWith("@@", StringComparison.Ordinal)
-                ? "@" + trimmed[2..]
-                : trimmed[1..];
-
-            if (string.IsNullOrEmpty(abstractName))
-            {
-                throw new InvalidDataException("Trojan fallback abstract UNIX destination is empty.");
-            }
-
-            return new UnixDomainSocketEndPoint("\0" + abstractName);
+            return trimmed;
         }
 
-        return new UnixDomainSocketEndPoint(trimmed);
+        if (trimmed.StartsWith("@@", StringComparison.Ordinal))
+        {
+            return CreatePaddedAbstractUnixSocketPath(trimmed[2..]);
+        }
+
+        var abstractName = trimmed[1..];
+        if (abstractName.Length == 0)
+        {
+            throw new InvalidDataException("Trojan fallback abstract UNIX destination is empty.");
+        }
+
+        return "\0" + abstractName;
     }
 
     private static bool IsUnixDestination(string destination)
         => destination.StartsWith("@", StringComparison.Ordinal) || Path.IsPathRooted(destination);
+
+    private static string CreatePaddedAbstractUnixSocketPath(string abstractName)
+    {
+        if (abstractName.Length == 0)
+        {
+            throw new InvalidDataException("Trojan fallback abstract UNIX destination is empty.");
+        }
+
+        var socketPath = new char[LinuxUnixDomainSocketPathLength];
+        socketPath[0] = '\0';
+        abstractName
+            .AsSpan(0, Math.Min(abstractName.Length, socketPath.Length - 1))
+            .CopyTo(socketPath.AsSpan(1));
+        return new string(socketPath);
+    }
 
     private static bool TryNormalizeTcpDestination(string destination, out string normalized)
     {

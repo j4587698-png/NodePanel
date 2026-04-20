@@ -57,7 +57,7 @@ public sealed class TrojanUdpAssociateRelayTests
 
         var relayTask = Task.Run(async () =>
         {
-            using var accepted = await listener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var accepted = await listener.AcceptTcpClientAsync(cts.Token);
             await using var acceptedStream = accepted.GetStream();
             await relay.RelayAsync(
                 acceptedStream,
@@ -67,14 +67,14 @@ public sealed class TrojanUdpAssociateRelayTests
                     UseCone = true,
                     ConnectionIdleSeconds = 1
                 },
-                cts.Token).ConfigureAwait(false);
+                cts.Token);
         }, cts.Token);
 
         using var client = new TcpClient
         {
             NoDelay = true
         };
-        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token).ConfigureAwait(false);
+        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
         await using var stream = client.GetStream();
 
         var packetWriter = new TrojanUdpPacketWriter();
@@ -87,23 +87,23 @@ public sealed class TrojanUdpAssociateRelayTests
                 DestinationPort = udpPort,
                 Payload = Encoding.ASCII.GetBytes("idle")
             },
-            cts.Token).ConfigureAwait(false);
-        await stream.FlushAsync(cts.Token).ConfigureAwait(false);
+            cts.Token);
+        await stream.FlushAsync(cts.Token);
 
-        var response = await packetReader.ReadAsync(stream, cts.Token).ConfigureAwait(false);
+        var response = await packetReader.ReadAsync(stream, cts.Token);
         Assert.NotNull(response);
         Assert.Equal("idle", Encoding.ASCII.GetString(response!.Payload));
 
         var stopwatch = Stopwatch.StartNew();
-        await relayTask.ConfigureAwait(false);
+        await relayTask;
         stopwatch.Stop();
 
         Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(4));
         var eofBuffer = new byte[1];
-        var eofRead = await stream.ReadAsync(eofBuffer.AsMemory(0, 1), cts.Token).ConfigureAwait(false);
+        var eofRead = await stream.ReadAsync(eofBuffer.AsMemory(0, 1), cts.Token);
         Assert.Equal(0, eofRead);
 
-        await serverTask.ConfigureAwait(false);
+        await serverTask;
     }
 
     private static async Task<UdpAssociateScenarioResult> RunScenarioAsync(bool useCone)
@@ -139,7 +139,7 @@ public sealed class TrojanUdpAssociateRelayTests
 
         var relayTask = Task.Run(async () =>
         {
-            using var accepted = await listener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var accepted = await listener.AcceptTcpClientAsync(cts.Token);
             await using var acceptedStream = accepted.GetStream();
             await relay.RelayAsync(
                 acceptedStream,
@@ -148,14 +148,14 @@ public sealed class TrojanUdpAssociateRelayTests
                 {
                     UseCone = useCone
                 },
-                cts.Token).ConfigureAwait(false);
+                cts.Token);
         }, cts.Token);
 
         using var client = new TcpClient
         {
             NoDelay = true
         };
-        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token).ConfigureAwait(false);
+        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
         await using var stream = client.GetStream();
 
         var packetWriter = new TrojanUdpPacketWriter();
@@ -169,10 +169,10 @@ public sealed class TrojanUdpAssociateRelayTests
                 DestinationPort = udpPort1,
                 Payload = Encoding.ASCII.GetBytes("one")
             },
-            cts.Token).ConfigureAwait(false);
-        await stream.FlushAsync(cts.Token).ConfigureAwait(false);
+            cts.Token);
+        await stream.FlushAsync(cts.Token);
 
-        var firstResponse = await packetReader.ReadAsync(stream, cts.Token).ConfigureAwait(false);
+        var firstResponse = await packetReader.ReadAsync(stream, cts.Token);
 
         await packetWriter.WriteAsync(
             stream,
@@ -182,17 +182,17 @@ public sealed class TrojanUdpAssociateRelayTests
                 DestinationPort = udpPort2,
                 Payload = Encoding.ASCII.GetBytes("two")
             },
-            cts.Token).ConfigureAwait(false);
-        await stream.FlushAsync(cts.Token).ConfigureAwait(false);
+            cts.Token);
+        await stream.FlushAsync(cts.Token);
 
-        var secondResponse = await packetReader.ReadAsync(stream, cts.Token).ConfigureAwait(false);
+        var secondResponse = await packetReader.ReadAsync(stream, cts.Token);
 
         stream.Close();
         client.Close();
 
-        await relayTask.ConfigureAwait(false);
-        var server1 = await server1Task.ConfigureAwait(false);
-        var server2 = await server2Task.ConfigureAwait(false);
+        await relayTask;
+        var server1 = await server1Task;
+        var server2 = await server2Task;
 
         Assert.NotNull(firstResponse);
         Assert.NotNull(secondResponse);
@@ -208,12 +208,12 @@ public sealed class TrojanUdpAssociateRelayTests
     {
         var buffer = new byte[1024];
         EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
-        var received = await socket.ReceiveFromAsync(buffer.AsMemory(0, buffer.Length), SocketFlags.None, remoteEndPoint, cancellationToken).ConfigureAwait(false);
+        var received = await socket.ReceiveFromAsync(buffer.AsMemory(0, buffer.Length), SocketFlags.None, remoteEndPoint, cancellationToken);
         await socket.SendToAsync(
             buffer.AsMemory(0, received.ReceivedBytes),
             SocketFlags.None,
             received.RemoteEndPoint,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
 
         var remote = (IPEndPoint)received.RemoteEndPoint;
         return new UdpEchoObservation(remote.Port);

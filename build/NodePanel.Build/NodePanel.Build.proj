@@ -1,0 +1,52 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <Platform Condition="'$(Platform)' == ''">AnyCPU</Platform>
+    <_NodePanelProjectBuildProperties>Configuration=$(Configuration);Platform=AnyCPU;BuildProjectReferences=false;BuildInParallel=false;UseSharedCompilation=false</_NodePanelProjectBuildProperties>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\core\NodePanel.Core\NodePanel.Core.csproj" />
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\control\NodePanel.ControlPlane\NodePanel.ControlPlane.csproj" />
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\service\NodePanel.Service\NodePanel.Service.csproj" />
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\panel\NodePanel.Panel\NodePanel.Panel.csproj" />
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\tests\NodePanel.Core.Tests\NodePanel.Core.Tests.csproj" />
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\tests\NodePanel.ControlPlane.Tests\NodePanel.ControlPlane.Tests.csproj" />
+    <_NodePanelOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\tests\NodePanel.Service.Tests\NodePanel.Service.Tests.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\tests\NodePanel.Service.Tests\NodePanel.Service.Tests.csproj" />
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\tests\NodePanel.ControlPlane.Tests\NodePanel.ControlPlane.Tests.csproj" />
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\tests\NodePanel.Core.Tests\NodePanel.Core.Tests.csproj" />
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\panel\NodePanel.Panel\NodePanel.Panel.csproj" />
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\service\NodePanel.Service\NodePanel.Service.csproj" />
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\control\NodePanel.ControlPlane\NodePanel.ControlPlane.csproj" />
+    <_NodePanelReverseOrderedProjects Include="$(MSBuildProjectDirectory)\..\..\core\NodePanel.Core\NodePanel.Core.csproj" />
+  </ItemGroup>
+
+  <Target Name="Build" Outputs="@(CollectedBuildOutput)">
+    <MSBuild Projects="@(_NodePanelOrderedProjects)"
+             Properties="$(_NodePanelProjectBuildProperties)"
+             Targets="Build"
+             BuildInParallel="False">
+      <Output TaskParameter="TargetOutputs" ItemName="CollectedBuildOutput" />
+    </MSBuild>
+  </Target>
+
+  <Target Name="Rebuild" Outputs="@(CollectedBuildOutput)">
+    <MSBuild Projects="@(_NodePanelOrderedProjects)"
+             Properties="$(_NodePanelProjectBuildProperties)"
+             Targets="Rebuild"
+             BuildInParallel="False">
+      <Output TaskParameter="TargetOutputs" ItemName="CollectedBuildOutput" />
+    </MSBuild>
+  </Target>
+
+  <Target Name="Clean">
+    <MSBuild Projects="@(_NodePanelReverseOrderedProjects)"
+             Properties="$(_NodePanelProjectBuildProperties)"
+             Targets="Clean"
+             BuildInParallel="False" />
+  </Target>
+</Project>

@@ -28,7 +28,8 @@ public sealed class PanelQueryService
             Plans = Array.Empty<PanelPlanRecord>(),
             Orders = Array.Empty<PanelOrderRecord>(),
             Settings = new Dictionary<string, string>(),
-            TrafficSummaries = new Dictionary<string, PanelUserTrafficSummary>()
+            TrafficSummaries = new Dictionary<string, PanelUserTrafficSummary>(),
+            ScopedTrafficRecordsByUser = new Dictionary<string, IReadOnlyList<PanelScopedTrafficRecord>>()
         };
 
         var nodes = await _db.FSql.Select<NodeEntity>().ToListAsync(cancellationToken);
@@ -36,6 +37,7 @@ public sealed class PanelQueryService
         var plans = await _db.FSql.Select<PlanEntity>().ToListAsync(cancellationToken);
         var orders = await _db.FSql.Select<OrderEntity>().ToListAsync(cancellationToken);
         var records = await _db.FSql.Select<TrafficRecordEntity>().ToListAsync(cancellationToken);
+        var scopedRecords = await _db.FSql.Select<ScopedTrafficRecordEntity>().ToListAsync(cancellationToken);
         var settings = await _db.FSql.Select<SettingEntity>().ToListAsync(cancellationToken);
 
         var stateNodes = nodes.Select(n => n.ToRecord()).ToArray();
@@ -48,10 +50,16 @@ public sealed class PanelQueryService
             Plans = plans.Select(p => p.ToRecord()).ToArray(),
             Orders = orders.Select(o => o.ToRecord()).ToArray(),
             TrafficRecords = records.Select(r => r.ToRecord()).ToArray(),
+            ScopedTrafficRecords = scopedRecords
+                .Select(static record => record.ToRecord())
+                .OrderBy(static record => record.UserId, StringComparer.Ordinal)
+                .ThenBy(static record => record.RuntimeKey, StringComparer.Ordinal)
+                .ToArray(),
             Settings = settings.Select(s => new PanelSettingRecord { Key = s.Key, Value = s.Value }).ToArray()
         };
 
         var runtime = _nodeConnectionRegistry.GetAllRuntime();
+        var scopedTrafficRecordsByUser = BuildScopedTrafficRecordsByUser(state);
 
         return new PanelStateView
         {
@@ -85,7 +93,8 @@ public sealed class PanelQueryService
             TrafficSummaries = state.Users.ToDictionary(
                 static user => user.UserId,
                 user => BuildUserTrafficSummary(user, state, runtime),
-                StringComparer.Ordinal)
+                StringComparer.Ordinal),
+            ScopedTrafficRecordsByUser = scopedTrafficRecordsByUser
         };
     }
 
@@ -103,11 +112,11 @@ public sealed class PanelQueryService
         foreach (var nodeId in targetNodeIds.Distinct(StringComparer.Ordinal))
         {
             if (!runtime.TryGetValue(nodeId, out var snapshot)) continue;
-            var total = snapshot.TrafficTotals.FirstOrDefault(item => string.Equals(item.UserId, user.UserId, StringComparison.Ordinal));
-            if (total is null) continue;
-
-            uploadBytes += total.UploadBytes;
-            downloadBytes += total.DownloadBytes;
+            foreach (var total in snapshot.TrafficTotals.Where(item => string.Equals(item.UserId, user.UserId, StringComparison.Ordinal)))
+            {
+                uploadBytes += total.UploadBytes;
+                downloadBytes += total.DownloadBytes;
+            }
         }
 
         return new PanelUserTrafficSummary
@@ -126,6 +135,23 @@ public sealed class PanelQueryService
 
         var stateView = await BuildStateViewAsync(cancellationToken);
         return stateView.TrafficSummaries.GetValueOrDefault(userId);
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<PanelScopedTrafficRecord>> BuildScopedTrafficRecordsByUser(PanelState state)
+    {
+        var scopedRecordsByUser = state.ScopedTrafficRecords
+            .GroupBy(static record => record.UserId, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => (IReadOnlyList<PanelScopedTrafficRecord>)group
+                    .OrderBy(static record => record.RuntimeKey, StringComparer.Ordinal)
+                    .ToArray(),
+                StringComparer.Ordinal);
+
+        return state.Users.ToDictionary(
+            static user => user.UserId,
+            user => scopedRecordsByUser.GetValueOrDefault(user.UserId) ?? Array.Empty<PanelScopedTrafficRecord>(),
+            StringComparer.Ordinal);
     }
 
     public Task<IReadOnlyDictionary<string, string>> GetSettingsAsync(CancellationToken cancellationToken = default)

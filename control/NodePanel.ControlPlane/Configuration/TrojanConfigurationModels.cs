@@ -2,7 +2,7 @@ using NodePanel.Core.Runtime;
 
 namespace NodePanel.ControlPlane.Configuration;
 
-public sealed record TrojanInboundLimits : ITrojanInboundLimits
+public sealed record InboundLimitsConfig : IRuntimeInboundLimits
 {
     public long GlobalBytesPerSecond { get; init; }
 
@@ -15,11 +15,21 @@ public sealed record TrojanInboundLimits : ITrojanInboundLimits
     public int DownlinkOnlySeconds { get; init; } = 1;
 }
 
-public sealed record TrojanUserConfig : ITrojanUserDefinition, IVlessUserDefinition, IVmessUserDefinition
+public sealed record TrojanUserConfig : ITrojanUserDefinition, IShadowsocksUserDefinition, IVlessUserDefinition, IVmessUserDefinition
 {
     public string UserId { get; init; } = string.Empty;
 
+    public int Level { get; init; }
+
     public string Uuid { get; init; } = string.Empty;
+
+    public string Flow { get; init; } = string.Empty;
+
+    public string ReverseTag { get; init; } = string.Empty;
+
+    public IReadOnlyList<uint> TestSeed { get; init; } = Array.Empty<uint>();
+
+    public string Cipher { get; init; } = string.Empty;
 
     public string Password { get; init; } = string.Empty;
 

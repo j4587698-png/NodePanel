@@ -79,22 +79,41 @@ internal sealed class VmessHandshakeDrainer
             ? behaviorSeed
             : fallbackSeed;
 
+    internal static ulong AccumulateBehaviorSeed(ulong currentBehaviorSeed, VmessUser user)
+        => TryAccumulateBehaviorSeed(currentBehaviorSeed, user, out var nextBehaviorSeed)
+            ? nextBehaviorSeed
+            : currentBehaviorSeed;
+
+    internal static bool TryAccumulateBehaviorSeed(ulong currentBehaviorSeed, VmessUser user, out ulong nextBehaviorSeed)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+
+        Span<byte> userBytes = stackalloc byte[16];
+        if (!ProtocolUuid.TryWriteBytes(user.Uuid, userBytes))
+        {
+            nextBehaviorSeed = currentBehaviorSeed;
+            return false;
+        }
+
+        var hash = HMACSHA256.HashData(BehaviorSeedKey, userBytes);
+        nextBehaviorSeed = Crc64Ecma.Update(currentBehaviorSeed, hash);
+        return true;
+    }
+
     internal static bool TryComputeBehaviorSeed(IReadOnlyList<VmessUser> users, out ulong behaviorSeed)
     {
         behaviorSeed = 0;
         var hasSeedInput = false;
-        Span<byte> userBytes = stackalloc byte[16];
 
         for (var index = 0; index < users.Count; index++)
         {
-            if (!ProtocolUuid.TryWriteBytes(users[index].Uuid, userBytes))
+            if (!TryAccumulateBehaviorSeed(behaviorSeed, users[index], out var nextBehaviorSeed))
             {
                 continue;
             }
 
             hasSeedInput = true;
-            var hash = HMACSHA256.HashData(BehaviorSeedKey, userBytes);
-            behaviorSeed = Crc64Ecma.Update(behaviorSeed, hash);
+            behaviorSeed = nextBehaviorSeed;
         }
 
         return hasSeedInput && behaviorSeed != 0;

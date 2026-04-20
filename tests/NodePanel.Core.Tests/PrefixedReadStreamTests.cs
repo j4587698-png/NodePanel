@@ -105,9 +105,9 @@ public sealed class PrefixedReadStreamTests
 
         public override async ValueTask DisposeAsync()
         {
-            await _readStream.DisposeAsync().ConfigureAwait(false);
-            await _writeStream.DisposeAsync().ConfigureAwait(false);
-            await base.DisposeAsync().ConfigureAwait(false);
+            await _readStream.DisposeAsync();
+            await _writeStream.DisposeAsync();
+            await base.DisposeAsync();
         }
     }
 }

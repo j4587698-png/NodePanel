@@ -146,6 +146,10 @@ load_saved_package_defaults() {
         "$(np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_RID")")"
 }
 
+read_installed_package_version() {
+    np_read_key_value_file_value "$ENV_FILE" "NODEPANEL_PACKAGE_VERSION"
+}
+
 load_package_info_defaults() {
     local source_root="$1"
     local package_info_path="${source_root}/PACKAGE_INFO"
@@ -302,6 +306,28 @@ install_or_update() {
     parse_package_arguments "$operation_name" "$@"
     load_saved_package_defaults
 
+    local installed_package_version
+    installed_package_version="$(read_installed_package_version)"
+
+    if [[ "$operation_name" == "update" && ! ( -z "$PACKAGE_SOURCE_ARG" && -d "$SCRIPT_DIR/app" ) ]]; then
+        local resolved_target
+        if resolved_target="$(np_resolve_github_release_target "$PACKAGE_SOURCE_ARG" "$PACKAGE_GITHUB_REPO" "$PACKAGE_GITHUB_TAG" "$SAVED_PACKAGE_GITHUB_REPO")"; then
+            local resolved_target_repo
+            local resolved_target_tag
+            local resolved_target_version
+            resolved_target_repo="$(printf '%s\n' "$resolved_target" | sed -n '1p')"
+            resolved_target_tag="$(printf '%s\n' "$resolved_target" | sed -n '2p')"
+            resolved_target_version="$(printf '%s\n' "$resolved_target" | sed -n '3p')"
+
+            if np_should_skip_update_version "$DISPLAY_NAME" "$operation_name" "$installed_package_version" "$resolved_target_version"; then
+                return 0
+            fi
+
+            PACKAGE_GITHUB_REPO="$(np_first_non_empty "$PACKAGE_GITHUB_REPO" "$resolved_target_repo")"
+            PACKAGE_GITHUB_TAG="$(np_first_non_empty "$resolved_target_tag" "$PACKAGE_GITHUB_TAG")"
+        fi
+    fi
+
     local temp_root
     temp_root="$(mktemp -d)"
     trap 'temp_root_path="${temp_root:-}"; if [[ -n "$temp_root_path" ]]; then rm -rf -- "$temp_root_path"; fi' EXIT
@@ -309,6 +335,10 @@ install_or_update() {
     local source_root
     source_root="$(np_prepare_source_dir "$SCRIPT_DIR" "$PACKAGE_SOURCE_ARG" "$temp_root" "$PACKAGE_PREFIX" "$SAVED_PACKAGE_GITHUB_REPO" "$PACKAGE_GITHUB_TAG" "$SAVED_PACKAGE_RID")"
     load_package_info_defaults "$source_root"
+
+    if np_should_skip_update_version "$DISPLAY_NAME" "$operation_name" "$installed_package_version" "$PACKAGE_VERSION"; then
+        return 0
+    fi
 
     local source_app_dir="${source_root}/app"
     local staged_app_dir="${temp_root}/staged-app"

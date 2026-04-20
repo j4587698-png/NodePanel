@@ -152,6 +152,8 @@ public sealed class NodeFormInput
 
     public List<RoutingRuleFormInput> RoutingRules { get; set; } = [];
 
+    public RoutingResourceFormInput RoutingResources { get; set; } = new();
+
     public string AdvancedConfigJson { get; set; } = string.Empty;
 
     public void PrepareForEditView()
@@ -253,7 +255,8 @@ public sealed class NodeFormInput
                     WorkingDirectory = NodeFormValueCodec.TrimOrEmpty(CertificateWorkingDirectory),
                     EnvironmentVariables = environmentVariables
                 },
-                Limits = new TrojanInboundLimits
+                RoutingResources = RoutingResources.ToConfig(),
+                Limits = new InboundLimitsConfig
                 {
                     GlobalBytesPerSecond = GlobalBytesPerSecond,
                     ConnectTimeoutSeconds = ConnectTimeoutSeconds,
@@ -351,10 +354,11 @@ public sealed class NodeFormInput
             TelemetryFlushIntervalSeconds = Math.Clamp(record.Config.Telemetry.FlushIntervalSeconds, 1, 3600),
             Dns = DnsFormInput.FromConfig(record.Config.Dns),
             Outbounds = record.Config.Outbounds
-                .Where(static outbound => !IsAdvancedOnlyOutbound(outbound))
+                .Where(static outbound => !DashboardOutboundPolicies.IsAdvancedOnly(outbound))
                 .Select(OutboundFormInput.FromConfig)
                 .ToList(),
             RoutingRules = record.Config.RoutingRules.Select(RoutingRuleFormInput.FromConfig).ToList(),
+            RoutingResources = RoutingResourceFormInput.FromConfig(record.Config.RoutingResources),
             AdvancedConfigJson = NodeAdvancedConfigInput.Serialize(NodeAdvancedConfigInput.FromConfig(record.Protocol, record.Config))
         };
     }
@@ -379,6 +383,7 @@ public sealed class NodeFormInput
         Dns.Servers ??= [];
         Outbounds ??= [];
         RoutingRules ??= [];
+        RoutingResources ??= new RoutingResourceFormInput();
         Inbounds ??= [];
 
         foreach (var inbound in Inbounds)
@@ -536,10 +541,13 @@ public sealed class NodeFormInput
             Dns = HasConfiguredDns(config.Dns) || advancedConfig.Dns is null
                 ? config.Dns
                 : advancedConfig.Dns,
-            LocalInbounds = config.LocalInbounds.Count > 0
-                ? config.LocalInbounds
-                : advancedConfig.LocalInbounds ?? Array.Empty<LocalInboundConfig>(),
+            ProxyInbounds = config.ProxyInbounds.Count > 0
+                ? config.ProxyInbounds
+                : advancedConfig.ProxyInbounds ?? Array.Empty<ProxyInboundConfig>(),
             Outbounds = MergeAdvancedOutbounds(config.Outbounds, advancedConfig.Outbounds),
+            RoutingResources = RoutingResourceFormInput.HasConfiguredValues(config.RoutingResources) || advancedConfig.RoutingResources is null
+                ? config.RoutingResources
+                : advancedConfig.RoutingResources,
             RoutingRules = config.RoutingRules.Count > 0
                 ? config.RoutingRules
                 : advancedConfig.RoutingRules ?? Array.Empty<RoutingRuleConfig>()
@@ -652,12 +660,21 @@ public sealed class NodeFormInput
     private static string NormalizeInboundProtocol(string? value)
         => InboundProtocols.Normalize(value);
 
-    private static bool IsAdvancedOnlyOutbound(OutboundConfig outbound)
+}
+
+internal static class DashboardOutboundPolicies
+{
+    public static bool IsAdvancedOnly(OutboundConfig outbound)
         => OutboundProtocols.Normalize(outbound.Protocol) is
             OutboundProtocols.Selector or
             OutboundProtocols.UrlTest or
             OutboundProtocols.Fallback or
-            OutboundProtocols.LoadBalance;
+            OutboundProtocols.LoadBalance ||
+           (string.Equals(
+                OutboundProtocols.Normalize(outbound.Protocol),
+                OutboundProtocols.Vless,
+                StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(outbound.ReverseTag));
 }
 
 public sealed record NodeAdvancedConfigInput
@@ -676,9 +693,11 @@ public sealed record NodeAdvancedConfigInput
 
     public IReadOnlyList<AdvancedInboundConfigInput>? Inbounds { get; init; }
 
-    public IReadOnlyList<LocalInboundConfig>? LocalInbounds { get; init; }
+    public IReadOnlyList<ProxyInboundConfig>? ProxyInbounds { get; init; }
 
     public IReadOnlyList<OutboundConfig>? Outbounds { get; init; }
+
+    public RoutingResourceOptions? RoutingResources { get; init; }
 
     public IReadOnlyList<RoutingRuleConfig>? RoutingRules { get; init; }
 
@@ -734,8 +753,9 @@ public sealed record NodeAdvancedConfigInput
             Limits = null,
             Dns = null,
             Inbounds = null,
-            LocalInbounds = config.LocalInbounds.Count > 0 ? config.LocalInbounds : null,
+            ProxyInbounds = config.ProxyInbounds.Count > 0 ? config.ProxyInbounds : null,
             Outbounds = CreateAdvancedOutbounds(config.Outbounds),
+            RoutingResources = null,
             RoutingRules = null
         };
     }
@@ -745,8 +765,9 @@ public sealed record NodeAdvancedConfigInput
            Limits is null &&
            Dns is null &&
            (Inbounds is null || Inbounds.Count == 0) &&
-           (LocalInbounds is null || LocalInbounds.Count == 0) &&
+           (ProxyInbounds is null || ProxyInbounds.Count == 0) &&
            (Outbounds is null || Outbounds.Count == 0) &&
+           !RoutingResourceFormInput.HasConfiguredValues(RoutingResources) &&
            (RoutingRules is null || RoutingRules.Count == 0);
 
     private static AdvancedInboundConfigInput? CreateAdvancedInbound(InboundConfig inbound)
@@ -778,11 +799,7 @@ public sealed record NodeAdvancedConfigInput
     }
 
     private static bool RequiresAdvancedOutbound(OutboundConfig outbound)
-        => OutboundProtocols.Normalize(outbound.Protocol) is
-            OutboundProtocols.Selector or
-            OutboundProtocols.UrlTest or
-            OutboundProtocols.Fallback or
-            OutboundProtocols.LoadBalance;
+        => DashboardOutboundPolicies.IsAdvancedOnly(outbound);
 
     private static bool TryNormalizeInbounds(
         IReadOnlyList<AdvancedInboundConfigInput>? inbounds,
@@ -835,7 +852,7 @@ public sealed record NodeAdvancedConfigInput
            options.AllowedJa3.Count > 0 ||
            options.BlockedJa3.Count > 0;
 
-    private static bool HasAdvancedLimits(TrojanInboundLimits options)
+    private static bool HasAdvancedLimits(InboundLimitsConfig options)
         => options.ConnectionIdleSeconds != 300 ||
            options.UplinkOnlySeconds != 1 ||
            options.DownlinkOnlySeconds != 1;

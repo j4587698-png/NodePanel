@@ -5,23 +5,43 @@ namespace NodePanel.Core.Runtime;
 public sealed class VlessUdpRelay
 {
     private readonly IDispatcher _dispatcher;
-    private readonly RateLimiterRegistry _rateLimiterRegistry;
-    private readonly TrafficRegistry _trafficRegistry;
+    private readonly IRuntimeSniffer _runtimeSniffer;
+    private readonly IRuntimeRateLimiterRegistry _rateLimiterRegistry;
+    private readonly IRuntimeTrafficRegistry _trafficRegistry;
     private readonly VlessUdpPacketReader _udpPacketReader;
     private readonly VlessUdpPacketWriter _udpPacketWriter;
 
     public VlessUdpRelay(
         IDispatcher dispatcher,
-        RateLimiterRegistry rateLimiterRegistry,
-        TrafficRegistry trafficRegistry,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
         VlessUdpPacketReader udpPacketReader,
-        VlessUdpPacketWriter udpPacketWriter)
+        VlessUdpPacketWriter udpPacketWriter,
+        IFakeDnsEngine? fakeDnsEngine = null)
+        : this(
+            dispatcher,
+            rateLimiterRegistry,
+            trafficRegistry,
+            udpPacketReader,
+            udpPacketWriter,
+            new DefaultRuntimeSniffer(fakeDnsEngine))
+    {
+    }
+
+    internal VlessUdpRelay(
+        IDispatcher dispatcher,
+        IRuntimeRateLimiterRegistry rateLimiterRegistry,
+        IRuntimeTrafficRegistry trafficRegistry,
+        VlessUdpPacketReader udpPacketReader,
+        VlessUdpPacketWriter udpPacketWriter,
+        IRuntimeSniffer runtimeSniffer)
     {
         _dispatcher = dispatcher;
         _rateLimiterRegistry = rateLimiterRegistry;
         _trafficRegistry = trafficRegistry;
         _udpPacketReader = udpPacketReader;
         _udpPacketWriter = udpPacketWriter;
+        _runtimeSniffer = runtimeSniffer;
     }
 
     internal async Task RelayAsync(
@@ -41,21 +61,18 @@ public sealed class VlessUdpRelay
 
         var userGate = _rateLimiterRegistry.GetUserGate(user);
         var globalGate = _rateLimiterRegistry.GlobalGate;
-        var dispatchContext = VlessDispatchContextFactory.Create(user, options);
         var destination = new DispatchDestination
         {
             Host = request.TargetHost,
             Port = request.TargetPort,
             Network = DispatchNetwork.Udp
         };
-        dispatchContext = dispatchContext with
-        {
-            OriginalDestinationHost = request.TargetHost,
-            OriginalDestinationPort = request.TargetPort
-        };
+        var dispatchContext = DispatchContextTargeting.SetOriginalAndTarget(
+            VlessDispatchContextFactory.Create(user, options, request.VlessRoutePort),
+            destination);
 
         byte[]? firstPacket = null;
-        if (options.Sniffing.Enabled && !options.Sniffing.MetadataOnly)
+        if (options.Sniffing.Enabled)
         {
             firstPacket = await _udpPacketReader.ReadAsync(stream, linkedCts.Token).ConfigureAwait(false);
             if (firstPacket is null)
@@ -64,41 +81,37 @@ public sealed class VlessUdpRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
-            await globalGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
-
-            var sniffing = TrojanSniffingEvaluator.Evaluate(
-                options.Sniffing,
-                firstPacket,
-                DispatchNetwork.Udp,
-                destination);
-
-            dispatchContext = dispatchContext with
-            {
-                DetectedProtocol = sniffing.Protocol,
-                DetectedDomain = sniffing.Domain
-            };
-
-            if (sniffing.OverrideDestination is not null)
-            {
-                destination = sniffing.OverrideDestination with
-                {
-                    Network = DispatchNetwork.Udp
-                };
-            }
         }
 
-        await using var udpTransport = await _dispatcher.DispatchUdpAsync(
+        var dispatchResult = await RuntimeUdpDispatchPipeline.DispatchAsync(
+            _dispatcher,
+            _runtimeSniffer,
+            options.Sniffing,
+            firstPacket ?? Array.Empty<byte>(),
             dispatchContext,
+            destination,
             linkedCts.Token).ConfigureAwait(false);
+        destination = dispatchResult.Destination;
+
+        await using var udpTransport = dispatchResult.Transport;
+        var handleFlowLocally = !RuntimeUdpTransportClassifier.IsFlowControlled(udpTransport);
         await VlessHandshakeReader.WriteResponseAsync(stream, request.Version, linkedCts.Token).ConfigureAwait(false);
         activityTimer.Update();
 
         if (firstPacket is not null)
         {
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
+                await globalGate.WaitAsync(firstPacket.Length, linkedCts.Token).ConfigureAwait(false);
+            }
+
             await udpTransport.SendAsync(destination, firstPacket, linkedCts.Token).ConfigureAwait(false);
             activityTimer.Update();
-            _trafficRegistry.RecordUpload(user.UserId, firstPacket.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordUpload(user, firstPacket.Length);
+            }
         }
 
         var requestTask = RunRequestLoopAsync(
@@ -108,6 +121,7 @@ public sealed class VlessUdpRelay
             user,
             userGate,
             globalGate,
+            handleFlowLocally,
             activityTimer,
             linkedCts.Token);
 
@@ -117,6 +131,7 @@ public sealed class VlessUdpRelay
             user,
             userGate,
             globalGate,
+            handleFlowLocally,
             writeLock,
             activityTimer,
             linkedCts.Token);
@@ -143,6 +158,7 @@ public sealed class VlessUdpRelay
         VlessUser user,
         ByteRateGate userGate,
         ByteRateGate globalGate,
+        bool handleFlowLocally,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
     {
@@ -155,12 +171,18 @@ public sealed class VlessUdpRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(payload.Length, cancellationToken).ConfigureAwait(false);
-            await globalGate.WaitAsync(payload.Length, cancellationToken).ConfigureAwait(false);
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(payload.Length, cancellationToken).ConfigureAwait(false);
+                await globalGate.WaitAsync(payload.Length, cancellationToken).ConfigureAwait(false);
+            }
             await udpTransport.SendAsync(destination, payload, cancellationToken).ConfigureAwait(false);
 
             activityTimer.Update();
-            _trafficRegistry.RecordUpload(user.UserId, payload.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordUpload(user, payload.Length);
+            }
         }
     }
 
@@ -170,6 +192,7 @@ public sealed class VlessUdpRelay
         VlessUser user,
         ByteRateGate userGate,
         ByteRateGate globalGate,
+        bool handleFlowLocally,
         SemaphoreSlim writeLock,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
@@ -183,13 +206,17 @@ public sealed class VlessUdpRelay
             }
 
             activityTimer.Update();
-            await userGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
-            await globalGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+            if (handleFlowLocally)
+            {
+                await userGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+                await globalGate.WaitAsync(datagram.Payload.Length, cancellationToken).ConfigureAwait(false);
+            }
 
             await WritePacketAsync(
                 stream,
                 user,
                 datagram.Payload,
+                handleFlowLocally,
                 writeLock,
                 activityTimer,
                 cancellationToken).ConfigureAwait(false);
@@ -200,6 +227,7 @@ public sealed class VlessUdpRelay
         Stream stream,
         VlessUser user,
         ReadOnlyMemory<byte> payload,
+        bool handleFlowLocally,
         SemaphoreSlim writeLock,
         ActivityTimer activityTimer,
         CancellationToken cancellationToken)
@@ -209,7 +237,10 @@ public sealed class VlessUdpRelay
         {
             await _udpPacketWriter.WriteAsync(stream, payload, cancellationToken).ConfigureAwait(false);
             activityTimer.Update();
-            _trafficRegistry.RecordDownload(user.UserId, payload.Length);
+            if (handleFlowLocally)
+            {
+                _trafficRegistry.RecordDownload(user, payload.Length);
+            }
         }
         finally
         {

@@ -6,15 +6,19 @@ public sealed record NodeServiceConfig
 {
     public IReadOnlyList<InboundConfig> Inbounds { get; init; } = Array.Empty<InboundConfig>();
 
-    public IReadOnlyList<LocalInboundConfig> LocalInbounds { get; init; } = Array.Empty<LocalInboundConfig>();
+    public IReadOnlyList<ProxyInboundConfig> ProxyInbounds { get; init; } = Array.Empty<ProxyInboundConfig>();
 
     public IReadOnlyList<OutboundConfig> Outbounds { get; init; } = Array.Empty<OutboundConfig>();
 
     public IReadOnlyList<RoutingRuleConfig> RoutingRules { get; init; } = Array.Empty<RoutingRuleConfig>();
 
+    public RoutingResourceOptions RoutingResources { get; init; } = new();
+
     public CertificateOptions Certificate { get; init; } = new();
 
-    public TrojanInboundLimits Limits { get; init; } = new();
+    public InboundLimitsConfig Limits { get; init; } = new();
+
+    public PolicyConfig Policy { get; init; } = new();
 
     public DnsOptions Dns { get; init; } = new();
 
@@ -23,6 +27,15 @@ public sealed record NodeServiceConfig
     public IReadOnlyList<TrojanUserConfig> Users { get; init; } = Array.Empty<TrojanUserConfig>();
 
     public IReadOnlyList<TrojanFallbackConfig> Fallbacks { get; init; } = Array.Empty<TrojanFallbackConfig>();
+}
+
+public sealed record RoutingResourceOptions
+{
+    public string ResourceDirectory { get; init; } = string.Empty;
+
+    public string GeoSitePath { get; init; } = string.Empty;
+
+    public string GeoIpPath { get; init; } = string.Empty;
 }
 
 public sealed record CertificateOptions
@@ -85,7 +98,7 @@ public sealed record DistributedCertificateAsset
     public DateTimeOffset? NotAfter { get; init; }
 }
 
-public sealed record TlsClientHelloPolicyConfig : ITrojanClientHelloPolicyDefinition
+public sealed record TlsClientHelloPolicyConfig : IRuntimeTlsClientHelloPolicyDefinition
 {
     public bool Enabled { get; init; }
 
@@ -105,6 +118,28 @@ public sealed record TlsClientHelloPolicyConfig : ITrojanClientHelloPolicyDefini
 public sealed record TelemetryOptions
 {
     public int FlushIntervalSeconds { get; init; } = 15;
+}
+
+public sealed record PolicyConfig
+{
+    public IReadOnlyDictionary<int, SessionLevelPolicyConfig> Level { get; init; }
+        = new Dictionary<int, SessionLevelPolicyConfig>();
+}
+
+public sealed record SessionLevelPolicyConfig
+{
+    public SessionTimeoutPolicyConfig Timeout { get; init; } = new();
+}
+
+public sealed record SessionTimeoutPolicyConfig
+{
+    public int? Handshake { get; init; }
+
+    public int? ConnectionIdle { get; init; }
+
+    public int? UplinkOnly { get; init; }
+
+    public int? DownlinkOnly { get; init; }
 }
 
 public sealed record DnsOptions

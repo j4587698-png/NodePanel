@@ -10,6 +10,7 @@ internal static class TrojanMuxProtocol
 {
     public const string Host = "v1.mux.cool";
     public const int Port = 9527;
+    public const int XudpPort = 666;
     public const int DefaultConcurrency = 8;
     public const int MaxMetadataLength = 512;
     public const int MaxSessionCountPerConnection = 128;
@@ -27,11 +28,66 @@ internal static class TrojanMuxProtocol
             Network = DispatchNetwork.Tcp
         };
 
+    public static DispatchDestination CreateXudpDestination()
+        => new()
+        {
+            Host = Host,
+            Port = XudpPort,
+            Network = DispatchNetwork.Tcp
+        };
+
     public static byte[] CreateGlobalId(DispatchContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return new byte[8];
+        return XudpGlobalId.Create(context);
     }
+
+    public static TrojanMuxFrameTarget? CreateEndpointTarget(
+        EndPoint? endPoint,
+        DispatchNetwork network)
+    {
+        switch (endPoint)
+        {
+            case IPEndPoint ipEndPoint when ipEndPoint.Port > 0:
+                return new TrojanMuxFrameTarget(
+                    NormalizeIpAddress(ipEndPoint.Address).ToString(),
+                    ipEndPoint.Port,
+                    network);
+            case DnsEndPoint dnsEndPoint when dnsEndPoint.Port > 0 &&
+                                             !string.IsNullOrWhiteSpace(dnsEndPoint.Host):
+                return new TrojanMuxFrameTarget(
+                    dnsEndPoint.Host.Trim(),
+                    dnsEndPoint.Port,
+                    network);
+            default:
+                return null;
+        }
+    }
+
+    public static EndPoint? CreateEndPoint(TrojanMuxFrameTarget? target)
+    {
+        if (target is null ||
+            target.Port <= 0 ||
+            string.IsNullOrWhiteSpace(target.Host))
+        {
+            return null;
+        }
+
+        if (IPAddress.TryParse(target.Host, out var address))
+        {
+            return new IPEndPoint(NormalizeIpAddress(address), target.Port);
+        }
+
+        return new DnsEndPoint(target.Host.Trim(), target.Port);
+    }
+
+    public static IReadOnlyList<IPAddress> CreateAddressList(EndPoint? endPoint)
+        => endPoint is IPEndPoint ipEndPoint
+            ? [NormalizeIpAddress(ipEndPoint.Address)]
+            : Array.Empty<IPAddress>();
+
+    private static IPAddress NormalizeIpAddress(IPAddress address)
+        => address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
 }
 
 internal enum TrojanMuxSessionStatus : byte
@@ -76,6 +132,10 @@ internal sealed record TrojanMuxFrame
     public TrojanMuxFrameOption Option { get; init; } = TrojanMuxFrameOption.None;
 
     public TrojanMuxFrameTarget? Target { get; init; }
+
+    public TrojanMuxFrameTarget? Source { get; init; }
+
+    public TrojanMuxFrameTarget? Local { get; init; }
 
     public byte[] GlobalId { get; init; } = Array.Empty<byte>();
 
@@ -196,6 +256,12 @@ internal static class TrojanMuxAddressCodec
 internal static class TrojanMuxFrameCodec
 {
     public static async ValueTask<TrojanMuxFrame?> ReadAsync(Stream stream, CancellationToken cancellationToken)
+        => await ReadAsync(stream, readSourceAndLocal: false, cancellationToken).ConfigureAwait(false);
+
+    public static async ValueTask<TrojanMuxFrame?> ReadAsync(
+        Stream stream,
+        bool readSourceAndLocal,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
@@ -211,7 +277,7 @@ internal static class TrojanMuxFrameCodec
             var current = await stream.ReadAsync(metaLengthBuffer.AsMemory(read, 2 - read), cancellationToken).ConfigureAwait(false);
             if (current == 0)
             {
-                throw new EndOfStreamException("Unexpected end of stream while reading trojan mux metadata length.");
+                throw new EndOfStreamException("Unexpected end of stream while reading mux metadata length.");
             }
 
             read += current;
@@ -220,7 +286,7 @@ internal static class TrojanMuxFrameCodec
         var metaLength = BinaryPrimitives.ReadUInt16BigEndian(metaLengthBuffer);
         if (metaLength is < 4 or > TrojanMuxProtocol.MaxMetadataLength)
         {
-            throw new InvalidDataException($"Invalid trojan mux metadata length: {metaLength}.");
+            throw new InvalidDataException($"Invalid mux metadata length: {metaLength}.");
         }
 
         var metadata = new byte[metaLength];
@@ -233,6 +299,8 @@ internal static class TrojanMuxFrameCodec
         var option = (TrojanMuxFrameOption)metadata[offset++];
 
         TrojanMuxFrameTarget? target = null;
+        TrojanMuxFrameTarget? source = null;
+        TrojanMuxFrameTarget? local = null;
         var globalId = Array.Empty<byte>();
 
         if (status == TrojanMuxSessionStatus.New ||
@@ -244,19 +312,33 @@ internal static class TrojanMuxFrameCodec
             {
                 (byte)TrojanMuxTargetNetwork.Tcp => DispatchNetwork.Tcp,
                 (byte)TrojanMuxTargetNetwork.Udp => DispatchNetwork.Udp,
-                var value => throw new InvalidDataException($"Unsupported trojan mux target network: {value}.")
+            var value => throw new InvalidDataException($"Unsupported mux target network: {value}.")
             };
 
             var parsed = TrojanMuxAddressCodec.ReadAddressPort(metadata.AsSpan(offset));
             offset += parsed.Consumed;
             target = new TrojanMuxFrameTarget(parsed.Host, parsed.Port, network);
 
-            if (status == TrojanMuxSessionStatus.New &&
-                network == DispatchNetwork.Udp &&
-                option.HasFlag(TrojanMuxFrameOption.Data) &&
-                metadata.Length - offset >= 8)
+            if (status == TrojanMuxSessionStatus.New)
             {
-                globalId = metadata.AsSpan(offset, 8).ToArray();
+                var remaining = metadata.AsSpan(offset);
+                if (readSourceAndLocal &&
+                    TryReadOptionalEndpoint(remaining, out source, out var sourceConsumed))
+                {
+                    offset += sourceConsumed;
+                    remaining = metadata.AsSpan(offset);
+                    if (TryReadOptionalEndpoint(remaining, out local, out var localConsumed))
+                    {
+                        offset += localConsumed;
+                    }
+                }
+                else if (!readSourceAndLocal &&
+                         network == DispatchNetwork.Udp &&
+                         option.HasFlag(TrojanMuxFrameOption.Data) &&
+                         metadata.Length - offset >= 8)
+                {
+                    globalId = metadata.AsSpan(offset, 8).ToArray();
+                }
             }
         }
 
@@ -277,6 +359,8 @@ internal static class TrojanMuxFrameCodec
             Status = status,
             Option = option,
             Target = target,
+            Source = source,
+            Local = local,
             GlobalId = globalId,
             Payload = payload
         };
@@ -313,7 +397,15 @@ internal static class TrojanMuxFrameCodec
         {
             ArgumentNullException.ThrowIfNull(frame.Target);
             metaLength += 1 + TrojanMuxAddressCodec.GetSerializedLength(frame.Target.Host);
-            if (frame.Target.Network == DispatchNetwork.Udp && hasData)
+            if (frame.Source is not null)
+            {
+                metaLength += 1 + TrojanMuxAddressCodec.GetSerializedLength(frame.Source.Host);
+                if (frame.Local is not null)
+                {
+                    metaLength += 1 + TrojanMuxAddressCodec.GetSerializedLength(frame.Local.Host);
+                }
+            }
+            else if (frame.Target.Network == DispatchNetwork.Udp && hasData)
             {
                 metaLength += 8;
             }
@@ -337,7 +429,15 @@ internal static class TrojanMuxFrameCodec
         if (frame.Status == TrojanMuxSessionStatus.New)
         {
             offset += WriteTarget(buffer.AsSpan(offset), frame.Target!);
-            if (frame.Target!.Network == DispatchNetwork.Udp && hasData)
+            if (frame.Source is not null)
+            {
+                offset += WriteTarget(buffer.AsSpan(offset), frame.Source);
+                if (frame.Local is not null)
+                {
+                    offset += WriteTarget(buffer.AsSpan(offset), frame.Local);
+                }
+            }
+            else if (frame.Target!.Network == DispatchNetwork.Udp && hasData)
             {
                 var globalId = frame.GlobalId.Length == 8 ? frame.GlobalId : new byte[8];
                 globalId.CopyTo(buffer.AsSpan(offset, 8));
@@ -364,20 +464,86 @@ internal static class TrojanMuxFrameCodec
 
         return 1 + TrojanMuxAddressCodec.WriteAddressPort(destination[1..], target.Host, target.Port);
     }
+
+    private static bool TryReadOptionalEndpoint(
+        ReadOnlySpan<byte> source,
+        out TrojanMuxFrameTarget? endpoint,
+        out int consumed)
+    {
+        endpoint = null;
+        consumed = 0;
+        if (source.Length == 0)
+        {
+            return false;
+        }
+
+        var network = source[0] switch
+        {
+            (byte)TrojanMuxTargetNetwork.Tcp => DispatchNetwork.Tcp,
+            (byte)TrojanMuxTargetNetwork.Udp => DispatchNetwork.Udp,
+            _ => default
+        };
+
+        if (network == default)
+        {
+            return false;
+        }
+
+        var parsed = TrojanMuxAddressCodec.ReadAddressPort(source[1..]);
+        endpoint = new TrojanMuxFrameTarget(parsed.Host, parsed.Port, network);
+        consumed = 1 + parsed.Consumed;
+        return true;
+    }
 }
 
 internal sealed record TrojanMuxSignature(
+    string Protocol,
     string Tag,
     string ServerHost,
     int ServerPort,
     string ServerName,
+    string Fingerprint,
     string Transport,
+    string TransportSecurity,
     string WebSocketPath,
     string WebSocketHeaders,
     int WebSocketEarlyDataBytes,
     int WebSocketHeartbeatPeriodSeconds,
+    string SplitHttpHost,
+    string SplitHttpPath,
+    string SplitHttpHeaders,
+    string SplitHttpMode,
+    bool SplitHttpNoGrpcHeader,
+    RuntimeInt32Range SplitHttpXPaddingBytes,
+    bool SplitHttpXPaddingObfsMode,
+    string SplitHttpXPaddingKey,
+    string SplitHttpXPaddingHeader,
+    string SplitHttpXPaddingPlacement,
+    string SplitHttpXPaddingMethod,
+    string SplitHttpUplinkHttpMethod,
+    string SplitHttpSessionPlacement,
+    string SplitHttpSessionKey,
+    string SplitHttpSeqPlacement,
+    string SplitHttpSeqKey,
+    string SplitHttpUplinkDataPlacement,
+    string SplitHttpUplinkDataKey,
+    RuntimeInt32Range SplitHttpUplinkChunkSize,
+    RuntimeInt32Range SplitHttpScMaxEachPostBytes,
+    RuntimeInt32Range SplitHttpScMinPostsIntervalMs,
+    int SplitHttpScMaxBufferedPosts,
+    string SplitHttpXmux,
+    string SplitHttpDownloadSettings,
     string ApplicationProtocols,
-    string Password,
+    string GrpcServiceName,
+    string GrpcAuthority,
+    bool GrpcMultiMode,
+    string GrpcUserAgent,
+    int GrpcIdleTimeoutSeconds,
+    int GrpcHealthCheckTimeoutSeconds,
+    bool GrpcPermitWithoutStream,
+    int GrpcInitialWindowSize,
+    string RealitySignature,
+    string Credential,
     int ConnectTimeoutSeconds,
     int HandshakeTimeoutSeconds,
     bool SkipCertificateValidation,
@@ -390,20 +556,60 @@ internal sealed record TrojanMuxSignature(
 {
     public static TrojanMuxSignature FromSettings(TrojanOutboundSettings settings)
         => new(
+            OutboundProtocols.Trojan,
             settings.Tag,
             settings.ServerHost,
             settings.ServerPort,
             settings.ServerName,
+            settings.Fingerprint,
             settings.Transport,
+            settings.TransportSecurity,
             settings.WebSocketPath,
             string.Join(
                 "\n",
-                settings.WebSocketHeaders
-                    .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-                    .Select(static pair => pair.Key + "=" + pair.Value)),
+            settings.WebSocketHeaders
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key + "=" + pair.Value)),
             settings.WebSocketEarlyDataBytes,
             settings.WebSocketHeartbeatPeriodSeconds,
+            settings.SplitHttpHost,
+            settings.SplitHttpPath,
+            string.Join(
+                "\n",
+            settings.SplitHttpHeaders
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key + "=" + pair.Value)),
+            settings.SplitHttpMode,
+            settings.SplitHttpNoGrpcHeader,
+            settings.SplitHttpXPaddingBytes,
+            settings.SplitHttpXPaddingObfsMode,
+            settings.SplitHttpXPaddingKey,
+            settings.SplitHttpXPaddingHeader,
+            settings.SplitHttpXPaddingPlacement,
+            settings.SplitHttpXPaddingMethod,
+            settings.SplitHttpUplinkHttpMethod,
+            settings.SplitHttpSessionPlacement,
+            settings.SplitHttpSessionKey,
+            settings.SplitHttpSeqPlacement,
+            settings.SplitHttpSeqKey,
+            settings.SplitHttpUplinkDataPlacement,
+            settings.SplitHttpUplinkDataKey,
+            settings.SplitHttpUplinkChunkSize,
+            settings.SplitHttpScMaxEachPostBytes,
+            settings.SplitHttpScMinPostsIntervalMs,
+            settings.SplitHttpScMaxBufferedPosts,
+            SerializeSplitHttpXmux(settings.SplitHttpXmux),
+            SerializeSplitHttpDownloadSettings(settings.SplitHttpDownloadSettings),
             string.Join("\n", settings.ApplicationProtocols),
+            settings.GrpcServiceName,
+            settings.GrpcAuthority,
+            settings.GrpcMultiMode,
+            settings.GrpcUserAgent,
+            settings.GrpcIdleTimeoutSeconds,
+            settings.GrpcHealthCheckTimeoutSeconds,
+            settings.GrpcPermitWithoutStream,
+            settings.GrpcInitialWindowSize,
+            CreateRealitySignature(settings.RealityOptions, settings.RealityHandshakeProvider),
             settings.Password,
             settings.ConnectTimeoutSeconds,
             settings.HandshakeTimeoutSeconds,
@@ -414,6 +620,220 @@ internal sealed record TrojanMuxSignature(
             settings.MultiplexSettings.Concurrency,
             settings.MultiplexSettings.XudpConcurrency,
             settings.MultiplexSettings.XudpProxyUdp443);
+
+    public static TrojanMuxSignature FromSettings(VlessOutboundSettings settings)
+        => new(
+            OutboundProtocols.Vless,
+            settings.Tag,
+            settings.ServerHost,
+            settings.ServerPort,
+            settings.ServerName,
+            settings.Fingerprint,
+            settings.Transport,
+            settings.TransportSecurity,
+            settings.WebSocketPath,
+            string.Join(
+                "\n",
+            settings.WebSocketHeaders
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key + "=" + pair.Value)),
+            settings.WebSocketEarlyDataBytes,
+            settings.WebSocketHeartbeatPeriodSeconds,
+            settings.SplitHttpHost,
+            settings.SplitHttpPath,
+            string.Join(
+                "\n",
+            settings.SplitHttpHeaders
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key + "=" + pair.Value)),
+            settings.SplitHttpMode,
+            settings.SplitHttpNoGrpcHeader,
+            settings.SplitHttpXPaddingBytes,
+            settings.SplitHttpXPaddingObfsMode,
+            settings.SplitHttpXPaddingKey,
+            settings.SplitHttpXPaddingHeader,
+            settings.SplitHttpXPaddingPlacement,
+            settings.SplitHttpXPaddingMethod,
+            settings.SplitHttpUplinkHttpMethod,
+            settings.SplitHttpSessionPlacement,
+            settings.SplitHttpSessionKey,
+            settings.SplitHttpSeqPlacement,
+            settings.SplitHttpSeqKey,
+            settings.SplitHttpUplinkDataPlacement,
+            settings.SplitHttpUplinkDataKey,
+            settings.SplitHttpUplinkChunkSize,
+            settings.SplitHttpScMaxEachPostBytes,
+            settings.SplitHttpScMinPostsIntervalMs,
+            settings.SplitHttpScMaxBufferedPosts,
+            SerializeSplitHttpXmux(settings.SplitHttpXmux),
+            SerializeSplitHttpDownloadSettings(settings.SplitHttpDownloadSettings),
+            string.Join("\n", settings.ApplicationProtocols),
+            settings.GrpcServiceName,
+            settings.GrpcAuthority,
+            settings.GrpcMultiMode,
+            settings.GrpcUserAgent,
+            settings.GrpcIdleTimeoutSeconds,
+            settings.GrpcHealthCheckTimeoutSeconds,
+            settings.GrpcPermitWithoutStream,
+            settings.GrpcInitialWindowSize,
+            CreateRealitySignature(settings.RealityOptions, settings.RealityHandshakeProvider),
+            settings.UserUuid +
+            "|" + VlessFlowTypes.Normalize(settings.Flow) +
+            "|" + VlessTransportEncryption.NormalizeEncryption(settings.Encryption) +
+            "|" + settings.XorMode.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            "|" + settings.Seconds.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            "|" + settings.Padding.Trim() +
+            "|" + string.Join(",", settings.TestSeed),
+            settings.ConnectTimeoutSeconds,
+            settings.HandshakeTimeoutSeconds,
+            settings.SkipCertificateValidation,
+            settings.Via,
+            settings.ViaCidr,
+            settings.ProxyOutboundTag,
+            settings.MultiplexSettings.Concurrency,
+            settings.MultiplexSettings.XudpConcurrency,
+            settings.MultiplexSettings.XudpProxyUdp443);
+
+    public static TrojanMuxSignature FromSettings(VmessOutboundSettings settings)
+        => new(
+            OutboundProtocols.Vmess,
+            settings.Tag,
+            settings.ServerHost,
+            settings.ServerPort,
+            settings.ServerName,
+            settings.Fingerprint,
+            settings.Transport,
+            settings.TransportSecurity,
+            settings.WebSocketPath,
+            string.Join(
+                "\n",
+            settings.WebSocketHeaders
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key + "=" + pair.Value)),
+            settings.WebSocketEarlyDataBytes,
+            settings.WebSocketHeartbeatPeriodSeconds,
+            settings.SplitHttpHost,
+            settings.SplitHttpPath,
+            string.Join(
+                "\n",
+            settings.SplitHttpHeaders
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key + "=" + pair.Value)),
+            settings.SplitHttpMode,
+            settings.SplitHttpNoGrpcHeader,
+            settings.SplitHttpXPaddingBytes,
+            settings.SplitHttpXPaddingObfsMode,
+            settings.SplitHttpXPaddingKey,
+            settings.SplitHttpXPaddingHeader,
+            settings.SplitHttpXPaddingPlacement,
+            settings.SplitHttpXPaddingMethod,
+            settings.SplitHttpUplinkHttpMethod,
+            settings.SplitHttpSessionPlacement,
+            settings.SplitHttpSessionKey,
+            settings.SplitHttpSeqPlacement,
+            settings.SplitHttpSeqKey,
+            settings.SplitHttpUplinkDataPlacement,
+            settings.SplitHttpUplinkDataKey,
+            settings.SplitHttpUplinkChunkSize,
+            settings.SplitHttpScMaxEachPostBytes,
+            settings.SplitHttpScMinPostsIntervalMs,
+            settings.SplitHttpScMaxBufferedPosts,
+            SerializeSplitHttpXmux(settings.SplitHttpXmux),
+            SerializeSplitHttpDownloadSettings(settings.SplitHttpDownloadSettings),
+            string.Join("\n", settings.ApplicationProtocols),
+            settings.GrpcServiceName,
+            settings.GrpcAuthority,
+            settings.GrpcMultiMode,
+            settings.GrpcUserAgent,
+            settings.GrpcIdleTimeoutSeconds,
+            settings.GrpcHealthCheckTimeoutSeconds,
+            settings.GrpcPermitWithoutStream,
+            settings.GrpcInitialWindowSize,
+            CreateRealitySignature(settings.RealityOptions, settings.RealityHandshakeProvider),
+            settings.UserUuid + "|" + VmessOutboundSecurityTypes.Normalize(settings.Security) + "|" + settings.AuthenticatedLength + "|" + settings.NoTerminationSignal,
+            settings.ConnectTimeoutSeconds,
+            settings.HandshakeTimeoutSeconds,
+            settings.SkipCertificateValidation,
+            settings.Via,
+            settings.ViaCidr,
+            settings.ProxyOutboundTag,
+            settings.MultiplexSettings.Concurrency,
+            settings.MultiplexSettings.XudpConcurrency,
+            settings.MultiplexSettings.XudpProxyUdp443);
+
+    private static string CreateRealitySignature(
+        RuntimeRealityOptions options,
+        IRuntimeRealityHandshakeProvider? handshakeProvider)
+        => string.Join(
+            "|",
+            options.Fingerprint,
+            options.PublicKey,
+            options.ShortId,
+            options.Mldsa65Verify,
+            options.SpiderX,
+            ResolveRealityHandshakeProviderIdentity(handshakeProvider));
+
+    private static string SerializeSplitHttpDownloadSettings(RuntimeSplitHttpDownloadOptions? settings)
+    {
+        if (settings is null)
+        {
+            return string.Empty;
+        }
+
+        var headers = settings.Headers is null
+            ? string.Empty
+            : string.Join(
+                "\n",
+                settings.Headers
+                    .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                    .Select(static pair => pair.Key + "=" + pair.Value));
+        return string.Join(
+            "|",
+            settings.ServerHost ?? string.Empty,
+            settings.ServerPort?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            settings.ServerName ?? string.Empty,
+            settings.Fingerprint ?? string.Empty,
+            settings.TransportSecurity ?? string.Empty,
+            settings.RealityOptions?.Fingerprint ?? string.Empty,
+            settings.RealityOptions?.PublicKey ?? string.Empty,
+            settings.RealityOptions?.ShortId ?? string.Empty,
+            settings.RealityOptions?.Mldsa65Verify ?? string.Empty,
+            settings.RealityOptions?.SpiderX ?? string.Empty,
+            settings.Host ?? string.Empty,
+            settings.Path ?? string.Empty,
+            headers,
+            settings.ConnectTimeoutSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            settings.HandshakeTimeoutSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            settings.SkipCertificateValidation?.ToString() ?? string.Empty);
+    }
+
+    private static string SerializeSplitHttpXmux(RuntimeSplitHttpXmuxOptions? settings)
+    {
+        settings ??= RuntimeSplitHttpXmuxOptions.Empty;
+        return string.Join(
+            "|",
+            SerializeRange(settings.MaxConcurrency),
+            SerializeRange(settings.MaxConnections),
+            SerializeRange(settings.CMaxReuseTimes),
+            SerializeRange(settings.HMaxRequestTimes),
+            SerializeRange(settings.HMaxReusableSecs),
+            settings.HKeepAlivePeriodSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static string SerializeRange(RuntimeInt32Range? value)
+        => value is null
+            ? string.Empty
+            : string.Join(
+                ",",
+                value.From.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                value.To.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    private static string ResolveRealityHandshakeProviderIdentity(IRuntimeRealityHandshakeProvider? handshakeProvider)
+        => handshakeProvider is null
+            ? string.Empty
+            : !string.IsNullOrWhiteSpace(handshakeProvider.Identity)
+                ? handshakeProvider.Identity.Trim()
+                : handshakeProvider.GetType().FullName ?? handshakeProvider.GetType().Name;
 }
 
 internal sealed class TrojanMuxOutboundMultiplexState : IAsyncDisposable
@@ -454,14 +874,14 @@ internal sealed class TrojanMuxOutboundMultiplexState : IAsyncDisposable
     public async ValueTask<Stream> OpenTcpAsync(
         DispatchContext context,
         DispatchDestination destination,
-        Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> openConnectionAsync,
+        Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> openConnectionAsync,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(openConnectionAsync);
 
         if (_tcpPool is null)
         {
-            throw new InvalidOperationException("TCP trojan multiplex is disabled for the current outbound.");
+            throw new InvalidOperationException("TCP multiplex is disabled for the current outbound.");
         }
 
         return await _tcpPool.OpenTcpAsync(context, destination, openConnectionAsync, cancellationToken).ConfigureAwait(false);
@@ -470,7 +890,7 @@ internal sealed class TrojanMuxOutboundMultiplexState : IAsyncDisposable
     public IOutboundUdpTransport CreateUdpTransport(
         DispatchContext context,
         string targetStrategy,
-        Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> openConnectionAsync,
+        Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> openConnectionAsync,
         IDnsResolver dnsResolver)
     {
         ArgumentNullException.ThrowIfNull(openConnectionAsync);
@@ -479,7 +899,7 @@ internal sealed class TrojanMuxOutboundMultiplexState : IAsyncDisposable
         var pool = ResolveUdpPool();
         if (pool is null)
         {
-            throw new InvalidOperationException("UDP trojan multiplex is disabled for the current outbound.");
+            throw new InvalidOperationException("UDP multiplex is disabled for the current outbound.");
         }
 
         return new TrojanMuxUdpTransport(
@@ -530,7 +950,7 @@ internal sealed class TrojanMuxWorkerPool : IAsyncDisposable
     public async ValueTask<Stream> OpenTcpAsync(
         DispatchContext context,
         DispatchDestination destination,
-        Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> openConnectionAsync,
+        Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> openConnectionAsync,
         CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 4; attempt++)
@@ -545,12 +965,12 @@ internal sealed class TrojanMuxWorkerPool : IAsyncDisposable
             }
         }
 
-        throw new InvalidOperationException("Unable to allocate a trojan mux TCP worker.");
+        throw new InvalidOperationException("Unable to allocate a mux TCP worker.");
     }
 
     public async ValueTask<TrojanMuxWorker> AcquireWorkerAsync(
         DispatchContext context,
-        Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> openConnectionAsync,
+        Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> openConnectionAsync,
         CancellationToken cancellationToken)
     {
         var existing = TryGetAvailableWorker();
@@ -614,7 +1034,8 @@ internal interface ITrojanMuxClientSession
 
 internal sealed class TrojanMuxWorker : IAsyncDisposable
 {
-    private readonly TrojanClientConnection _connection;
+    private readonly RuntimeClientConnection _connection;
+    private readonly bool _isReverseMux;
     private readonly int _maxConcurrency;
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly ConcurrentDictionary<ushort, ITrojanMuxClientSession> _sessions = new();
@@ -627,9 +1048,13 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
     private ushort _nextSessionId;
     private int _totalSessions;
 
-    public TrojanMuxWorker(TrojanClientConnection connection, int maxConcurrency)
+    public TrojanMuxWorker(
+        RuntimeClientConnection connection,
+        int maxConcurrency,
+        bool isReverseMux = false)
     {
         _connection = connection;
+        _isReverseMux = isReverseMux;
         _maxConcurrency = maxConcurrency;
         _receiveLoop = RunReceiveLoopAsync();
     }
@@ -641,8 +1066,17 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
            (_maxConcurrency <= 0 || Volatile.Read(ref _activeSessions) < _maxConcurrency) &&
            Volatile.Read(ref _totalSessions) < TrojanMuxProtocol.MaxSessionCountPerConnection;
 
+    public Task WaitClosedAsync(CancellationToken cancellationToken = default)
+        => _receiveLoop.WaitAsync(cancellationToken);
+
     public async ValueTask<Stream> OpenTcpAsync(
         DispatchDestination destination,
+        CancellationToken cancellationToken)
+        => await OpenTcpAsync(destination, context: null, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<Stream> OpenTcpAsync(
+        DispatchDestination destination,
+        DispatchContext? context,
         CancellationToken cancellationToken)
     {
         var stream = new TrojanMuxTcpSessionStream(this);
@@ -656,7 +1090,13 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
                 {
                     SessionId = sessionId,
                     Status = TrojanMuxSessionStatus.New,
-                    Target = new TrojanMuxFrameTarget(destination.Host, destination.Port, destination.Network)
+                    Target = new TrojanMuxFrameTarget(destination.Host, destination.Port, destination.Network),
+                    Source = _isReverseMux
+                        ? TrojanMuxProtocol.CreateEndpointTarget(context?.SourceEndPoint, DispatchNetwork.Tcp)
+                        : null,
+                    Local = _isReverseMux
+                        ? TrojanMuxProtocol.CreateEndpointTarget(context?.LocalEndPoint, DispatchNetwork.Tcp)
+                        : null
                 },
                 cancellationToken).ConfigureAwait(false);
             return stream;
@@ -677,7 +1117,7 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
         {
             if (!CanAcceptMoreSessions())
             {
-                throw new InvalidOperationException("Trojan mux worker is full or closed.");
+                throw new InvalidOperationException("Mux worker is full or closed.");
             }
 
             for (var attempt = 0; attempt < ushort.MaxValue; attempt++)
@@ -697,7 +1137,7 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
             }
         }
 
-        throw new InvalidOperationException("No trojan mux session identifier is available.");
+        throw new InvalidOperationException("No mux session identifier is available.");
     }
 
     public async ValueTask WriteTcpPayloadAsync(
@@ -731,17 +1171,43 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
         bool isNewSession,
         byte[] globalId,
         CancellationToken cancellationToken)
-        => WriteAsync(
+        => WriteUdpPayloadAsync(
+            sessionId,
+            destination,
+            payload,
+            isNewSession,
+            globalId,
+            context: null,
+            cancellationToken);
+
+    public ValueTask WriteUdpPayloadAsync(
+        ushort sessionId,
+        DispatchDestination destination,
+        ReadOnlyMemory<byte> payload,
+        bool isNewSession,
+        byte[] globalId,
+        DispatchContext? context,
+        CancellationToken cancellationToken)
+    {
+        var includeReverseEndpoints = _isReverseMux && isNewSession;
+        return WriteAsync(
             new TrojanMuxFrame
             {
                 SessionId = sessionId,
                 Status = isNewSession ? TrojanMuxSessionStatus.New : TrojanMuxSessionStatus.Keep,
                 Option = TrojanMuxFrameOption.Data,
                 Target = new TrojanMuxFrameTarget(destination.Host, destination.Port, destination.Network),
-                GlobalId = globalId,
+                Source = includeReverseEndpoints
+                    ? TrojanMuxProtocol.CreateEndpointTarget(context?.SourceEndPoint, DispatchNetwork.Udp)
+                    : null,
+                Local = includeReverseEndpoints
+                    ? TrojanMuxProtocol.CreateEndpointTarget(context?.LocalEndPoint, DispatchNetwork.Udp)
+                    : null,
+                GlobalId = includeReverseEndpoints ? Array.Empty<byte>() : globalId,
                 Payload = payload.ToArray()
             },
             cancellationToken);
+    }
 
     public async ValueTask CloseLocalSessionAsync(
         ushort sessionId,
@@ -802,7 +1268,7 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
     {
         if (IsClosed)
         {
-            throw new IOException("The trojan mux worker is closed.");
+            throw new IOException("The mux worker is closed.");
         }
 
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -862,7 +1328,7 @@ internal sealed class TrojanMuxWorker : IAsyncDisposable
                 {
                     CompleteSession(
                         frame.SessionId,
-                        frame.HasError ? new IOException($"Trojan mux session {frame.SessionId} terminated with a remote error.") : null);
+                        frame.HasError ? new IOException($"Mux session {frame.SessionId} terminated with a remote error.") : null);
                     continue;
                 }
 
@@ -988,7 +1454,7 @@ internal sealed class TrojanMuxTcpSessionStream : Stream, ITrojanMuxClientSessio
             }
             catch (ChannelClosedException ex)
             {
-                throw new IOException("Trojan mux TCP session closed unexpectedly.", ex.InnerException);
+                throw new IOException("Mux TCP session closed unexpectedly.", ex.InnerException);
             }
         }
     }
@@ -1060,7 +1526,7 @@ internal sealed class TrojanMuxUdpTransport : IOutboundUdpTransport, ITrojanMuxC
     private readonly TrojanMuxWorkerPool _pool;
     private readonly DispatchContext _context;
     private readonly IDnsResolver _dnsResolver;
-    private readonly Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> _openConnectionAsync;
+    private readonly Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> _openConnectionAsync;
     private readonly Channel<DispatchDatagram> _responses = Channel.CreateUnbounded<DispatchDatagram>(
         new UnboundedChannelOptions
         {
@@ -1079,7 +1545,7 @@ internal sealed class TrojanMuxUdpTransport : IOutboundUdpTransport, ITrojanMuxC
         TrojanMuxWorkerPool pool,
         DispatchContext context,
         string targetStrategy,
-        Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> openConnectionAsync,
+        Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> openConnectionAsync,
         IDnsResolver dnsResolver,
         byte[] globalId)
     {
@@ -1102,7 +1568,7 @@ internal sealed class TrojanMuxUdpTransport : IOutboundUdpTransport, ITrojanMuxC
         }
         if (destination.Network != DispatchNetwork.Udp)
         {
-            throw new NotSupportedException($"Trojan mux UDP session does not support '{destination.Network}'.");
+            throw new NotSupportedException($"Mux UDP session does not support '{destination.Network}'.");
         }
 
         var resolvedDestination = await OutboundTargetStrategyResolver.ResolveAsync(
@@ -1143,7 +1609,7 @@ internal sealed class TrojanMuxUdpTransport : IOutboundUdpTransport, ITrojanMuxC
                     }
                 }
 
-                throw new InvalidOperationException("Unable to allocate a trojan mux UDP session.");
+                    throw new InvalidOperationException("Unable to allocate a mux UDP session.");
             }
 
             await _worker!.WriteUdpPayloadAsync(
@@ -1177,7 +1643,7 @@ internal sealed class TrojanMuxUdpTransport : IOutboundUdpTransport, ITrojanMuxC
         }
         catch (ChannelClosedException ex)
         {
-            throw new IOException("Trojan mux UDP session closed unexpectedly.", ex.InnerException);
+                throw new IOException("Mux UDP session closed unexpectedly.", ex.InnerException);
         }
     }
 
@@ -1315,7 +1781,7 @@ internal sealed class TrojanAdaptiveUdpTransport : IOutboundUdpTransport
             if (destination.Port == 443 &&
                 string.Equals(_udp443Mode, OutboundXudpProxyModes.Reject, StringComparison.Ordinal))
             {
-                var exception = new InvalidOperationException("Trojan multiplex rejected UDP/443 traffic.");
+                var exception = new InvalidOperationException("Multiplex rejected UDP/443 traffic.");
                 _innerTransportTcs.TrySetException(exception);
                 throw exception;
             }

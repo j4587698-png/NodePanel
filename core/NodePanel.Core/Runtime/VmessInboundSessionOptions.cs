@@ -3,9 +3,13 @@ using NodePanel.Core.Protocol;
 
 namespace NodePanel.Core.Runtime;
 
-internal sealed record VmessInboundSessionOptions : ITrojanInboundConnectionOptions
+internal sealed record VmessInboundSessionOptions : IRuntimeInboundConnectionOptions
 {
+    internal RuntimeSessionPolicyCatalog SessionPolicies { get; init; } = RuntimeSessionPolicyCatalog.Default;
+
     public string InboundTag { get; init; } = string.Empty;
+
+    public int UserLevel { get; init; }
 
     public int HandshakeTimeoutSeconds { get; init; } = 60;
 
@@ -31,7 +35,7 @@ internal sealed record VmessInboundSessionOptions : ITrojanInboundConnectionOpti
 
     public EndPoint? OriginalDestinationEndPoint { get; init; }
 
-    public ITrojanSniffingDefinition Sniffing { get; init; } = TrojanSniffingRuntime.Disabled;
+    public IRuntimeSniffingDefinition Sniffing { get; init; } = RuntimeSniffingOptions.Disabled;
 
     public bool DrainOnHandshakeFailure { get; init; }
 
@@ -39,11 +43,20 @@ internal sealed record VmessInboundSessionOptions : ITrojanInboundConnectionOpti
 
     internal VmessInboundRuntimeState? RuntimeState { get; init; }
 
-    public bool TryAuthenticate(string passwordHash, out TrojanUser? user)
-    {
-        user = null;
-        return false;
-    }
+    internal IReadOnlyList<VmessUser> ResolveUsers()
+        => Users;
 
-    public IReadOnlyList<ITrojanFallbackDefinition> Fallbacks => Array.Empty<ITrojanFallbackDefinition>();
+    internal VmessInboundSessionOptions WithUserLevel(int userLevel)
+    {
+        var limits = RuntimeInboundSessionLimitResolver.Resolve(this, SessionPolicies, userLevel);
+        return this with
+        {
+            UserLevel = Math.Max(0, userLevel),
+            HandshakeTimeoutSeconds = limits.HandshakeTimeoutSeconds,
+            ConnectTimeoutSeconds = limits.ConnectTimeoutSeconds,
+            ConnectionIdleSeconds = limits.ConnectionIdleSeconds,
+            UplinkOnlySeconds = limits.UplinkOnlySeconds,
+            DownlinkOnlySeconds = limits.DownlinkOnlySeconds
+        };
+    }
 }

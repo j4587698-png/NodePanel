@@ -52,6 +52,78 @@ public sealed class OutboundRoutingRuntimePlannerTests
     }
 
     [Fact]
+    public void TryResolveOutboundTag_matches_inbound_tag_case_sensitively()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("case-sensitive", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    ["Edge"],
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "case-sensitive")
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                InboundTag = "Edge"
+            },
+            out var matchedTag));
+        Assert.Equal("case-sensitive", matchedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                InboundTag = "edge"
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryPickRoute_returns_matching_rule_tag_without_default_fallback()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("proxy", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    ["edge"],
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "proxy",
+                    ruleTag: "edge-route")
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.True(plan.TryPickRoute(
+            new DispatchContext
+            {
+                InboundTag = "edge"
+            },
+            out var route));
+        Assert.Equal("proxy", route.OutboundTag);
+        Assert.Equal("edge-route", route.RuleTag);
+        Assert.False(plan.TryPickRoute(new DispatchContext(), out _));
+    }
+
+    [Fact]
     public void TryResolveOutboundTag_matches_detected_protocol_instead_of_inbound_protocol()
     {
         var success = OutboundRuntimePlanner.TryBuild(
@@ -90,6 +162,264 @@ public sealed class OutboundRoutingRuntimePlannerTests
             },
             out var matchedTag));
         Assert.Equal("sniffed", matchedTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_content_protocol_prefix_and_attribute_regexes()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("http-api", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    [RoutingProtocols.Http],
+                    Array.Empty<string>(),
+                    "http-api",
+                    attributes: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [":path"] = "/test",
+                        ["Custom"] = "p([a-z]+)ch"
+                    })
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                Content = new DispatchContent
+                {
+                    Protocol = "http/1.1",
+                    Attributes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [":path"] = "/test/1",
+                        ["custom"] = "peach"
+                    }
+                }
+            },
+            out var matchedTag));
+        Assert.Equal("http-api", matchedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                Content = new DispatchContent
+                {
+                    Protocol = "http/1.1",
+                    Attributes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [":path"] = "/other",
+                        ["custom"] = "peach"
+                    }
+                }
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_xray_domain_rule_kinds()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("plain", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("domain", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("full", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("regexp", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("dotless", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "full",
+                    domains: ["full:api.full-match.test"]),
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "regexp",
+                    domains: ["regexp:^facebook\\.com$"]),
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "domain",
+                    domains: ["domain:google.com"]),
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "dotless",
+                    domains: ["dotless:local"]),
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "plain",
+                    domains: ["example.com"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "www.example.com.www"
+            },
+            out var plainTag));
+        Assert.Equal("plain", plainTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "www.google.com"
+            },
+            out var domainTag));
+        Assert.Equal("domain", domainTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "api.full-match.test"
+            },
+            out var fullTag));
+        Assert.Equal("full", fullTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "facebook.com"
+            },
+            out var regexpTag));
+        Assert.Equal("regexp", regexpTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "mylocal"
+            },
+            out var dotlessTag));
+        Assert.Equal("dotless", dotlessTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "www.facebook.com"
+            },
+            out var regexFallbackTag));
+        Assert.Equal("direct", regexFallbackTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                DetectedDomain = "my.local"
+            },
+            out var dotlessFallbackTag));
+        Assert.Equal("direct", dotlessFallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_explicit_route_target_for_domain_and_port()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("routed", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "routed",
+                    domains: ["full:route.example.com"],
+                    destinationPorts: ["443"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                RouteTargetHost = "route.example.com",
+                RouteTargetPort = 443,
+                TargetHost = "198.51.100.10",
+                TargetPort = 80,
+                OriginalDestinationHost = "198.51.100.10",
+                OriginalDestinationPort = 80
+            },
+            out var matchedTag));
+        Assert.Equal("routed", matchedTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_uses_current_routing_target_instead_of_original_destination_for_cidr()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("routed", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "routed",
+                    destinationCidrs: ["203.0.113.0/24"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                RouteTargetHost = "203.0.113.7",
+                OriginalDestinationHost = "198.51.100.7",
+                OriginalDestinationPort = 443,
+                TargetHost = "198.51.100.7",
+                TargetPort = 443,
+                TargetAddresses = [IPAddress.Parse("198.51.100.7")]
+            },
+            out var routeTargetTag));
+        Assert.Equal("routed", routeTargetTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                TargetHost = "route.example.com",
+                TargetPort = 443,
+                OriginalDestinationHost = "203.0.113.7",
+                OriginalDestinationPort = 443,
+                TargetAddresses = [IPAddress.Parse("203.0.113.7")]
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
     }
 
     [Fact]
@@ -133,7 +463,109 @@ public sealed class OutboundRoutingRuntimePlannerTests
             },
             destination: null);
 
-        Assert.Same(matchedHandler, resolved);
+        Assert.Same(matchedHandler, resolved.Handler);
+        Assert.Equal("proxy", resolved.OutboundTag);
+        Assert.Equal("proxy", resolved.Context.OutboundTag);
+    }
+
+    [Fact]
+    public void RuntimeRoutingService_adds_removes_and_lists_rules()
+    {
+        var service = new DefaultRuntimeRoutingService(
+            new StaticOutboundRuntimePlanProvider(
+                new OutboundRuntimePlan
+                {
+                    Outbounds =
+                    [
+                        new OutboundRuntime
+                        {
+                            Tag = "direct",
+                            Protocol = OutboundProtocols.Freedom
+                        },
+                        new OutboundRuntime
+                        {
+                            Tag = "proxy",
+                            Protocol = OutboundProtocols.Freedom
+                        }
+                    ],
+                    DefaultOutboundTag = "direct"
+                }));
+
+        Assert.False(service.TryPickRoute(
+            new DispatchContext
+            {
+                InboundTag = "edge"
+            },
+            out _));
+
+        service.AddRule(
+            new TestRoutingRuleDefinition(
+                true,
+                ["edge"],
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                "proxy",
+                ruleTag: "edge-route"));
+
+        var listedRule = Assert.Single(service.ListRules());
+        Assert.Equal("edge-route", listedRule.RuleTag);
+        Assert.Equal("proxy", listedRule.OutboundTag);
+
+        Assert.True(service.TryPickRoute(
+            new DispatchContext
+            {
+                InboundTag = "edge"
+            },
+            out var route));
+        Assert.Equal("proxy", route.OutboundTag);
+        Assert.Equal("edge-route", route.RuleTag);
+
+        Assert.True(service.RemoveRule("edge-route"));
+        Assert.Empty(service.ListRules());
+        Assert.False(service.TryPickRoute(
+            new DispatchContext
+            {
+                InboundTag = "edge"
+            },
+            out _));
+    }
+
+    [Fact]
+    public void RuntimeRoutingService_rejects_duplicate_non_empty_rule_tags()
+    {
+        var service = new DefaultRuntimeRoutingService(
+            new StaticOutboundRuntimePlanProvider(
+                new OutboundRuntimePlan
+                {
+                    Outbounds =
+                    [
+                        new OutboundRuntime
+                        {
+                            Tag = "direct",
+                            Protocol = OutboundProtocols.Freedom
+                        }
+                    ],
+                    DefaultOutboundTag = "direct"
+                }));
+
+        service.AddRule(
+            new TestRoutingRuleDefinition(
+                true,
+                ["edge"],
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                "direct",
+                ruleTag: "edge-route"));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => service.AddRule(
+            new TestRoutingRuleDefinition(
+                true,
+                ["other"],
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                "direct",
+                ruleTag: "edge-route")));
+        Assert.Contains("already registered", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -157,6 +589,31 @@ public sealed class OutboundRoutingRuntimePlannerTests
 
         Assert.False(success);
         Assert.Contains("unknown outbound tag", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryBuild_allows_routing_rule_targeting_dynamic_vless_reverse_tag()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    ["edge"],
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "reverse-edge")
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error,
+            additionalKnownOutboundTags: ["reverse-edge"]);
+
+        Assert.True(success, error);
+        var rule = Assert.Single(plan.RoutingRules);
+        Assert.Equal("reverse-edge", rule.OutboundTag);
     }
 
     [Fact]
@@ -245,7 +702,7 @@ public sealed class OutboundRoutingRuntimePlannerTests
                     [RoutingNetworks.Tcp],
                     "routed",
                     userIds: [" user-1 "],
-                    domains: ["*.example.com"],
+                    domains: ["domain:example.com"],
                     sourceCidrs: ["203.0.113.0/24"],
                     destinationPorts: ["443", "8000-9000"])
             ],
@@ -273,10 +730,352 @@ public sealed class OutboundRoutingRuntimePlannerTests
             {
                 UserId = "user-1",
                 Network = RoutingNetworks.Tcp,
-                DetectedDomain = "example.com",
-                OriginalDestinationHost = "example.com",
+                DetectedDomain = "example.co",
+                OriginalDestinationHost = "example.co",
                 OriginalDestinationPort = 8443,
                 SourceEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 50000)
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_exact_and_regexp_user_ids()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("user-route", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "user-route",
+                    userIds: [" admin@example.com ", "regexp:^svc-[0-9]+$", "regexp:("])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                UserId = "admin@example.com"
+            },
+            out var exactTag));
+        Assert.Equal("user-route", exactTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                UserId = "svc-42"
+            },
+            out var regexTag));
+        Assert.Equal("user-route", regexTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                UserId = "Admin@example.com"
+            },
+            out var caseSensitiveFallbackTag));
+        Assert.Equal("direct", caseSensitiveFallbackTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                UserId = "regexp:("
+            },
+            out var invalidRegexIgnoredTag));
+        Assert.Equal("direct", invalidRegexIgnoredTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_scoped_user_id_without_breaking_plain_user_id_rules()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("scoped-route", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "scoped-route",
+                    userIds: ["trojan\u0000edge-in\u0000shared-user"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                UserId = "shared-user",
+                ScopedUserId = "trojan\u0000edge-in\u0000shared-user"
+            },
+            out var scopedTag));
+        Assert.Equal("scoped-route", scopedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                UserId = "shared-user",
+                ScopedUserId = "trojan\u0000other-in\u0000shared-user"
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_process_name_path_folder_and_self()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("process-route", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "process-route",
+                    processes: [" curl.exe ", @" C:\Apps\svc.exe ", " /usr/bin/ ", " self/ "])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                ProcessName = "curl"
+            },
+            out var nameTag));
+        Assert.Equal("process-route", nameTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                ProcessPath = @"C:\Apps\svc.exe"
+            },
+            out var pathTag));
+        Assert.Equal("process-route", pathTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                ProcessPath = "/usr/bin/python3"
+            },
+            out var folderTag));
+        Assert.Equal("process-route", folderTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                ProcessIsCurrentExecutable = true
+            },
+            out var selfTag));
+        Assert.Equal("process-route", selfTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                ProcessName = "CURL"
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_destination_source_and_local_cidrs()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("routed", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "routed",
+                    sourceCidrs: ["203.0.113.0/24"],
+                    destinationCidrs: ["198.51.100.0/24"],
+                    localCidrs: ["127.0.0.0/8"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                SourceEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 50000),
+                LocalEndPoint = new IPEndPoint(IPAddress.Loopback, 10809),
+                OriginalDestinationHost = "198.51.100.12"
+            },
+            out var matchedTag));
+        Assert.Equal("routed", matchedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                SourceEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 50000),
+                LocalEndPoint = new IPEndPoint(IPAddress.Parse("10.0.0.5"), 10809),
+                OriginalDestinationHost = "198.51.100.12"
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_destination_source_and_local_ip_lists()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("routed", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "routed",
+                    sourceCidrs: ["203.0.113.0/24"],
+                    destinationCidrs: ["198.51.100.0/24"],
+                    localCidrs: ["127.0.0.0/8"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                OriginalDestinationHost = "api.example.com",
+                TargetAddresses = [IPAddress.Parse("198.51.100.12")],
+                SourceAddresses = [IPAddress.Parse("203.0.113.25")],
+                LocalAddresses = [IPAddress.Loopback]
+            },
+            out var matchedTag));
+        Assert.Equal("routed", matchedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                OriginalDestinationHost = "api.example.com",
+                TargetAddresses = [IPAddress.Parse("203.0.113.12")],
+                SourceAddresses = [IPAddress.Parse("203.0.113.25")],
+                LocalAddresses = [IPAddress.Loopback]
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_reverse_destination_cidr()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("not-us", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "not-us",
+                    destinationCidrs: ["!203.0.113.0/24"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                TargetAddresses = [IPAddress.Parse("198.51.100.7")]
+            },
+            out var matchedTag));
+        Assert.Equal("not-us", matchedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                TargetAddresses = [IPAddress.Parse("203.0.113.7")]
+            },
+            out var fallbackTag));
+        Assert.Equal("direct", fallbackTag);
+    }
+
+    [Fact]
+    public void TryResolveOutboundTag_matches_source_local_and_vless_route_ports()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom),
+                new TestOutboundDefinition("routed", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "routed",
+                    sourcePorts: ["50000"],
+                    localPorts: ["10808-10810"],
+                    vlessRoutes: ["4360-4370"])
+            ],
+            [OutboundProtocols.Freedom],
+            out var plan,
+            out var error);
+
+        Assert.True(success, error);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                SourceEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 50000),
+                LocalEndPoint = new IPEndPoint(IPAddress.Loopback, 10809),
+                VlessRoutePort = 4369
+            },
+            out var matchedTag));
+        Assert.Equal("routed", matchedTag);
+
+        Assert.True(plan.TryResolveOutboundTag(
+            new DispatchContext
+            {
+                SourceEndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.25"), 50000),
+                LocalEndPoint = new IPEndPoint(IPAddress.Loopback, 10809),
+                VlessRoutePort = 5000
             },
             out var fallbackTag));
         Assert.Equal("direct", fallbackTag);
@@ -307,6 +1106,54 @@ public sealed class OutboundRoutingRuntimePlannerTests
     }
 
     [Fact]
+    public void TryBuild_rejects_invalid_routing_destination_cidr()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "direct",
+                    destinationCidrs: ["198.51.100.0/99"])
+            ],
+            [OutboundProtocols.Freedom],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("destination CIDR", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_invalid_routing_domain_matcher()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "direct",
+                    domains: ["regexp:("])
+            ],
+            [OutboundProtocols.Freedom],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("domain matcher", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void TryBuild_rejects_invalid_routing_port_matcher()
     {
         var success = OutboundRuntimePlanner.TryBuild(
@@ -328,6 +1175,56 @@ public sealed class OutboundRoutingRuntimePlannerTests
 
         Assert.False(success);
         Assert.Contains("port matcher", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_invalid_routing_attribute_matcher()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "direct",
+                    attributes: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [":path"] = "["
+                    })
+            ],
+            [OutboundProtocols.Freedom],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("attribute matcher", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_routing_rule_without_effective_fields()
+    {
+        var success = OutboundRuntimePlanner.TryBuild(
+            [
+                new TestOutboundDefinition("direct", true, OutboundProtocols.Freedom)
+            ],
+            [
+                new TestRoutingRuleDefinition(
+                    true,
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    "direct")
+            ],
+            [OutboundProtocols.Freedom],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("no effective fields", error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -435,22 +1332,40 @@ public sealed class OutboundRoutingRuntimePlannerTests
             IReadOnlyList<string> networks,
             string outboundTag,
             IReadOnlyList<string>? userIds = null,
+            IReadOnlyList<string>? processes = null,
             IReadOnlyList<string>? domains = null,
             IReadOnlyList<string>? sourceCidrs = null,
-            IReadOnlyList<string>? destinationPorts = null)
+            IReadOnlyList<string>? destinationCidrs = null,
+            IReadOnlyList<string>? destinationPorts = null,
+            IReadOnlyList<string>? sourcePorts = null,
+            IReadOnlyList<string>? localCidrs = null,
+            IReadOnlyList<string>? localPorts = null,
+            IReadOnlyList<string>? vlessRoutes = null,
+            IReadOnlyDictionary<string, string>? attributes = null,
+            string ruleTag = "")
         {
             Enabled = enabled;
             InboundTags = inboundTags;
             Protocols = protocols;
             Networks = networks;
             OutboundTag = outboundTag;
+            RuleTag = ruleTag;
             UserIds = userIds ?? Array.Empty<string>();
+            Processes = processes ?? Array.Empty<string>();
             Domains = domains ?? Array.Empty<string>();
             SourceCidrs = sourceCidrs ?? Array.Empty<string>();
+            DestinationCidrs = destinationCidrs ?? Array.Empty<string>();
             DestinationPorts = destinationPorts ?? Array.Empty<string>();
+            SourcePorts = sourcePorts ?? Array.Empty<string>();
+            LocalCidrs = localCidrs ?? Array.Empty<string>();
+            LocalPorts = localPorts ?? Array.Empty<string>();
+            VlessRoutes = vlessRoutes ?? Array.Empty<string>();
+            Attributes = attributes ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         public bool Enabled { get; }
+
+        public string RuleTag { get; }
 
         public IReadOnlyList<string> InboundTags { get; }
 
@@ -460,11 +1375,25 @@ public sealed class OutboundRoutingRuntimePlannerTests
 
         public IReadOnlyList<string> UserIds { get; }
 
+        public IReadOnlyList<string> Processes { get; }
+
         public IReadOnlyList<string> Domains { get; }
 
         public IReadOnlyList<string> SourceCidrs { get; }
 
+        public IReadOnlyList<string> DestinationCidrs { get; }
+
         public IReadOnlyList<string> DestinationPorts { get; }
+
+        public IReadOnlyList<string> SourcePorts { get; }
+
+        public IReadOnlyList<string> LocalCidrs { get; }
+
+        public IReadOnlyList<string> LocalPorts { get; }
+
+        public IReadOnlyList<string> VlessRoutes { get; }
+
+        public IReadOnlyDictionary<string, string> Attributes { get; }
 
         public string OutboundTag { get; }
     }

@@ -38,4 +38,29 @@ internal static class HttpRequestProbe
 
         return string.Empty;
     }
+
+    public static bool LooksLikeWebSocketHandshake(ReadOnlySpan<byte> initialPayload)
+    {
+        if (initialPayload.Length == 0)
+        {
+            return false;
+        }
+
+        var searchLength = Math.Min(initialPayload.Length, 1024);
+        var headerText = Encoding.ASCII.GetString(initialPayload[..searchLength]);
+        return headerText.Contains("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsWebSocketUpgradeRequest(ReadOnlySpan<byte> initialPayload)
+    {
+        if (initialPayload.Length == 0)
+        {
+            return false;
+        }
+
+        var searchLength = Math.Min(initialPayload.Length, 1024);
+        var headerText = Encoding.ASCII.GetString(initialPayload[..searchLength]);
+        return headerText.Contains("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase) ||
+               headerText.Contains("Upgrade: websocket", StringComparison.OrdinalIgnoreCase);
+    }
 }

@@ -68,9 +68,9 @@ public sealed class RelayServiceTests
 
         var remoteServerTask = Task.Run(async () =>
         {
-            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token);
             await using var serverStream = serverClient.GetStream();
-            await ReadToEndAsync(serverStream, cts.Token).ConfigureAwait(false);
+            await ReadToEndAsync(serverStream, cts.Token);
         }, cts.Token);
 
         using var frontListener = new TcpListener(IPAddress.Loopback, 0);
@@ -79,7 +79,7 @@ public sealed class RelayServiceTests
 
         var relayTask = Task.Run(async () =>
         {
-            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token);
             await using var inboundStream = inboundClient.GetStream();
 
             using var outboundClient = new TcpClient
@@ -87,7 +87,7 @@ public sealed class RelayServiceTests
                 NoDelay = true
             };
 
-            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token).ConfigureAwait(false);
+            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token);
             await using var outboundStream = outboundClient.GetStream();
             await relayService.RelayAsync(
                 inboundStream,
@@ -98,21 +98,21 @@ public sealed class RelayServiceTests
                     UplinkOnlySeconds = 1,
                     DownlinkOnlySeconds = 1
                 },
-                cts.Token).ConfigureAwait(false);
+                cts.Token);
         }, cts.Token);
 
         using var frontClient = new TcpClient
         {
             NoDelay = true
         };
-        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token).ConfigureAwait(false);
+        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
 
         var stopwatch = Stopwatch.StartNew();
-        await relayTask.ConfigureAwait(false);
+        await relayTask;
         stopwatch.Stop();
 
         Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(4));
-        await remoteServerTask.ConfigureAwait(false);
+        await remoteServerTask;
     }
 
     [Fact]
@@ -128,11 +128,11 @@ public sealed class RelayServiceTests
 
         var remoteServerTask = Task.Run(async () =>
         {
-            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token);
             await using var serverStream = serverClient.GetStream();
 
-            var request = await ReadToEndAsync(serverStream, cts.Token).ConfigureAwait(false);
-            await Task.Delay(TimeSpan.FromSeconds(3), cts.Token).ConfigureAwait(false);
+            var request = await ReadToEndAsync(serverStream, cts.Token);
+            await Task.Delay(TimeSpan.FromSeconds(3), cts.Token);
             return Encoding.ASCII.GetString(request);
         }, cts.Token);
 
@@ -142,7 +142,7 @@ public sealed class RelayServiceTests
 
         var relayTask = Task.Run(async () =>
         {
-            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token);
             await using var inboundStream = inboundClient.GetStream();
 
             using var outboundClient = new TcpClient
@@ -150,7 +150,7 @@ public sealed class RelayServiceTests
                 NoDelay = true
             };
 
-            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token).ConfigureAwait(false);
+            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token);
             await using var outboundStream = outboundClient.GetStream();
             await relayService.RelayAsync(
                 inboundStream,
@@ -161,25 +161,156 @@ public sealed class RelayServiceTests
                     UplinkOnlySeconds = 1,
                     DownlinkOnlySeconds = 1
                 },
-                cts.Token).ConfigureAwait(false);
+                cts.Token);
         }, cts.Token);
 
         using var frontClient = new TcpClient
         {
             NoDelay = true
         };
-        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token).ConfigureAwait(false);
+        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
         await using var frontStream = frontClient.GetStream();
-        await frontStream.WriteAsync(requestPayload, cts.Token).ConfigureAwait(false);
-        await frontStream.FlushAsync(cts.Token).ConfigureAwait(false);
+        await frontStream.WriteAsync(requestPayload, cts.Token);
+        await frontStream.FlushAsync(cts.Token);
         frontClient.Client.Shutdown(SocketShutdown.Send);
 
         var stopwatch = Stopwatch.StartNew();
-        await relayTask.ConfigureAwait(false);
+        await relayTask;
         stopwatch.Stop();
 
-        Assert.Equal("ping", await remoteServerTask.ConfigureAwait(false));
+        Assert.Equal("ping", await remoteServerTask);
         Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2.5));
+    }
+
+    [Fact]
+    public async Task RelayAsync_treats_remote_reset_as_graceful_completion()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var relayService = new RelayService();
+        var requestPayload = Encoding.ASCII.GetBytes("ping");
+
+        using var remoteListener = new TcpListener(IPAddress.Loopback, 0);
+        remoteListener.Start();
+        var remotePort = ((IPEndPoint)remoteListener.LocalEndpoint).Port;
+
+        var remoteServerTask = Task.Run(async () =>
+        {
+            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token);
+            serverClient.NoDelay = true;
+            serverClient.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+            await using var serverStream = serverClient.GetStream();
+
+            var request = new byte[requestPayload.Length];
+            await serverStream.ReadExactlyAsync(request.AsMemory(0, request.Length), cts.Token);
+            return Encoding.ASCII.GetString(request);
+        }, cts.Token);
+
+        using var frontListener = new TcpListener(IPAddress.Loopback, 0);
+        frontListener.Start();
+        var frontPort = ((IPEndPoint)frontListener.LocalEndpoint).Port;
+
+        var relayTask = Task.Run(async () =>
+        {
+            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token);
+            await using var inboundStream = inboundClient.GetStream();
+
+            using var outboundClient = new TcpClient
+            {
+                NoDelay = true
+            };
+
+            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token);
+            await using var outboundStream = outboundClient.GetStream();
+            await relayService.RelayAsync(
+                inboundStream,
+                outboundStream,
+                new TestTrojanConnectionOptions
+                {
+                    ConnectionIdleSeconds = 30,
+                    UplinkOnlySeconds = 1,
+                    DownlinkOnlySeconds = 1
+                },
+                cts.Token);
+        }, cts.Token);
+
+        using var frontClient = new TcpClient
+        {
+            NoDelay = true
+        };
+        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
+        await using var frontStream = frontClient.GetStream();
+        await frontStream.WriteAsync(requestPayload, cts.Token);
+        await frontStream.FlushAsync(cts.Token);
+
+        var stopwatch = Stopwatch.StartNew();
+        var clientResponseBytes = await ReadToEndAsync(frontStream, cts.Token);
+        await relayTask;
+        stopwatch.Stop();
+
+        Assert.Equal("ping", await remoteServerTask);
+        Assert.Empty(clientResponseBytes);
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2.5));
+    }
+
+    [Fact]
+    public async Task RelayAsync_skips_prefixed_bytes_already_sent_by_remote_stream()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var relayService = new RelayService();
+        var initialPayload = Encoding.ASCII.GetBytes("prefetched-");
+        var tailPayload = Encoding.ASCII.GetBytes("tail");
+
+        using var remoteListener = new TcpListener(IPAddress.Loopback, 0);
+        remoteListener.Start();
+        var remotePort = ((IPEndPoint)remoteListener.LocalEndpoint).Port;
+
+        var remoteServerTask = Task.Run(async () =>
+        {
+            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token);
+            await using var serverStream = serverClient.GetStream();
+            var request = await ReadToEndAsync(serverStream, cts.Token);
+            return Encoding.ASCII.GetString(request);
+        }, cts.Token);
+
+        using var frontListener = new TcpListener(IPAddress.Loopback, 0);
+        frontListener.Start();
+        var frontPort = ((IPEndPoint)frontListener.LocalEndpoint).Port;
+
+        var relayTask = Task.Run(async () =>
+        {
+            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token);
+            await using var inboundStream = new PrefixedReadStream(inboundClient.GetStream(), initialPayload);
+
+            using var outboundClient = new TcpClient
+            {
+                NoDelay = true
+            };
+
+            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token);
+            await using var outboundStream = outboundClient.GetStream();
+            await outboundStream.WriteAsync(initialPayload, cts.Token);
+            await outboundStream.FlushAsync(cts.Token);
+
+            await relayService.RelayAsync(
+                inboundStream,
+                new InitialPayloadSentStream(outboundStream, initialPayload.Length),
+                cts.Token);
+        }, cts.Token);
+
+        using var frontClient = new TcpClient
+        {
+            NoDelay = true
+        };
+
+        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
+        await using var frontStream = frontClient.GetStream();
+        await frontStream.WriteAsync(tailPayload, cts.Token);
+        await frontStream.FlushAsync(cts.Token);
+        frontClient.Client.Shutdown(SocketShutdown.Send);
+
+        await relayTask;
+        var remoteRequest = await remoteServerTask;
+        Assert.Equal("prefetched-tail", remoteRequest);
     }
 
     private static async Task<RelayScenarioResult> RunRelayScenarioAsync(bool trackTraffic, bool clientHalfClose)
@@ -196,22 +327,22 @@ public sealed class RelayServiceTests
 
         var remoteServerTask = Task.Run(async () =>
         {
-            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var serverClient = await remoteListener.AcceptTcpClientAsync(cts.Token);
             await using var serverStream = serverClient.GetStream();
 
             byte[] request;
             if (clientHalfClose)
             {
-                request = await ReadToEndAsync(serverStream, cts.Token).ConfigureAwait(false);
+                request = await ReadToEndAsync(serverStream, cts.Token);
             }
             else
             {
                 request = new byte[requestPayload.Length];
-                await serverStream.ReadExactlyAsync(request.AsMemory(0, request.Length), cts.Token).ConfigureAwait(false);
+                await serverStream.ReadExactlyAsync(request.AsMemory(0, request.Length), cts.Token);
             }
 
-            await serverStream.WriteAsync(responsePayload, cts.Token).ConfigureAwait(false);
-            await serverStream.FlushAsync(cts.Token).ConfigureAwait(false);
+            await serverStream.WriteAsync(responsePayload, cts.Token);
+            await serverStream.FlushAsync(cts.Token);
             return Encoding.ASCII.GetString(request);
         }, cts.Token);
 
@@ -221,7 +352,7 @@ public sealed class RelayServiceTests
 
         var relayTask = Task.Run(async () =>
         {
-            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+            using var inboundClient = await frontListener.AcceptTcpClientAsync(cts.Token);
             await using var inboundStream = inboundClient.GetStream();
 
             using var outboundClient = new TcpClient
@@ -229,12 +360,12 @@ public sealed class RelayServiceTests
                 NoDelay = true
             };
 
-            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token).ConfigureAwait(false);
+            await outboundClient.ConnectAsync(IPAddress.Loopback, remotePort, cts.Token);
             await using var outboundStream = outboundClient.GetStream();
 
             if (!trackTraffic)
             {
-                await relayService.RelayAsync(inboundStream, outboundStream, cts.Token).ConfigureAwait(false);
+                await relayService.RelayAsync(inboundStream, outboundStream, cts.Token);
                 return;
             }
 
@@ -252,7 +383,7 @@ public sealed class RelayServiceTests
                 new ByteRateGate(0),
                 new ByteRateGate(0),
                 trafficRegistry,
-                cts.Token).ConfigureAwait(false);
+                cts.Token);
         }, cts.Token);
 
         using var frontClient = new TcpClient
@@ -260,19 +391,19 @@ public sealed class RelayServiceTests
             NoDelay = true
         };
 
-        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token).ConfigureAwait(false);
+        await frontClient.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
         await using var frontStream = frontClient.GetStream();
-        await frontStream.WriteAsync(requestPayload, cts.Token).ConfigureAwait(false);
-        await frontStream.FlushAsync(cts.Token).ConfigureAwait(false);
+        await frontStream.WriteAsync(requestPayload, cts.Token);
+        await frontStream.FlushAsync(cts.Token);
         if (clientHalfClose)
         {
             frontClient.Client.Shutdown(SocketShutdown.Send);
         }
 
-        var clientResponseBytes = await ReadToEndAsync(frontStream, cts.Token).ConfigureAwait(false);
+        var clientResponseBytes = await ReadToEndAsync(frontStream, cts.Token);
 
-        await relayTask.ConfigureAwait(false);
-        var remoteRequest = await remoteServerTask.ConfigureAwait(false);
+        await relayTask;
+        var remoteRequest = await remoteServerTask;
 
         return new RelayScenarioResult(
             remoteRequest,
@@ -287,13 +418,13 @@ public sealed class RelayServiceTests
 
         while (true)
         {
-            var read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false);
+            var read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken);
             if (read == 0)
             {
                 return buffer.ToArray();
             }
 
-            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken);
         }
     }
 

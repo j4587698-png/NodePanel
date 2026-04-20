@@ -114,6 +114,60 @@ public sealed class VmessBodyCodecTests
         }
     }
 
+    [Fact]
+    public async Task ClientConnection_dispose_writes_request_terminator_by_default()
+    {
+        var request = CreateRequest(
+            VmessCommand.Connect,
+            VmessSecurityType.Aes128Gcm,
+            VmessRequestOptions.ChunkStream |
+            VmessRequestOptions.ChunkMasking |
+            VmessRequestOptions.GlobalPadding |
+            VmessRequestOptions.AuthenticatedLength);
+        await using var transport = new NonClosingMemoryStream();
+        var context = new RuntimeInternetConnectionContext(transport);
+        var connection = new VmessClientConnection(
+            context,
+            noTerminationSignal: false,
+            applicationStream: new VmessClientDataStream(context.ApplicationStream, request));
+
+        await connection.Stream.WriteAsync(Encoding.ASCII.GetBytes("ping"), CancellationToken.None);
+        await connection.Stream.FlushAsync(CancellationToken.None);
+
+        var lengthBeforeDispose = transport.ToArray().Length;
+        await connection.DisposeAsync();
+
+        var encoded = transport.ToArray();
+        Assert.True(encoded.Length > lengthBeforeDispose);
+        Assert.Equal("ping", Encoding.ASCII.GetString(DecodeRequestStream(request, encoded)));
+    }
+
+    [Fact]
+    public async Task ClientConnection_dispose_skips_request_terminator_when_disabled_by_account()
+    {
+        var request = CreateRequest(
+            VmessCommand.Connect,
+            VmessSecurityType.Aes128Gcm,
+            VmessRequestOptions.ChunkStream |
+            VmessRequestOptions.ChunkMasking |
+            VmessRequestOptions.GlobalPadding |
+            VmessRequestOptions.AuthenticatedLength);
+        await using var transport = new NonClosingMemoryStream();
+        var context = new RuntimeInternetConnectionContext(transport);
+        var connection = new VmessClientConnection(
+            context,
+            noTerminationSignal: true,
+            applicationStream: new VmessClientDataStream(context.ApplicationStream, request));
+
+        await connection.Stream.WriteAsync(Encoding.ASCII.GetBytes("ping"), CancellationToken.None);
+        await connection.Stream.FlushAsync(CancellationToken.None);
+
+        var lengthBeforeDispose = transport.ToArray().Length;
+        await connection.DisposeAsync();
+
+        Assert.Equal(lengthBeforeDispose, transport.ToArray().Length);
+    }
+
     private static async Task<byte[]> ReadAllAsync(Stream stream, int bufferSize)
     {
         using var output = new MemoryStream();
@@ -182,6 +236,21 @@ public sealed class VmessBodyCodecTests
         return output.ToArray();
     }
 
+    private static byte[] DecodeRequestStream(VmessRequest request, byte[] encoded)
+    {
+        var packets = DecodeFrames(
+            encoded,
+            CreateRequestCipher(request),
+            CreateRequestFrameOptions(request));
+        using var output = new MemoryStream();
+        foreach (var packet in packets)
+        {
+            output.Write(packet);
+        }
+
+        return output.ToArray();
+    }
+
     private static IReadOnlyList<byte[]> DecodeResponsePackets(VmessRequest request, byte[] encoded)
         => DecodeFrames(
             encoded,
@@ -196,11 +265,23 @@ public sealed class VmessBodyCodecTests
         return VmessBodyCodecFactory.CreatePayloadCipher(security, responseBodyKey, responseBodyIv);
     }
 
+    private static IVmessBodyCipher CreateRequestCipher(VmessRequest request)
+    {
+        var security = VmessBodyCodecFactory.NormalizeSecurity(request.Security);
+        return VmessBodyCodecFactory.CreatePayloadCipher(security, request.RequestBodyKey, request.RequestBodyIv);
+    }
+
     private static VmessBodyFrameOptions CreateResponseFrameOptions(VmessRequest request)
     {
         var security = VmessBodyCodecFactory.NormalizeSecurity(request.Security);
         var responseBodyIv = VmessHandshakeReader.DeriveResponseBodyIv(request.RequestBodyIv);
         return VmessBodyCodecFactory.CreateResponseFrameOptions(request, security, framed: true, responseBodyIv);
+    }
+
+    private static VmessBodyFrameOptions CreateRequestFrameOptions(VmessRequest request)
+    {
+        var security = VmessBodyCodecFactory.NormalizeSecurity(request.Security);
+        return VmessBodyCodecFactory.CreateRequestFrameOptions(request, security, framed: true);
     }
 
     private static IReadOnlyList<byte[]> DecodeFrames(
@@ -329,5 +410,14 @@ public sealed class VmessBodyCodecTests
             TargetHost = "example.com",
             TargetPort = command == VmessCommand.Udp ? 53 : 443
         };
+    }
+
+    private sealed class NonClosingMemoryStream : MemoryStream
+    {
+        protected override void Dispose(bool disposing)
+        {
+        }
+
+        public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

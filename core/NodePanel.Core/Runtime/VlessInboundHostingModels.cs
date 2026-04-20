@@ -4,9 +4,13 @@ public sealed record VlessInboundServerOptions
 {
     public VlessInboundRuntimePlan Plan { get; init; } = VlessInboundRuntimePlan.Empty;
 
-    public TrojanInboundServerLimits Limits { get; init; } = new();
+    public RuntimeTransportLimits Limits { get; init; } = new();
 
-    public TrojanInboundTlsOptions? Tls { get; init; }
+    public RuntimeSessionPolicyCatalog SessionPolicies { get; init; } = RuntimeSessionPolicyCatalog.Default;
+
+    public RuntimeTlsOptions? Tls { get; init; }
+
+    public RuntimeRealityServerOptions? Reality { get; init; }
 
     public bool UseCone { get; init; } = true;
 
@@ -17,9 +21,9 @@ public sealed record VlessInboundServerCallbacks
 {
     public Action<VlessTlsListenerRuntime>? ListenerStarted { get; init; }
 
-    public Action<TrojanInboundClientHelloRejectionContext>? ClientHelloRejected { get; init; }
+    public Action<RuntimeTlsClientHelloRejectionContext>? ClientHelloRejected { get; init; }
 
-    public Action<TrojanInboundSniRejectionContext>? UnknownServerNameRejected { get; init; }
+    public Action<RuntimeTlsServerNameRejectionContext>? UnknownServerNameRejected { get; init; }
 
-    public Action<TrojanInboundConnectionErrorContext>? ConnectionError { get; init; }
+    public Action<RuntimeInboundConnectionErrorContext>? ConnectionError { get; init; }
 }

@@ -1,9 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\core\NodePanel.Core\NodePanel.Core.csproj" />
     <ProjectReference Include="..\..\control\NodePanel.ControlPlane\NodePanel.ControlPlane.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ExcludeRestorePackageImports)' != 'true'">
+    <ProjectReference Include="..\..\core\NodePanel.Core\NodePanel.Core.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -11,7 +14,7 @@
     <OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
+    <BuildInParallel>false</BuildInParallel>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

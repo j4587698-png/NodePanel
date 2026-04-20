@@ -57,6 +57,15 @@ public interface IStrategyOutboundProbeService
         CancellationToken cancellationToken);
 }
 
+public interface IStrategyOutboundProbeCache
+{
+    bool TryGetCachedResults(string? tag, out IReadOnlyList<StrategyCandidateProbeResult> results);
+
+    void Invalidate(string? tag);
+
+    void InvalidateAll();
+}
+
 public static class StrategyOutboundDefaults
 {
     public const string ProbeUrl = "http://cp.cloudflare.com/generate_204";

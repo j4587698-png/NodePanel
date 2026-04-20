@@ -183,13 +183,15 @@ public static class OutboundTargetStrategyResolver
         ArgumentNullException.ThrowIfNull(dnsResolver);
 
         var effectiveStrategy = GetEffectiveStrategy(context, destination, targetStrategy);
-        if (!OutboundTargetStrategies.HasStrategy(effectiveStrategy) ||
+        if (DispatchDnsResolution.ShouldSkipDnsResolve(context) ||
+            !OutboundTargetStrategies.HasStrategy(effectiveStrategy) ||
             IPAddress.TryParse(destination.Host, out _))
         {
             return destination;
         }
 
-        var addresses = await dnsResolver.ResolveAsync(destination.Host, cancellationToken).ConfigureAwait(false);
+        var resolver = DispatchDnsResolution.ResolveResolver(context, dnsResolver);
+        var addresses = await resolver.ResolveAsync(destination.Host, cancellationToken).ConfigureAwait(false);
         var ordered = FilterAddresses(addresses, effectiveStrategy);
         if (ordered.Count == 0)
         {
@@ -262,6 +264,25 @@ public static class OutboundSocketDialer
             addressFamily,
             SystemDnsResolver.Instance,
             cancellationToken);
+
+    public static Task<IReadOnlyList<IPEndPoint>> ResolveTcpEndPointsAsync(
+        DispatchContext context,
+        string host,
+        int port,
+        AddressFamily addressFamily,
+        IDnsResolver dnsResolver,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(dnsResolver);
+
+        return ResolveTcpEndPointsAsync(
+            host,
+            port,
+            addressFamily,
+            DispatchDnsResolution.ResolveResolver(context, dnsResolver),
+            cancellationToken);
+    }
 
     public static async Task<IReadOnlyList<IPEndPoint>> ResolveTcpEndPointsAsync(
         string host,
@@ -351,6 +372,16 @@ public static class OutboundSocketDialer
         return socket;
     }
 
+    internal static IPEndPoint? ResolveBindEndPoint(
+        DispatchContext context,
+        string? via,
+        string? viaCidr,
+        AddressFamily addressFamily)
+    {
+        var localAddress = ResolveBindAddress(context, via, viaCidr, addressFamily);
+        return localAddress is null ? null : new IPEndPoint(localAddress, 0);
+    }
+
     private static void BindSocketIfNeeded(
         Socket socket,
         DispatchContext context,
@@ -358,13 +389,13 @@ public static class OutboundSocketDialer
         string? viaCidr,
         AddressFamily addressFamily)
     {
-        var localAddress = ResolveBindAddress(context, via, viaCidr, addressFamily);
-        if (localAddress is null)
+        var localEndPoint = ResolveBindEndPoint(context, via, viaCidr, addressFamily);
+        if (localEndPoint is null)
         {
             return;
         }
 
-        socket.Bind(new IPEndPoint(localAddress, 0));
+        socket.Bind(localEndPoint);
     }
 
     private static IPAddress? ResolveBindAddress(

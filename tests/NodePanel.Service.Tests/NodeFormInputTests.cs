@@ -66,6 +66,11 @@ public sealed class NodeFormInputTests
                   "password": "secret"
                 }
               ],
+              "routingResources": {
+                "resourceDirectory": "assets",
+                "geoSitePath": "assets/geosite.dat",
+                "geoIpPath": "assets/geoip.dat"
+              },
               "routingRules": [
                 {
                   "outboundTag": "proxy",
@@ -109,6 +114,9 @@ public sealed class NodeFormInputTests
         var outbound = Assert.Single(request.Config.Outbounds);
         Assert.Equal("proxy", outbound.Tag);
         Assert.Equal("edge.example.com", outbound.ServerHost);
+        Assert.Equal("assets", request.Config.RoutingResources.ResourceDirectory);
+        Assert.Equal("assets/geosite.dat", request.Config.RoutingResources.GeoSitePath);
+        Assert.Equal("assets/geoip.dat", request.Config.RoutingResources.GeoIpPath);
         Assert.Single(request.Config.RoutingRules);
     }
 
@@ -186,12 +194,24 @@ public sealed class NodeFormInputTests
                 Protocols = "http, tls",
                 Networks = "tcp",
                 UserIds = "user-a",
+                Processes = "curl.exe, /usr/bin/",
                 Domains = "example.com",
                 SourceCidrs = "10.0.0.0/8",
+                DestinationCidrs = "198.51.100.0/24",
                 DestinationPorts = "443",
+                SourcePorts = "50000",
+                LocalCidrs = "127.0.0.0/8",
+                LocalPorts = "10808-10810",
+                VlessRoutes = "4360-4370",
                 OutboundTag = "proxy"
             }
         ];
+        form.RoutingResources = new RoutingResourceFormInput
+        {
+            ResourceDirectory = "assets",
+            GeoSitePath = "config/geosite.dat",
+            GeoIpPath = "config/geoip.dat"
+        };
 
         var success = form.TryToRequest(out var request, out var error);
 
@@ -240,10 +260,19 @@ public sealed class NodeFormInputTests
         Assert.Equal(["http", "tls"], rule.Protocols);
         Assert.Equal(["tcp"], rule.Networks);
         Assert.Equal(["user-a"], rule.UserIds);
+        Assert.Equal(["curl.exe", "/usr/bin/"], rule.Processes);
         Assert.Equal(["example.com"], rule.Domains);
         Assert.Equal(["10.0.0.0/8"], rule.SourceCidrs);
+        Assert.Equal(["198.51.100.0/24"], rule.DestinationCidrs);
         Assert.Equal(["443"], rule.DestinationPorts);
+        Assert.Equal(["50000"], rule.SourcePorts);
+        Assert.Equal(["127.0.0.0/8"], rule.LocalCidrs);
+        Assert.Equal(["10808-10810"], rule.LocalPorts);
+        Assert.Equal(["4360-4370"], rule.VlessRoutes);
         Assert.Equal("proxy", rule.OutboundTag);
+        Assert.Equal("assets", request.Config.RoutingResources.ResourceDirectory);
+        Assert.Equal("config/geosite.dat", request.Config.RoutingResources.GeoSitePath);
+        Assert.Equal("config/geoip.dat", request.Config.RoutingResources.GeoIpPath);
     }
 
     [Fact]
@@ -289,7 +318,7 @@ public sealed class NodeFormInputTests
                         AllowedJa3 = ["a1b2c3"]
                     }
                 },
-                Limits = new TrojanInboundLimits
+                Limits = new InboundLimitsConfig
                 {
                     ConnectionIdleSeconds = 90,
                     UplinkOnlySeconds = 2,
@@ -317,12 +346,24 @@ public sealed class NodeFormInputTests
                         Password = "secret"
                     }
                 ],
+                RoutingResources = new RoutingResourceOptions
+                {
+                    ResourceDirectory = "assets",
+                    GeoSitePath = "assets/geosite.dat",
+                    GeoIpPath = "assets/geoip.dat"
+                },
                 RoutingRules =
                 [
                     new RoutingRuleConfig
                     {
                         OutboundTag = "proxy",
-                        Domains = ["example.com"]
+                        Processes = ["curl.exe", "/usr/bin/"],
+                        Domains = ["example.com"],
+                        DestinationCidrs = ["198.51.100.0/24"],
+                        SourcePorts = ["50000"],
+                        LocalCidrs = ["127.0.0.0/8"],
+                        LocalPorts = ["10808-10810"],
+                        VlessRoutes = ["4360-4370"]
                     }
                 ]
             }
@@ -340,10 +381,26 @@ public sealed class NodeFormInputTests
         Assert.Equal(DnsModes.Http, form.Dns.Mode);
         Assert.Equal("https://dns.example/resolve", Assert.Single(form.Dns.Servers).Url);
         Assert.Equal("proxy", Assert.Single(form.Outbounds).Tag);
+        Assert.Equal("assets", form.RoutingResources.ResourceDirectory);
+        Assert.Equal("assets/geosite.dat", form.RoutingResources.GeoSitePath);
+        Assert.Equal("assets/geoip.dat", form.RoutingResources.GeoIpPath);
+        Assert.Equal("curl.exe, /usr/bin/", Assert.Single(form.RoutingRules).Processes);
         Assert.Equal("example.com", Assert.Single(form.RoutingRules).Domains);
+        Assert.Equal("198.51.100.0/24", Assert.Single(form.RoutingRules).DestinationCidrs);
+        Assert.Equal("50000", Assert.Single(form.RoutingRules).SourcePorts);
+        Assert.Equal("127.0.0.0/8", Assert.Single(form.RoutingRules).LocalCidrs);
+        Assert.Equal("10808-10810", Assert.Single(form.RoutingRules).LocalPorts);
+        Assert.Equal("4360-4370", Assert.Single(form.RoutingRules).VlessRoutes);
         Assert.Equal("h2", form.Inbounds[0].ApplicationProtocols);
         Assert.True(form.Inbounds[0].Sniffing.Enabled);
         Assert.Equal("127.0.0.1:9000", Assert.Single(form.Inbounds[0].Fallbacks).Dest);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal("assets", request.Config.RoutingResources.ResourceDirectory);
+        Assert.Equal("assets/geosite.dat", request.Config.RoutingResources.GeoSitePath);
+        Assert.Equal("assets/geoip.dat", request.Config.RoutingResources.GeoIpPath);
     }
 
     [Theory]
@@ -405,22 +462,22 @@ public sealed class NodeFormInputTests
             Protocol = InboundProtocols.Trojan,
             Config = new NodeServiceConfig
             {
-                LocalInbounds =
+                ProxyInbounds =
                 [
-                    new LocalInboundConfig
+                    new ProxyInboundConfig
                     {
                         Tag = "socks-local",
                         Enabled = true,
-                        Protocol = LocalInboundProtocols.Socks,
+                        Protocol = ProxyInboundProtocols.Socks,
                         ListenAddress = "127.0.0.1",
                         Port = 10808,
                         HandshakeTimeoutSeconds = 12
                     },
-                    new LocalInboundConfig
+                    new ProxyInboundConfig
                     {
                         Tag = "http-local",
                         Enabled = true,
-                        Protocol = LocalInboundProtocols.Http,
+                        Protocol = ProxyInboundProtocols.Http,
                         ListenAddress = "127.0.0.1",
                         Port = 10809,
                         HandshakeTimeoutSeconds = 15
@@ -431,16 +488,16 @@ public sealed class NodeFormInputTests
 
         var form = NodeFormInput.FromRecord(record);
 
-        Assert.Contains("\"localInbounds\"", form.AdvancedConfigJson, StringComparison.Ordinal);
+        Assert.Contains("\"proxyInbounds\"", form.AdvancedConfigJson, StringComparison.Ordinal);
 
         var success = form.TryToRequest(out var request, out var error);
 
         Assert.True(success, error);
-        Assert.Equal(2, request.Config.LocalInbounds.Count);
-        Assert.Equal("socks-local", request.Config.LocalInbounds[0].Tag);
-        Assert.Equal(LocalInboundProtocols.Socks, request.Config.LocalInbounds[0].Protocol);
-        Assert.Equal("http-local", request.Config.LocalInbounds[1].Tag);
-        Assert.Equal(LocalInboundProtocols.Http, request.Config.LocalInbounds[1].Protocol);
+        Assert.Equal(2, request.Config.ProxyInbounds.Count);
+        Assert.Equal("socks-local", request.Config.ProxyInbounds[0].Tag);
+        Assert.Equal(ProxyInboundProtocols.Socks, request.Config.ProxyInbounds[0].Protocol);
+        Assert.Equal("http-local", request.Config.ProxyInbounds[1].Tag);
+        Assert.Equal(ProxyInboundProtocols.Http, request.Config.ProxyInbounds[1].Protocol);
     }
 
     [Fact]
@@ -498,6 +555,54 @@ public sealed class NodeFormInputTests
         Assert.Equal(OutboundProtocols.Selector, strategyOutbound.Protocol);
         Assert.Equal(["proxy", "direct"], strategyOutbound.CandidateTags);
         Assert.Equal("proxy", strategyOutbound.SelectedTag);
+    }
+
+    [Fact]
+    public void Vless_reverse_outbounds_round_trip_with_advanced_config()
+    {
+        var record = new PanelNodeRecord
+        {
+            NodeId = "node-reverse",
+            DisplayName = "Node Reverse",
+            Protocol = InboundProtocols.Trojan,
+            Config = new NodeServiceConfig
+            {
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    },
+                    new OutboundConfig
+                    {
+                        Tag = "reverse-proxy",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Vless,
+                        ServerHost = "edge.example.com",
+                        ServerPort = 443,
+                        ReverseTag = "reverse-edge"
+                    }
+                ]
+            }
+        };
+
+        var form = NodeFormInput.FromRecord(record);
+
+        Assert.Single(form.Outbounds);
+        Assert.Equal("direct", form.Outbounds[0].Tag);
+        Assert.Contains("\"reverseTag\": \"reverse-edge\"", form.AdvancedConfigJson, StringComparison.Ordinal);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal(2, request.Config.Outbounds.Count);
+        var reverseOutbound = Assert.Single(
+            request.Config.Outbounds,
+            static outbound => string.Equals(outbound.Tag, "reverse-proxy", StringComparison.Ordinal));
+        Assert.Equal(OutboundProtocols.Vless, reverseOutbound.Protocol);
+        Assert.Equal("reverse-edge", reverseOutbound.ReverseTag);
     }
 
     private static NodeFormInput CreateBaseForm()

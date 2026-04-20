@@ -17,7 +17,7 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
     private readonly ILogger<ControlPlaneClientService> _logger;
     private readonly string _nodeId;
     private readonly NodePanelOptions _options;
-    private readonly RuntimeConfigStore _runtimeConfigStore;
+    private readonly AppliedRuntimeSnapshotStore _appliedRuntimeSnapshotStore;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private ClientWebSocket? _socket;
@@ -26,13 +26,13 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         NodePanelOptions options,
         CertificateRenewalSignal certificateRenewalSignal,
         ConfigOrchestrator configOrchestrator,
-        RuntimeConfigStore runtimeConfigStore,
+        AppliedRuntimeSnapshotStore appliedRuntimeSnapshotStore,
         ILogger<ControlPlaneClientService> logger)
     {
         _options = options;
         _certificateRenewalSignal = certificateRenewalSignal;
         _configOrchestrator = configOrchestrator;
-        _runtimeConfigStore = runtimeConfigStore;
+        _appliedRuntimeSnapshotStore = appliedRuntimeSnapshotStore;
         _logger = logger;
         _nodeId = string.IsNullOrWhiteSpace(options.Identity.NodeId) ? Environment.MachineName : options.Identity.NodeId;
     }
@@ -274,23 +274,25 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
 
     private ControlPlaneEnvelope CreateHelloEnvelope()
     {
+        var appliedRevision = GetAppliedRevision();
         var payload = new NodeHelloPayload
         {
             NodeId = _nodeId,
             Version = NodePanel.Service.ApplicationVersion.Current,
             Capabilities = new[] { "trojan", "vless", "vmess", "udp", "tls", "ws", "stats", "rate-limit", "certificate-renew" },
-            AppliedRevision = _runtimeConfigStore.GetSnapshot().Revision
+            AppliedRevision = appliedRevision
         };
 
         return CreateEnvelope(
             ControlMessageTypes.NodeHello,
-            _runtimeConfigStore.GetSnapshot().Revision,
+            appliedRevision,
             payload,
             ControlPlaneJsonSerializerContext.Default.NodeHelloPayload);
     }
 
     private ControlPlaneEnvelope CreateHeartbeatEnvelope()
     {
+        var appliedRevision = GetAppliedRevision();
         var payload = new HeartbeatPayload
         {
             Timestamp = DateTimeOffset.UtcNow
@@ -298,13 +300,14 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
 
         return CreateEnvelope(
             ControlMessageTypes.Heartbeat,
-            _runtimeConfigStore.GetSnapshot().Revision,
+            appliedRevision,
             payload,
             ControlPlaneJsonSerializerContext.Default.HeartbeatPayload);
     }
 
     private ControlPlaneEnvelope CreateApplyResultEnvelope(int requestedRevision, bool success, string? error)
     {
+        var appliedRevision = GetAppliedRevision();
         var payload = new ApplyResultPayload
         {
             RequestedRevision = requestedRevision,
@@ -314,10 +317,13 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
 
         return CreateEnvelope(
             ControlMessageTypes.ApplyResult,
-            _runtimeConfigStore.GetSnapshot().Revision,
+            appliedRevision,
             payload,
             ControlPlaneJsonSerializerContext.Default.ApplyResultPayload);
     }
+
+    private int GetAppliedRevision()
+        => Math.Max(0, _appliedRuntimeSnapshotStore.GetSnapshot().Revision);
 
     private ControlPlaneEnvelope CreateEnvelope<TPayload>(
         string type,

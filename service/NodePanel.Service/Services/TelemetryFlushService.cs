@@ -10,44 +10,33 @@ namespace NodePanel.Service.Services;
 
 public sealed class TelemetryFlushService : BackgroundService
 {
+    private readonly AppliedRuntimeSnapshotStore _appliedRuntimeSnapshotStore;
     private readonly CertificateStateStore _certificateStateStore;
     private readonly IControlPlaneConnection _controlPlaneConnection;
     private readonly HostResourceTelemetryProvider _hostResourceTelemetryProvider;
-    private readonly LocalProxyStateStore _localProxyStateStore;
     private readonly string _nodeId;
-    private readonly NodePanelOptions _options;
     private readonly RuntimeConfigStore _runtimeConfigStore;
-    private readonly SessionRegistry _sessionRegistry;
-    private readonly StrategyOutboundProbeService _strategyOutboundProbeService;
     private readonly TelemetryDeltaTracker _telemetryDeltaTracker;
-    private readonly TrafficRegistry _trafficRegistry;
-    private readonly UserStore _userStore;
+    private readonly IRuntime _runtime;
 
     public TelemetryFlushService(
+        AppliedRuntimeSnapshotStore appliedRuntimeSnapshotStore,
         CertificateStateStore certificateStateStore,
         IControlPlaneConnection controlPlaneConnection,
         HostResourceTelemetryProvider hostResourceTelemetryProvider,
-        LocalProxyStateStore localProxyStateStore,
         NodePanelOptions options,
         RuntimeConfigStore runtimeConfigStore,
-        SessionRegistry sessionRegistry,
-        StrategyOutboundProbeService strategyOutboundProbeService,
         TelemetryDeltaTracker telemetryDeltaTracker,
-        TrafficRegistry trafficRegistry,
-        UserStore userStore)
+        IRuntime runtime)
     {
+        _appliedRuntimeSnapshotStore = appliedRuntimeSnapshotStore;
         _certificateStateStore = certificateStateStore;
         _controlPlaneConnection = controlPlaneConnection;
         _hostResourceTelemetryProvider = hostResourceTelemetryProvider;
-        _localProxyStateStore = localProxyStateStore;
-        _options = options;
         _nodeId = string.IsNullOrWhiteSpace(options.Identity.NodeId) ? Environment.MachineName : options.Identity.NodeId;
         _runtimeConfigStore = runtimeConfigStore;
-        _sessionRegistry = sessionRegistry;
-        _strategyOutboundProbeService = strategyOutboundProbeService;
         _telemetryDeltaTracker = telemetryDeltaTracker;
-        _trafficRegistry = trafficRegistry;
-        _userStore = userStore;
+        _runtime = runtime;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -63,10 +52,11 @@ public sealed class TelemetryFlushService : BackgroundService
 
     private async Task FlushAsync(CancellationToken cancellationToken)
     {
-        var snapshot = _runtimeConfigStore.GetSnapshot();
-        var trafficSnapshot = _trafficRegistry.CreateSnapshot();
+        var appliedSnapshot = _appliedRuntimeSnapshotStore.GetSnapshot();
+        var runtimeStatus = _runtime.GetStatus();
+        var trafficSnapshot = _runtime.GetTrafficSnapshot();
         var traffic = _telemetryDeltaTracker.CreateDelta(trafficSnapshot);
-        var inboundStatuses = NodeServiceConfigInbounds.GetEffectiveInbounds(snapshot.Config)
+        var inboundStatuses = NodeServiceConfigInbounds.GetEffectiveInbounds(appliedSnapshot.Config)
             .Where(static inbound => inbound.Enabled)
             .Select(static inbound => new NodeInboundStatusPayload
             {
@@ -80,16 +70,17 @@ public sealed class TelemetryFlushService : BackgroundService
             .OrderBy(static inbound => inbound.Protocol, StringComparer.Ordinal)
             .ThenBy(static inbound => inbound.Tag, StringComparer.Ordinal)
             .ToArray();
-        var localProxyStatuses = _localProxyStateStore.CreateSnapshot(snapshot.Config.LocalInbounds, snapshot.Revision);
-        var outboundStrategies = await BuildOutboundStrategyStatusesAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        var proxyInboundStatuses = CreateProxyInboundStatuses(appliedSnapshot, runtimeStatus);
+        var outboundStrategies = CreateOutboundStrategyStatuses(
+            await _runtime.RefreshStrategyStatusesAsync(cancellationToken).ConfigureAwait(false));
         var status = new NodeStatusPayload
         {
             Timestamp = DateTimeOffset.UtcNow,
-            ActiveSessions = _sessionRegistry.ActiveSessions,
-            KnownUsers = _userStore.KnownUsers,
+            ActiveSessions = runtimeStatus.ActiveSessions,
+            KnownUsers = runtimeStatus.KnownUsers,
             Inbounds = inboundStatuses,
             Certificate = _certificateStateStore.GetSnapshot().ToPayload(),
-            LocalProxies = localProxyStatuses,
+            ProxyInbounds = proxyInboundStatuses,
             OutboundStrategies = outboundStrategies,
             Host = _hostResourceTelemetryProvider.Capture()
         };
@@ -97,7 +88,7 @@ public sealed class TelemetryFlushService : BackgroundService
         var payload = new TelemetryBatchPayload
         {
             NodeId = _nodeId,
-            AppliedRevision = snapshot.Revision,
+            AppliedRevision = appliedSnapshot.Revision,
             Traffic = traffic,
             Status = status
         };
@@ -106,7 +97,7 @@ public sealed class TelemetryFlushService : BackgroundService
         {
             Type = ControlMessageTypes.TelemetryBatch,
             NodeId = _nodeId,
-            Revision = snapshot.Revision,
+            Revision = appliedSnapshot.Revision,
             Payload = JsonSerializer.SerializeToElement(payload, ControlPlaneJsonSerializerContext.Default.TelemetryBatchPayload)
         };
 
@@ -116,69 +107,79 @@ public sealed class TelemetryFlushService : BackgroundService
         }
     }
 
-    private async Task<IReadOnlyList<NodeStrategyOutboundStatusPayload>> BuildOutboundStrategyStatusesAsync(
+    private static IReadOnlyList<NodeProxyInboundStatusPayload> CreateProxyInboundStatuses(
         NodeRuntimeSnapshot snapshot,
-        CancellationToken cancellationToken)
+        RuntimeStatusSnapshot runtimeStatus)
     {
-        var strategyOutbounds = snapshot.OutboundPlan.Outbounds
-            .Where(static outbound => IsStrategyOutbound(outbound.Protocol))
-            .OrderBy(static outbound => outbound.Tag, StringComparer.Ordinal)
+        var listeners = runtimeStatus.Listeners
+            .Where(static listener => listener.IsProxyInbound)
+            .ToDictionary(
+                static listener => BuildProxyInboundKey(
+                    listener.Protocol,
+                    listener.Tag,
+                    listener.Binding.ListenAddress,
+                    listener.Binding.Port),
+                StringComparer.Ordinal);
+
+        return snapshot.Config.ProxyInbounds
+            .Where(static inbound => inbound.Enabled)
+            .Select(inbound =>
+            {
+                var protocol = ProxyInboundProtocols.Normalize(inbound.Protocol);
+                var key = BuildProxyInboundKey(protocol, inbound.Tag, inbound.ListenAddress, inbound.Port);
+                listeners.TryGetValue(key, out var listener);
+
+                return new NodeProxyInboundStatusPayload
+                {
+                    Tag = inbound.Tag ?? string.Empty,
+                    Protocol = protocol,
+                    ListenAddress = inbound.ListenAddress ?? string.Empty,
+                    Port = inbound.Port,
+                    Listening = listener?.State == RuntimeState.Running,
+                    LastStartedAt = listener?.LastStartedAt,
+                    Error = listener?.State == RuntimeState.Faulted &&
+                            !string.IsNullOrWhiteSpace(listener.Message)
+                        ? listener.Message
+                        : null
+                };
+            })
+            .OrderBy(static inbound => inbound.Protocol, StringComparer.Ordinal)
+            .ThenBy(static inbound => inbound.Tag, StringComparer.Ordinal)
             .ToArray();
+    }
 
-        if (strategyOutbounds.Length == 0)
-        {
-            return Array.Empty<NodeStrategyOutboundStatusPayload>();
-        }
-
-        var statuses = new List<NodeStrategyOutboundStatusPayload>(strategyOutbounds.Length);
-        foreach (var outbound in strategyOutbounds)
-        {
-            var settings = new StrategyOutboundSettings
+    private static IReadOnlyList<NodeStrategyOutboundStatusPayload> CreateOutboundStrategyStatuses(
+        IReadOnlyList<RuntimeStrategyStatus> strategyStatuses)
+    {
+        return strategyStatuses
+            .OrderBy(static outbound => outbound.Tag, StringComparer.Ordinal)
+            .Select(outbound => new NodeStrategyOutboundStatusPayload
             {
                 Tag = outbound.Tag,
                 Protocol = OutboundProtocols.Normalize(outbound.Protocol),
-                CandidateTags = outbound.CandidateTags.ToArray(),
                 SelectedTag = outbound.SelectedTag,
                 ProbeUrl = outbound.ProbeUrl,
-                ProbeIntervalSeconds = outbound.ProbeIntervalSeconds,
-                ProbeTimeoutSeconds = outbound.ProbeTimeoutSeconds,
-                ToleranceMilliseconds = outbound.ToleranceMilliseconds
-            };
-
-            var probeResults = settings.CandidateTags.Count == 0
-                ? Array.Empty<StrategyCandidateProbeResult>()
-                : await _strategyOutboundProbeService.ProbeAsync(settings, cancellationToken).ConfigureAwait(false);
-
-            statuses.Add(
-                new NodeStrategyOutboundStatusPayload
-                {
-                    Tag = outbound.Tag,
-                    Protocol = OutboundProtocols.Normalize(outbound.Protocol),
-                    SelectedTag = outbound.SelectedTag,
-                    ProbeUrl = outbound.ProbeUrl,
-                    Candidates = probeResults
-                        .Select(static result => new NodeStrategyCandidateProbePayload
-                        {
-                            Tag = result.Tag,
-                            Success = result.Success,
-                            LatencyMilliseconds = result.Success ? result.LatencyMilliseconds : null,
-                            CheckedAt = result.CheckedAt
-                        })
-                        .OrderBy(static result => result.Tag, StringComparer.Ordinal)
-                        .ToArray()
-                });
-        }
-
-        return statuses;
+                Candidates = outbound.ProbeResults
+                    .Select(static result => new NodeStrategyCandidateProbePayload
+                    {
+                        Tag = result.Tag,
+                        Success = result.Success,
+                        LatencyMilliseconds = result.Success ? result.LatencyMilliseconds : null,
+                        CheckedAt = result.CheckedAt
+                    })
+                    .OrderBy(static result => result.Tag, StringComparer.Ordinal)
+                    .ToArray()
+            })
+            .ToArray();
     }
 
-    private static bool IsStrategyOutbound(string protocol)
-    {
-        var normalized = OutboundProtocols.Normalize(protocol);
-        return normalized is
-            OutboundProtocols.Selector or
-            OutboundProtocols.UrlTest or
-            OutboundProtocols.Fallback or
-            OutboundProtocols.LoadBalance;
-    }
+    private static string BuildProxyInboundKey(string? protocol, string? tag, string? listenAddress, int port)
+        => string.Concat(
+            ProxyInboundProtocols.Normalize(protocol),
+            "\u0000",
+            tag?.Trim() ?? string.Empty,
+            "\u0000",
+            listenAddress?.Trim() ?? string.Empty,
+            "\u0000",
+            port.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }

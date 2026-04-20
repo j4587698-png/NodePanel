@@ -2,7 +2,20 @@ using System.Collections.Concurrent;
 
 namespace NodePanel.Core.Runtime;
 
-public sealed class RateLimiterRegistry
+public interface IRuntimeRateLimiterRegistry
+{
+    ByteRateGate GlobalGate { get; }
+
+    void Apply(IRuntimeInboundLimits limits, IReadOnlyList<IRuntimeUserDefinition> users);
+
+    void Apply(long globalBytesPerSecond, IReadOnlyList<IRuntimeUserDefinition> users);
+
+    ByteRateGate GetUserGate(IRuntimeUserDefinition user);
+
+    ByteRateGate GetUserGate(string scopedUserId);
+}
+
+public sealed class RateLimiterRegistry : IRuntimeRateLimiterRegistry
 {
     private readonly ConcurrentDictionary<string, ByteRateGate> _userGates = new(StringComparer.Ordinal);
 
@@ -13,7 +26,7 @@ public sealed class RateLimiterRegistry
 
     public ByteRateGate GlobalGate { get; }
 
-    public void Apply(ITrojanInboundLimits limits, IReadOnlyList<IRuntimeUserDefinition> users)
+    public void Apply(IRuntimeInboundLimits limits, IReadOnlyList<IRuntimeUserDefinition> users)
         => Apply(limits.GlobalBytesPerSecond, users);
 
     public void Apply(long globalBytesPerSecond, IReadOnlyList<IRuntimeUserDefinition> users)
@@ -23,13 +36,14 @@ public sealed class RateLimiterRegistry
         var activeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var user in users)
         {
-            if (string.IsNullOrWhiteSpace(user.UserId))
+            var runtimeKey = RuntimeUserKeys.Get(user);
+            if (runtimeKey.Length == 0)
             {
                 continue;
             }
 
-            activeIds.Add(user.UserId);
-            var gate = _userGates.GetOrAdd(user.UserId, _ => new ByteRateGate(Math.Max(0, user.BytesPerSecond)));
+            activeIds.Add(runtimeKey);
+            var gate = _userGates.GetOrAdd(runtimeKey, _ => new ByteRateGate(Math.Max(0, user.BytesPerSecond)));
             gate.UpdateRate(Math.Max(0, user.BytesPerSecond));
         }
 
@@ -43,5 +57,28 @@ public sealed class RateLimiterRegistry
     }
 
     public ByteRateGate GetUserGate(IRuntimeUserDefinition user)
-        => _userGates.GetOrAdd(user.UserId, _ => new ByteRateGate(user.BytesPerSecond));
+    {
+        ArgumentNullException.ThrowIfNull(user);
+
+        var runtimeKey = RuntimeUserKeys.Get(user);
+        var gate = _userGates.GetOrAdd(runtimeKey, _ => new ByteRateGate(Math.Max(0, user.BytesPerSecond)));
+        gate.UpdateRate(Math.Max(0, user.BytesPerSecond));
+        return gate;
+    }
+
+    public ByteRateGate GetUserGate(string scopedUserId)
+    {
+        var runtimeKey = NormalizeRuntimeKey(scopedUserId);
+        if (runtimeKey.Length == 0)
+        {
+            return new ByteRateGate(0);
+        }
+
+        return _userGates.GetOrAdd(runtimeKey, _ => new ByteRateGate(0));
+    }
+
+    private static string NormalizeRuntimeKey(string? scopedUserId)
+        => string.IsNullOrWhiteSpace(scopedUserId)
+            ? string.Empty
+            : scopedUserId.Trim();
 }

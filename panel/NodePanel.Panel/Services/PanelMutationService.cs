@@ -180,14 +180,27 @@ public sealed class PanelMutationService
     public async Task ResetUserTrafficAsync(string userId, CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
+        var lastResetAt = DateTimeOffset.UtcNow;
         var entity = await _db.FSql.Select<TrafficRecordEntity>().Where(x => x.UserId == userId).FirstAsync(cancellationToken)
                      ?? new TrafficRecordEntity { UserId = userId };
         
         entity.UploadBytes = 0;
         entity.DownloadBytes = 0;
-        entity.LastResetAt = DateTimeOffset.UtcNow;
+        entity.LastResetAt = lastResetAt;
         
         await _db.FSql.InsertOrUpdate<TrafficRecordEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
+
+        var scopedEntities = await _db.FSql.Select<ScopedTrafficRecordEntity>()
+            .Where(x => x.UserId == userId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var scopedEntity in scopedEntities)
+        {
+            scopedEntity.UploadBytes = 0;
+            scopedEntity.DownloadBytes = 0;
+            scopedEntity.LastResetAt = lastResetAt;
+            await _db.FSql.InsertOrUpdate<ScopedTrafficRecordEntity>().SetSource(scopedEntity).ExecuteAffrowsAsync(cancellationToken);
+        }
     }
 
     public async Task SavePlanAsync(string planId, UpsertPlanRequest request, CancellationToken cancellationToken)

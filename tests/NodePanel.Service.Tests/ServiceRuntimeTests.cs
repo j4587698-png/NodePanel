@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using NodePanel.ControlPlane.Configuration;
+using NodePanel.ControlPlane.Runtime;
 using NodePanel.Core.Protocol;
 using NodePanel.Core.Runtime;
 using NodePanel.Service.Configuration;
@@ -10,6 +11,44 @@ namespace NodePanel.Service.Tests;
 public sealed class ServiceRuntimeTests
 {
     [Fact]
+    public void ApplyBootstrap_applies_default_routing_resource_paths_from_host_base_directory()
+    {
+        var testRoot = CreateTestRoot();
+        try
+        {
+            var assetDirectory = Path.Combine(testRoot, "config");
+            Directory.CreateDirectory(assetDirectory);
+            File.WriteAllText(Path.Combine(assetDirectory, "geosite.dat"), string.Empty);
+            File.WriteAllText(Path.Combine(assetDirectory, "geoip.dat"), string.Empty);
+
+            var runtimeConfigStore = new RuntimeConfigStore();
+            var orchestrator = new ConfigOrchestrator(
+                runtimeConfigStore,
+                [OutboundProtocols.Freedom],
+                [new TrojanInboundRuntimeCompiler()],
+                new PersistedNodeConfigStore(
+                    new NodePanelOptions
+                    {
+                        CachedConfigPath = Path.Combine(testRoot, "runtime.json")
+                    },
+                    new TestLogger<PersistedNodeConfigStore>()),
+                new TestLogger<ConfigOrchestrator>(),
+                testRoot);
+
+            orchestrator.ApplyBootstrap(new NodeServiceConfig());
+
+            var snapshot = runtimeConfigStore.GetSnapshot();
+            Assert.Equal(assetDirectory, snapshot.Config.RoutingResources.ResourceDirectory);
+            Assert.Equal(Path.Combine(assetDirectory, "geosite.dat"), snapshot.Config.RoutingResources.GeoSitePath);
+            Assert.Equal(Path.Combine(assetDirectory, "geoip.dat"), snapshot.Config.RoutingResources.GeoIpPath);
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(testRoot);
+        }
+    }
+
+    [Fact]
     public async Task ApplySnapshotAsync_accepts_unified_unix_listener_and_normalizes_timeout_defaults()
     {
         var testRoot = CreateTestRoot();
@@ -18,9 +57,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -58,7 +95,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -87,9 +124,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -132,7 +167,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.False(applyResult.Success);
             Assert.Contains("same UNIX listener path", applyResult.Error, StringComparison.Ordinal);
@@ -152,9 +187,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -200,7 +233,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -237,9 +270,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -274,7 +305,7 @@ public sealed class ServiceRuntimeTests
                         ]
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -309,9 +340,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -340,7 +369,7 @@ public sealed class ServiceRuntimeTests
                         }
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -367,9 +396,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -404,7 +431,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -428,9 +455,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -482,7 +507,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -505,9 +530,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -558,7 +581,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -596,9 +619,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -656,7 +677,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -686,15 +707,9 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
                 [
-                    new FreedomOutboundHandler(),
-                    new TrojanOutboundHandler(
-                        new TrojanOutboundClient(),
-                        new StubTrojanOutboundSettingsProvider(),
-                        new TrojanUdpPacketReader(),
-                        new TrojanUdpPacketWriter())
+                    OutboundProtocols.Freedom,
+                    OutboundProtocols.Trojan
                 ],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
@@ -794,9 +809,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -824,7 +837,7 @@ public sealed class ServiceRuntimeTests
                         }
                     ]
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.False(applyResult.Success);
             Assert.Contains("Unsupported inbound protocol: vmess.", applyResult.Error, StringComparison.Ordinal);
@@ -844,9 +857,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler(), new VlessInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -901,7 +912,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -935,6 +946,121 @@ public sealed class ServiceRuntimeTests
     }
 
     [Fact]
+    public async Task ApplySnapshotAsync_builds_dokodemo_runtime_plan_from_unified_inbounds()
+    {
+        var testRoot = CreateTestRoot();
+        try
+        {
+            var runtimeConfigStore = new RuntimeConfigStore();
+            var orchestrator = new ConfigOrchestrator(
+                runtimeConfigStore,
+                [OutboundProtocols.Freedom],
+                [new TrojanInboundRuntimeCompiler(), new DokodemoInboundRuntimeCompiler()],
+                new PersistedNodeConfigStore(
+                    new NodePanelOptions
+                    {
+                        CachedConfigPath = Path.Combine(testRoot, "runtime.json")
+                    },
+                    new TestLogger<PersistedNodeConfigStore>()),
+                new TestLogger<ConfigOrchestrator>());
+
+            orchestrator.ApplyBootstrap(new NodeServiceConfig());
+
+            var applyResult = await orchestrator.ApplySnapshotAsync(
+                1,
+                new NodeServiceConfig
+                {
+                    Inbounds =
+                    [
+                        new InboundConfig
+                        {
+                            Tag = "dokodemo-entry",
+                            Enabled = true,
+                            Protocol = "tunnel",
+                            ListenAddress = "127.0.0.1",
+                            Port = 15353,
+                            DestinationHost = "1.1.1.1",
+                            DestinationPort = 53,
+                            PortMap = new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["15353"] = "127.0.0.1:5353"
+                            },
+                            Networks = ["udp"],
+                            UserLevel = 4,
+                            Mark = 66,
+                            FollowRedirect = true,
+                            Sniffing = new InboundSniffingConfig
+                            {
+                                Enabled = true,
+                                DestinationOverride = ["dns"],
+                                DomainsExcluded = ["resolver.local"],
+                                MetadataOnly = true
+                            }
+                        }
+                    ],
+                    Limits = new InboundLimitsConfig
+                    {
+                        ConnectionIdleSeconds = 320,
+                        UplinkOnlySeconds = 2,
+                        DownlinkOnlySeconds = 4
+                    },
+                    Policy = new PolicyConfig
+                    {
+                        Level = new Dictionary<int, SessionLevelPolicyConfig>
+                        {
+                            [4] = new()
+                            {
+                                Timeout = new SessionTimeoutPolicyConfig
+                                {
+                                    ConnectionIdle = 55,
+                                    UplinkOnly = 6,
+                                    DownlinkOnly = 7
+                                }
+                            }
+                        }
+                    },
+                    Outbounds =
+                    [
+                        new OutboundConfig
+                        {
+                            Tag = "direct",
+                            Enabled = true,
+                            Protocol = OutboundProtocols.Freedom
+                        }
+                    ]
+                },
+                CancellationToken.None);
+
+            Assert.True(applyResult.Success, applyResult.Error);
+
+            var snapshot = runtimeConfigStore.GetSnapshot();
+            var plan = snapshot.GetInboundPlanOrDefault(InboundProtocols.DokodemoDoor, DokodemoInboundRuntimePlan.Empty);
+            var inbound = Assert.Single(plan.Inbounds);
+            Assert.Equal("dokodemo-entry", inbound.Tag);
+            Assert.True(inbound.HasUdp);
+            Assert.False(inbound.HasTcp);
+            Assert.Equal(4, inbound.UserLevel);
+            Assert.Equal(66, inbound.Mark);
+            Assert.True(inbound.FollowRedirect);
+            Assert.Equal("1.1.1.1", inbound.DestinationHost);
+            Assert.Equal(53, inbound.DestinationPort);
+            Assert.Equal("127.0.0.1:5353", inbound.PortMap["15353"]);
+            Assert.True(inbound.Sniffing.Enabled);
+            Assert.Equal(["dns"], inbound.Sniffing.DestinationOverride);
+            Assert.Equal(["resolver.local"], inbound.Sniffing.DomainsExcluded);
+            Assert.True(inbound.Sniffing.MetadataOnly);
+            var levelPolicy = snapshot.SessionPolicies.ForLevel(4);
+            Assert.Equal(55, levelPolicy.Timeout.ConnectionIdleSeconds);
+            Assert.Equal(6, levelPolicy.Timeout.UplinkOnlySeconds);
+            Assert.Equal(7, levelPolicy.Timeout.DownlinkOnlySeconds);
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(testRoot);
+        }
+    }
+
+    [Fact]
     public async Task ApplySnapshotAsync_builds_vmess_runtime_plan_from_unified_inbounds()
     {
         var testRoot = CreateTestRoot();
@@ -943,9 +1069,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler(), new VlessInboundRuntimeCompiler(), new VmessInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -1000,7 +1124,7 @@ public sealed class ServiceRuntimeTests
                         PfxPath = Path.Combine(testRoot, "placeholder.pfx")
                     }
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -1043,9 +1167,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler(), new VlessInboundRuntimeCompiler(), new VmessInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -1060,7 +1182,7 @@ public sealed class ServiceRuntimeTests
             var firstApply = await orchestrator.ApplySnapshotAsync(
                 1,
                 CreateVmessRuntimeConfig("11111111-1111-1111-1111-111111111111", testRoot),
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
             Assert.True(firstApply.Success, firstApply.Error);
 
             var firstPlan = runtimeConfigStore.GetSnapshot().GetInboundPlanOrDefault(InboundProtocols.Vmess, VmessInboundRuntimePlan.Empty);
@@ -1070,7 +1192,7 @@ public sealed class ServiceRuntimeTests
             var secondApply = await orchestrator.ApplySnapshotAsync(
                 2,
                 CreateVmessRuntimeConfig("22222222-2222-2222-2222-222222222222", testRoot),
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
             Assert.True(secondApply.Success, secondApply.Error);
 
             var secondPlan = runtimeConfigStore.GetSnapshot().GetInboundPlanOrDefault(InboundProtocols.Vmess, VmessInboundRuntimePlan.Empty);
@@ -1094,9 +1216,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler()],
+                [OutboundProtocols.Freedom],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -1111,7 +1231,7 @@ public sealed class ServiceRuntimeTests
             var applyResult = await orchestrator.ApplySnapshotAsync(
                 1,
                 new NodeServiceConfig(),
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
 
             Assert.True(applyResult.Success, applyResult.Error);
 
@@ -1134,9 +1254,7 @@ public sealed class ServiceRuntimeTests
             var runtimeConfigStore = new RuntimeConfigStore();
             var orchestrator = new ConfigOrchestrator(
                 runtimeConfigStore,
-                new UserStore(),
-                new RateLimiterRegistry(),
-                [new FreedomOutboundHandler(), new TestProtocolOutboundHandler(OutboundProtocols.Selector)],
+                [OutboundProtocols.Freedom, OutboundProtocols.Selector],
                 [new TrojanInboundRuntimeCompiler()],
                 new PersistedNodeConfigStore(
                     new NodePanelOptions
@@ -1152,9 +1270,9 @@ public sealed class ServiceRuntimeTests
                 1,
                 new NodeServiceConfig
                 {
-                    LocalInbounds =
+                    ProxyInbounds =
                     [
-                        new LocalInboundConfig
+                        new ProxyInboundConfig
                         {
                             Tag = " socks-local ",
                             Enabled = true,
@@ -1163,14 +1281,23 @@ public sealed class ServiceRuntimeTests
                             Port = -1,
                             HandshakeTimeoutSeconds = 0
                         },
-                        new LocalInboundConfig
+                        new ProxyInboundConfig
                         {
                             Tag = "http-local",
                             Enabled = true,
                             Protocol = " HTTP ",
                             ListenAddress = " 127.0.0.1 ",
                             Port = 10809,
-                            HandshakeTimeoutSeconds = 15
+                            HandshakeTimeoutSeconds = 15,
+                            AllowTransparent = true,
+                            HttpUsers =
+                            [
+                                new LocalSocksUserConfig
+                                {
+                                    Username = " alice ",
+                                    Password = "secret"
+                                }
+                            ]
                         }
                     ],
                     Outbounds =
@@ -1197,11 +1324,11 @@ public sealed class ServiceRuntimeTests
 
             var snapshot = runtimeConfigStore.GetSnapshot();
             Assert.Collection(
-                snapshot.Config.LocalInbounds,
+                snapshot.Config.ProxyInbounds,
                 socks =>
                 {
                     Assert.Equal("socks-local", socks.Tag);
-                    Assert.Equal(LocalInboundProtocols.Socks, socks.Protocol);
+                    Assert.Equal(ProxyInboundProtocols.Socks, socks.Protocol);
                     Assert.Equal("127.0.0.1", socks.ListenAddress);
                     Assert.Equal(10808, socks.Port);
                     Assert.Equal(10, socks.HandshakeTimeoutSeconds);
@@ -1209,11 +1336,21 @@ public sealed class ServiceRuntimeTests
                 http =>
                 {
                     Assert.Equal("http-local", http.Tag);
-                    Assert.Equal(LocalInboundProtocols.Http, http.Protocol);
+                    Assert.Equal(ProxyInboundProtocols.Http, http.Protocol);
                     Assert.Equal("127.0.0.1", http.ListenAddress);
                     Assert.Equal(10809, http.Port);
                     Assert.Equal(15, http.HandshakeTimeoutSeconds);
+                    Assert.True(http.AllowTransparent);
+                    var httpUser = Assert.Single(http.HttpUsers);
+                    Assert.Equal("alice", httpUser.Username);
                 });
+
+            var httpListener = Assert.Single(snapshot.ProxyInbounds.HttpListeners);
+            Assert.Equal("http-local", httpListener.Tag);
+            Assert.True(httpListener.AllowTransparent);
+            Assert.True(snapshot.ProxyInbounds.HttpAuthenticationsByTag.TryGetValue("http-local", out var httpAuthentication));
+            Assert.NotNull(httpAuthentication);
+            Assert.True(httpAuthentication!.TryAuthenticate("alice", "secret"));
 
             Assert.True(snapshot.OutboundPlan.TryGetOutbound("auto", out var strategy));
             Assert.Equal(OutboundProtocols.Selector, strategy.Protocol);
@@ -1302,33 +1439,4 @@ public sealed class ServiceRuntimeTests
         }
     }
 
-    private sealed class StubTrojanOutboundSettingsProvider : ITrojanOutboundSettingsProvider
-    {
-        public bool TryResolve(DispatchContext context, out TrojanOutboundSettings settings)
-        {
-            settings = default!;
-            return false;
-        }
-    }
-
-    private sealed class TestProtocolOutboundHandler : IOutboundHandler
-    {
-        public TestProtocolOutboundHandler(string protocol)
-        {
-            Protocol = protocol;
-        }
-
-        public string Protocol { get; }
-
-        public ValueTask<Stream> OpenTcpAsync(
-            DispatchContext context,
-            DispatchDestination destination,
-            CancellationToken cancellationToken)
-            => ValueTask.FromResult<Stream>(Stream.Null);
-
-        public ValueTask<IOutboundUdpTransport> OpenUdpAsync(
-            DispatchContext context,
-            CancellationToken cancellationToken)
-            => ValueTask.FromException<IOutboundUdpTransport>(new NotSupportedException());
-    }
 }

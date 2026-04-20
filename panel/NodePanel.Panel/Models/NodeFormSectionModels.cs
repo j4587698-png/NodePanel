@@ -187,6 +187,42 @@ public sealed class DnsServerFormInput
         };
 }
 
+public sealed class RoutingResourceFormInput
+{
+    public string ResourceDirectory { get; set; } = string.Empty;
+
+    public string GeoSitePath { get; set; } = string.Empty;
+
+    public string GeoIpPath { get; set; } = string.Empty;
+
+    public bool IsEmpty()
+        => string.IsNullOrWhiteSpace(ResourceDirectory) &&
+           string.IsNullOrWhiteSpace(GeoSitePath) &&
+           string.IsNullOrWhiteSpace(GeoIpPath);
+
+    public RoutingResourceOptions ToConfig()
+        => new()
+        {
+            ResourceDirectory = NodeFormValueCodec.TrimOrEmpty(ResourceDirectory),
+            GeoSitePath = NodeFormValueCodec.TrimOrEmpty(GeoSitePath),
+            GeoIpPath = NodeFormValueCodec.TrimOrEmpty(GeoIpPath)
+        };
+
+    public static bool HasConfiguredValues(RoutingResourceOptions? config)
+        => config is not null &&
+           (!string.IsNullOrWhiteSpace(config.ResourceDirectory) ||
+            !string.IsNullOrWhiteSpace(config.GeoSitePath) ||
+            !string.IsNullOrWhiteSpace(config.GeoIpPath));
+
+    public static RoutingResourceFormInput FromConfig(RoutingResourceOptions config)
+        => new()
+        {
+            ResourceDirectory = config.ResourceDirectory,
+            GeoSitePath = config.GeoSitePath,
+            GeoIpPath = config.GeoIpPath
+        };
+}
+
 public sealed class RoutingRuleFormInput
 {
     public bool Enabled { get; set; } = true;
@@ -199,11 +235,23 @@ public sealed class RoutingRuleFormInput
 
     public string UserIds { get; set; } = string.Empty;
 
+    public string Processes { get; set; } = string.Empty;
+
     public string Domains { get; set; } = string.Empty;
 
     public string SourceCidrs { get; set; } = string.Empty;
 
+    public string DestinationCidrs { get; set; } = string.Empty;
+
     public string DestinationPorts { get; set; } = string.Empty;
+
+    public string SourcePorts { get; set; } = string.Empty;
+
+    public string LocalCidrs { get; set; } = string.Empty;
+
+    public string LocalPorts { get; set; } = string.Empty;
+
+    public string VlessRoutes { get; set; } = string.Empty;
 
     public string OutboundTag { get; set; } = string.Empty;
 
@@ -212,9 +260,15 @@ public sealed class RoutingRuleFormInput
            string.IsNullOrWhiteSpace(Protocols) &&
            string.IsNullOrWhiteSpace(Networks) &&
            string.IsNullOrWhiteSpace(UserIds) &&
+           string.IsNullOrWhiteSpace(Processes) &&
            string.IsNullOrWhiteSpace(Domains) &&
            string.IsNullOrWhiteSpace(SourceCidrs) &&
+           string.IsNullOrWhiteSpace(DestinationCidrs) &&
            string.IsNullOrWhiteSpace(DestinationPorts) &&
+           string.IsNullOrWhiteSpace(SourcePorts) &&
+           string.IsNullOrWhiteSpace(LocalCidrs) &&
+           string.IsNullOrWhiteSpace(LocalPorts) &&
+           string.IsNullOrWhiteSpace(VlessRoutes) &&
            string.IsNullOrWhiteSpace(OutboundTag);
 
     public RoutingRuleConfig ToConfig()
@@ -225,9 +279,15 @@ public sealed class RoutingRuleFormInput
             Protocols = NodeFormValueCodec.ParseCsv(Protocols),
             Networks = NodeFormValueCodec.ParseCsv(Networks),
             UserIds = NodeFormValueCodec.ParseCsv(UserIds),
+            Processes = NodeFormValueCodec.ParseCsv(Processes),
             Domains = NodeFormValueCodec.ParseCsv(Domains),
             SourceCidrs = NodeFormValueCodec.ParseCsv(SourceCidrs),
+            DestinationCidrs = NodeFormValueCodec.ParseCsv(DestinationCidrs),
             DestinationPorts = NodeFormValueCodec.ParseCsv(DestinationPorts),
+            SourcePorts = NodeFormValueCodec.ParseCsv(SourcePorts),
+            LocalCidrs = NodeFormValueCodec.ParseCsv(LocalCidrs),
+            LocalPorts = NodeFormValueCodec.ParseCsv(LocalPorts),
+            VlessRoutes = NodeFormValueCodec.ParseCsv(VlessRoutes),
             OutboundTag = NodeFormValueCodec.TrimOrEmpty(OutboundTag)
         };
 
@@ -239,9 +299,15 @@ public sealed class RoutingRuleFormInput
             Protocols = NodeFormValueCodec.JoinCsv(config.Protocols),
             Networks = NodeFormValueCodec.JoinCsv(config.Networks),
             UserIds = NodeFormValueCodec.JoinCsv(config.UserIds),
+            Processes = NodeFormValueCodec.JoinCsv(config.Processes),
             Domains = NodeFormValueCodec.JoinCsv(config.Domains),
             SourceCidrs = NodeFormValueCodec.JoinCsv(config.SourceCidrs),
+            DestinationCidrs = NodeFormValueCodec.JoinCsv(config.DestinationCidrs),
             DestinationPorts = NodeFormValueCodec.JoinCsv(config.DestinationPorts),
+            SourcePorts = NodeFormValueCodec.JoinCsv(config.SourcePorts),
+            LocalCidrs = NodeFormValueCodec.JoinCsv(config.LocalCidrs),
+            LocalPorts = NodeFormValueCodec.JoinCsv(config.LocalPorts),
+            VlessRoutes = NodeFormValueCodec.JoinCsv(config.VlessRoutes),
             OutboundTag = config.OutboundTag
         };
 }

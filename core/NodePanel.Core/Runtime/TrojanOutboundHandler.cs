@@ -7,11 +7,31 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
 {
     private readonly TrojanOutboundClient _client;
     private readonly IDnsResolver _dnsResolver;
+    private readonly ITrojanOutboundSettingsProvider? _legacySettingsProvider;
     private readonly ConcurrentDictionary<string, TrojanMuxOutboundMultiplexState> _multiplexStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IOutboundRuntimePlanProvider? _planProvider;
+    private readonly IRuntimeOutboundSettingsProvider? _runtimeSettingsProvider;
     private readonly IServiceProvider? _serviceProvider;
-    private readonly ITrojanOutboundSettingsProvider _settingsProvider;
     private readonly TrojanUdpPacketReader _udpPacketReader;
     private readonly TrojanUdpPacketWriter _udpPacketWriter;
+
+    public TrojanOutboundHandler(
+        TrojanOutboundClient client,
+        IRuntimeOutboundSettingsProvider settingsProvider,
+        IOutboundRuntimePlanProvider planProvider,
+        TrojanUdpPacketReader udpPacketReader,
+        TrojanUdpPacketWriter udpPacketWriter,
+        IServiceProvider? serviceProvider = null,
+        IDnsResolver? dnsResolver = null)
+    {
+        _client = client;
+        _runtimeSettingsProvider = settingsProvider;
+        _planProvider = planProvider;
+        _udpPacketReader = udpPacketReader;
+        _udpPacketWriter = udpPacketWriter;
+        _serviceProvider = serviceProvider;
+        _dnsResolver = dnsResolver ?? SystemDnsResolver.Instance;
+    }
 
     public TrojanOutboundHandler(
         TrojanOutboundClient client,
@@ -22,7 +42,7 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         IDnsResolver? dnsResolver = null)
     {
         _client = client;
-        _settingsProvider = settingsProvider;
+        _legacySettingsProvider = settingsProvider;
         _udpPacketReader = udpPacketReader;
         _udpPacketWriter = udpPacketWriter;
         _serviceProvider = serviceProvider;
@@ -58,15 +78,22 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
                 cancellationToken).ConfigureAwait(false);
         }
 
+        var transportStreamFactory = CreateTransportStreamFactory(
+            settings.ProxyOutboundTag,
+            context,
+            settings.ServerHost,
+            settings.ServerPort);
+        var splitHttpDownloadTransportStreamFactory = CreateSplitHttpDownloadTransportStreamFactory(settings, context);
         var connection = await _client.ConnectAsync(
             CreateClientOptions(
                 settings,
                 context,
                 TrojanCommand.Connect,
                 resolvedDestination,
-                CreateTransportStreamFactory(settings, context)),
+                transportStreamFactory,
+                splitHttpDownloadTransportStreamFactory),
             cancellationToken).ConfigureAwait(false);
-        return new TrojanClientStream(connection);
+        return new RuntimeConnectionStream(connection);
     }
 
     public ValueTask<IOutboundUdpTransport> OpenUdpAsync(
@@ -74,7 +101,12 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var settings = ResolveSettings(context);
-        var transportStreamFactory = CreateTransportStreamFactory(settings, context);
+        var transportStreamFactory = CreateTransportStreamFactory(
+            settings.ProxyOutboundTag,
+            context,
+            settings.ServerHost,
+            settings.ServerPort);
+        var splitHttpDownloadTransportStreamFactory = CreateSplitHttpDownloadTransportStreamFactory(settings, context);
         Func<IOutboundUdpTransport> createDirectTransport = () => new TrojanUdpTransport(
             _client,
             _udpPacketReader,
@@ -82,6 +114,7 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
             settings,
             context,
             transportStreamFactory,
+            splitHttpDownloadTransportStreamFactory,
             _dnsResolver);
 
         if (TryResolveMultiplexState(settings, out var multiplexState) &&
@@ -103,7 +136,19 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
 
     private TrojanOutboundSettings ResolveSettings(DispatchContext context)
     {
-        if (_settingsProvider.TryResolve(context, out var settings))
+        if (_legacySettingsProvider is not null &&
+            _legacySettingsProvider.TryResolve(context, out var legacySettings))
+        {
+            return legacySettings;
+        }
+
+        if (_runtimeSettingsProvider is not null &&
+            _planProvider is not null &&
+            RuntimeOutboundSettingsResolver.TryResolveTrojan(
+                _planProvider,
+                _runtimeSettingsProvider,
+                context,
+                out var settings))
         {
             return settings;
         }
@@ -126,9 +171,14 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         DispatchContext context,
         TrojanCommand command,
         DispatchDestination destination,
-        Func<CancellationToken, ValueTask<Stream>>? transportStreamFactory)
-        => new()
+        Func<CancellationToken, ValueTask<Stream>>? transportStreamFactory,
+        Func<CancellationToken, ValueTask<Stream>>? splitHttpDownloadTransportStreamFactory)
+    {
+        var internetStack = ResolveInternetStack(settings.Transport, settings.TransportSecurity);
+
+        return new TrojanClientOptions
         {
+            DialContext = context,
             SourceEndPoint = context.SourceEndPoint,
             LocalEndPoint = context.LocalEndPoint,
             Via = settings.Via,
@@ -136,27 +186,69 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
             ServerHost = settings.ServerHost,
             ServerPort = settings.ServerPort,
             ServerName = settings.ServerName,
-            Transport = MapTransport(settings.Transport),
+            Fingerprint = settings.Fingerprint,
+            TransportProtocol = internetStack.TransportProtocol,
+            SecurityType = internetStack.SecurityType,
+            RealityOptions = settings.RealityOptions,
             WebSocketPath = settings.WebSocketPath,
             WebSocketHeaders = settings.WebSocketHeaders,
             WebSocketEarlyDataBytes = settings.WebSocketEarlyDataBytes,
             WebSocketHeartbeatPeriodSeconds = settings.WebSocketHeartbeatPeriodSeconds,
+            SplitHttpHost = settings.SplitHttpHost,
+            SplitHttpPath = settings.SplitHttpPath,
+            SplitHttpHeaders = settings.SplitHttpHeaders,
+            SplitHttpMode = settings.SplitHttpMode,
+            SplitHttpNoGrpcHeader = settings.SplitHttpNoGrpcHeader,
+            SplitHttpXPaddingBytes = settings.SplitHttpXPaddingBytes,
+            SplitHttpXPaddingObfsMode = settings.SplitHttpXPaddingObfsMode,
+            SplitHttpXPaddingKey = settings.SplitHttpXPaddingKey,
+            SplitHttpXPaddingHeader = settings.SplitHttpXPaddingHeader,
+            SplitHttpXPaddingPlacement = settings.SplitHttpXPaddingPlacement,
+            SplitHttpXPaddingMethod = settings.SplitHttpXPaddingMethod,
+            SplitHttpUplinkHttpMethod = settings.SplitHttpUplinkHttpMethod,
+            SplitHttpSessionPlacement = settings.SplitHttpSessionPlacement,
+            SplitHttpSessionKey = settings.SplitHttpSessionKey,
+            SplitHttpSeqPlacement = settings.SplitHttpSeqPlacement,
+            SplitHttpSeqKey = settings.SplitHttpSeqKey,
+            SplitHttpUplinkDataPlacement = settings.SplitHttpUplinkDataPlacement,
+            SplitHttpUplinkDataKey = settings.SplitHttpUplinkDataKey,
+            SplitHttpUplinkChunkSize = settings.SplitHttpUplinkChunkSize,
+            SplitHttpScMaxEachPostBytes = settings.SplitHttpScMaxEachPostBytes,
+            SplitHttpScMinPostsIntervalMs = settings.SplitHttpScMinPostsIntervalMs,
+            SplitHttpScMaxBufferedPosts = settings.SplitHttpScMaxBufferedPosts,
+            SplitHttpXmux = settings.SplitHttpXmux,
+            SplitHttpDownloadSettings = settings.SplitHttpDownloadSettings,
             ApplicationProtocols = settings.ApplicationProtocols,
+            QuicOptions = settings.QuicOptions,
+            GrpcServiceName = settings.GrpcServiceName,
+            GrpcAuthority = settings.GrpcAuthority,
+            GrpcMultiMode = settings.GrpcMultiMode,
+            GrpcUserAgent = settings.GrpcUserAgent,
+            GrpcIdleTimeoutSeconds = settings.GrpcIdleTimeoutSeconds,
+            GrpcHealthCheckTimeoutSeconds = settings.GrpcHealthCheckTimeoutSeconds,
+            GrpcPermitWithoutStream = settings.GrpcPermitWithoutStream,
+            GrpcInitialWindowSize = settings.GrpcInitialWindowSize,
             Password = settings.Password,
             Command = command,
             TargetHost = destination.Host,
             TargetPort = destination.Port,
             ConnectTimeoutSeconds = ResolveTimeout(settings.ConnectTimeoutSeconds, context.ConnectTimeoutSeconds),
             HandshakeTimeoutSeconds = ResolveTimeout(settings.HandshakeTimeoutSeconds, context.ConnectTimeoutSeconds),
+            EnableTlsSessionResumption = settings.EnableTlsSessionResumption,
             SkipCertificateValidation = settings.SkipCertificateValidation,
-            TransportStreamFactory = transportStreamFactory
+            RealityHandshakeProvider = settings.RealityHandshakeProvider,
+            TransportStreamFactory = transportStreamFactory,
+            SplitHttpDownloadTransportStreamFactory = splitHttpDownloadTransportStreamFactory
         };
+    }
 
     private Func<CancellationToken, ValueTask<Stream>>? CreateTransportStreamFactory(
-        TrojanOutboundSettings settings,
-        DispatchContext context)
+        string proxyOutboundTag,
+        DispatchContext context,
+        string serverHost,
+        int serverPort)
     {
-        if (string.IsNullOrWhiteSpace(settings.ProxyOutboundTag))
+        if (string.IsNullOrWhiteSpace(proxyOutboundTag))
         {
             return null;
         }
@@ -164,31 +256,48 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         var dispatcher = ResolveDispatcher();
         var proxyContext = context with
         {
-            OutboundTag = settings.ProxyOutboundTag,
-            OriginalDestinationHost = settings.ServerHost,
-            OriginalDestinationPort = settings.ServerPort
+            OutboundTag = proxyOutboundTag,
+            OriginalDestinationHost = serverHost,
+            OriginalDestinationPort = serverPort
         };
         var proxyDestination = new DispatchDestination
         {
-            Host = settings.ServerHost,
-            Port = settings.ServerPort,
+            Host = serverHost,
+            Port = serverPort,
             Network = DispatchNetwork.Tcp
         };
 
         return token => dispatcher.DispatchTcpAsync(proxyContext, proxyDestination, token);
     }
 
-    private Func<DispatchContext, CancellationToken, ValueTask<TrojanClientConnection>> CreateMuxConnectionFactory(
+    private Func<CancellationToken, ValueTask<Stream>>? CreateSplitHttpDownloadTransportStreamFactory(
+        TrojanOutboundSettings settings,
+        DispatchContext context)
+    {
+        if (settings.SplitHttpDownloadSettings is not { ServerHost: { } serverHost, ServerPort: { } serverPort })
+        {
+            return null;
+        }
+
+        return CreateTransportStreamFactory(settings.ProxyOutboundTag, context, serverHost, serverPort);
+    }
+
+    private Func<DispatchContext, CancellationToken, ValueTask<RuntimeClientConnection>> CreateMuxConnectionFactory(
         TrojanOutboundSettings settings)
-        => (dispatchContext, cancellationToken) => new ValueTask<TrojanClientConnection>(
-            _client.ConnectAsync(
+        => async (dispatchContext, cancellationToken) =>
+            await _client.ConnectAsync(
                 CreateClientOptions(
                     settings,
                     dispatchContext,
                     TrojanCommand.Connect,
                     TrojanMuxProtocol.CreateMuxDestination(),
-                    CreateTransportStreamFactory(settings, dispatchContext)),
-                cancellationToken));
+                    CreateTransportStreamFactory(
+                        settings.ProxyOutboundTag,
+                        dispatchContext,
+                        settings.ServerHost,
+                        settings.ServerPort),
+                    CreateSplitHttpDownloadTransportStreamFactory(settings, dispatchContext)),
+                cancellationToken).ConfigureAwait(false);
 
     private IDispatcher ResolveDispatcher()
         => _serviceProvider?.GetService(typeof(IDispatcher)) as IDispatcher
@@ -238,15 +347,8 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         }
     }
 
-    private static TrojanClientTransportType MapTransport(string transport)
-        => TrojanOutboundTransports.Normalize(transport) switch
-        {
-            TrojanOutboundTransports.Tcp => TrojanClientTransportType.Tcp,
-            TrojanOutboundTransports.Tls => TrojanClientTransportType.Tls,
-            TrojanOutboundTransports.Ws => TrojanClientTransportType.Ws,
-            TrojanOutboundTransports.Wss => TrojanClientTransportType.Wss,
-            _ => throw new NotSupportedException($"Unsupported trojan outbound transport: {transport}.")
-        };
+    private static RuntimeInternetStack ResolveInternetStack(string transport, string transportSecurity)
+        => ProxyInternetStackResolver.Resolve(transport, transportSecurity).ToRuntimeInternetStack();
 
     private static int ResolveTimeout(int configuredTimeoutSeconds, int fallbackTimeoutSeconds)
     {
@@ -256,86 +358,6 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         }
 
         return fallbackTimeoutSeconds > 0 ? fallbackTimeoutSeconds : 10;
-    }
-
-    private sealed class TrojanClientStream : Stream
-    {
-        private readonly TrojanClientConnection _connection;
-
-        public TrojanClientStream(TrojanClientConnection connection)
-        {
-            _connection = connection;
-        }
-
-        private Stream InnerStream => _connection.Stream;
-
-        public override bool CanRead => InnerStream.CanRead;
-
-        public override bool CanSeek => InnerStream.CanSeek;
-
-        public override bool CanWrite => InnerStream.CanWrite;
-
-        public override long Length => InnerStream.Length;
-
-        public override long Position
-        {
-            get => InnerStream.Position;
-            set => InnerStream.Position = value;
-        }
-
-        public override int ReadTimeout
-        {
-            get => InnerStream.ReadTimeout;
-            set => InnerStream.ReadTimeout = value;
-        }
-
-        public override int WriteTimeout
-        {
-            get => InnerStream.WriteTimeout;
-            set => InnerStream.WriteTimeout = value;
-        }
-
-        public override bool CanTimeout => InnerStream.CanTimeout;
-
-        public override void Flush() => InnerStream.Flush();
-
-        public override Task FlushAsync(CancellationToken cancellationToken) => InnerStream.FlushAsync(cancellationToken);
-
-        public override int Read(byte[] buffer, int offset, int count) => InnerStream.Read(buffer, offset, count);
-
-        public override int Read(Span<byte> buffer) => InnerStream.Read(buffer);
-
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-            => InnerStream.ReadAsync(buffer, cancellationToken);
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-            => InnerStream.ReadAsync(buffer, offset, count, cancellationToken);
-
-        public override long Seek(long offset, SeekOrigin origin) => InnerStream.Seek(offset, origin);
-
-        public override void SetLength(long value) => InnerStream.SetLength(value);
-
-        public override void Write(byte[] buffer, int offset, int count) => InnerStream.Write(buffer, offset, count);
-
-        public override void Write(ReadOnlySpan<byte> buffer) => InnerStream.Write(buffer);
-
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-            => InnerStream.WriteAsync(buffer, cancellationToken);
-
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-            => InnerStream.WriteAsync(buffer, offset, count, cancellationToken);
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                _connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            }
-
-            base.Dispose(disposing);
-        }
-
-        public override ValueTask DisposeAsync() => _connection.DisposeAsync();
     }
 
     private sealed class TrojanUdpTransport : IOutboundUdpTransport
@@ -348,6 +370,7 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
         private readonly IDnsResolver _dnsResolver;
         private readonly TrojanOutboundSettings _settings;
         private readonly Func<CancellationToken, ValueTask<Stream>>? _transportStreamFactory;
+        private readonly Func<CancellationToken, ValueTask<Stream>>? _splitHttpDownloadTransportStreamFactory;
         private readonly TrojanUdpPacketReader _udpPacketReader;
         private readonly TrojanUdpPacketWriter _udpPacketWriter;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -362,6 +385,7 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
             TrojanOutboundSettings settings,
             DispatchContext context,
             Func<CancellationToken, ValueTask<Stream>>? transportStreamFactory,
+            Func<CancellationToken, ValueTask<Stream>>? splitHttpDownloadTransportStreamFactory,
             IDnsResolver dnsResolver)
         {
             _client = client;
@@ -370,6 +394,7 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
             _settings = settings;
             _context = context;
             _transportStreamFactory = transportStreamFactory;
+            _splitHttpDownloadTransportStreamFactory = splitHttpDownloadTransportStreamFactory;
             _dnsResolver = dnsResolver;
         }
 
@@ -477,7 +502,8 @@ public sealed class TrojanOutboundHandler : IOutboundHandler, IAsyncDisposable
                         _context,
                         TrojanCommand.Associate,
                         destination,
-                        _transportStreamFactory),
+                        _transportStreamFactory,
+                        _splitHttpDownloadTransportStreamFactory),
                     linkedCts.Token).ConfigureAwait(false);
                 _connection = connection;
                 _connectionTcs.TrySetResult(connection);

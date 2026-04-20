@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-core:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Run Core Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet test ./tests/NodePanel.Core.Tests/NodePanel.Core.Tests.csproj \
+            --configuration Release \
+            --filter "Category!=Interop&FullyQualifiedName!~SslStreamGoInteropTests" \
+            -p:NuGetAudit=false \
+            --verbosity minimal
+        working-directory: .
+
+  test-service:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Run Service Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet test ./tests/NodePanel.Service.Tests/NodePanel.Service.Tests.csproj \
+            --configuration Release \
+            -p:NuGetAudit=false \
+            --verbosity minimal
+        working-directory: .
+
+  publish-service-aot:
+    runs-on: ubuntu-latest
+    needs:
+      - test-core
+      - test-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish Native AOT Service
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish ./service/NodePanel.Service/NodePanel.Service.csproj \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained true \
+            -p:PublishAot=true \
+            -p:DebugSymbols=false \
+            -p:DebugType=None \
+            -p:StripSymbols=true \
+            --verbosity minimal
+        working-directory: .

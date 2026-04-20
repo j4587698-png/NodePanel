@@ -136,6 +136,207 @@ np_resolve_package_version() {
     printf '%s\n' "$(np_first_non_empty "$package_info_version" "${resolved_github_tag#v}")"
 }
 
+np_normalize_version() {
+    local version="${1-}"
+    version="$(np_strip_wrapping_quotes "$version")"
+    version="${version#"${version%%[![:space:]]*}"}"
+    version="${version%"${version##*[![:space:]]}"}"
+    version="${version#v}"
+    version="${version#V}"
+    version="${version%%+*}"
+    printf '%s\n' "$version"
+}
+
+np_is_numeric_identifier() {
+    local value="${1:-}"
+    [[ "$value" =~ ^[0-9]+$ ]]
+}
+
+np_compare_versions() {
+    local left
+    local right
+    left="$(np_normalize_version "${1-}")"
+    right="$(np_normalize_version "${2-}")"
+
+    if [[ "$left" == "$right" ]]; then
+        printf '0\n'
+        return 0
+    fi
+
+    local left_core="$left"
+    local right_core="$right"
+    local left_prerelease=""
+    local right_prerelease=""
+
+    if [[ "$left" == *-* ]]; then
+        left_core="${left%%-*}"
+        left_prerelease="${left#*-}"
+    fi
+
+    if [[ "$right" == *-* ]]; then
+        right_core="${right%%-*}"
+        right_prerelease="${right#*-}"
+    fi
+
+    local -a left_core_parts=()
+    local -a right_core_parts=()
+    local old_ifs="$IFS"
+    IFS='.'
+    read -r -a left_core_parts <<< "$left_core"
+    read -r -a right_core_parts <<< "$right_core"
+    IFS="$old_ifs"
+
+    local max_core_parts="${#left_core_parts[@]}"
+    if [[ "${#right_core_parts[@]}" -gt "$max_core_parts" ]]; then
+        max_core_parts="${#right_core_parts[@]}"
+    fi
+
+    local index
+    for ((index = 0; index < max_core_parts; index++)); do
+        local left_part="${left_core_parts[$index]:-0}"
+        local right_part="${right_core_parts[$index]:-0}"
+
+        if ! np_is_numeric_identifier "$left_part"; then
+            left_part="0"
+        fi
+
+        if ! np_is_numeric_identifier "$right_part"; then
+            right_part="0"
+        fi
+
+        if ((10#$left_part > 10#$right_part)); then
+            printf '1\n'
+            return 0
+        fi
+
+        if ((10#$left_part < 10#$right_part)); then
+            printf '%s\n' '-1'
+            return 0
+        fi
+    done
+
+    if [[ -z "$left_prerelease" && -z "$right_prerelease" ]]; then
+        printf '0\n'
+        return 0
+    fi
+
+    if [[ -z "$left_prerelease" ]]; then
+        printf '1\n'
+        return 0
+    fi
+
+    if [[ -z "$right_prerelease" ]]; then
+        printf '%s\n' '-1'
+        return 0
+    fi
+
+    local -a left_pre_parts=()
+    local -a right_pre_parts=()
+    IFS='.'
+    read -r -a left_pre_parts <<< "$left_prerelease"
+    read -r -a right_pre_parts <<< "$right_prerelease"
+    IFS="$old_ifs"
+
+    local max_pre_parts="${#left_pre_parts[@]}"
+    if [[ "${#right_pre_parts[@]}" -gt "$max_pre_parts" ]]; then
+        max_pre_parts="${#right_pre_parts[@]}"
+    fi
+
+    for ((index = 0; index < max_pre_parts; index++)); do
+        local left_id="${left_pre_parts[$index]:-}"
+        local right_id="${right_pre_parts[$index]:-}"
+
+        if [[ -z "$left_id" && -n "$right_id" ]]; then
+            printf '%s\n' '-1'
+            return 0
+        fi
+
+        if [[ -n "$left_id" && -z "$right_id" ]]; then
+            printf '1\n'
+            return 0
+        fi
+
+        if [[ "$left_id" == "$right_id" ]]; then
+            continue
+        fi
+
+        if np_is_numeric_identifier "$left_id" && np_is_numeric_identifier "$right_id"; then
+            if ((10#$left_id > 10#$right_id)); then
+                printf '1\n'
+                return 0
+            fi
+
+            printf '%s\n' '-1'
+            return 0
+        fi
+
+        if np_is_numeric_identifier "$left_id"; then
+            printf '%s\n' '-1'
+            return 0
+        fi
+
+        if np_is_numeric_identifier "$right_id"; then
+            printf '1\n'
+            return 0
+        fi
+
+        if [[ "$left_id" > "$right_id" ]]; then
+            printf '1\n'
+            return 0
+        fi
+
+        printf '%s\n' '-1'
+        return 0
+    done
+
+    printf '0\n'
+}
+
+np_should_skip_update_version() {
+    local display_name="$1"
+    local operation_name="$2"
+    local installed_version
+    local target_version
+    local comparison
+
+    if [[ "$operation_name" != "update" ]]; then
+        return 1
+    fi
+
+    installed_version="$(np_normalize_version "${3-}")"
+    target_version="$(np_normalize_version "${4-}")"
+
+    if [[ -z "$installed_version" ]]; then
+        np_warn "${display_name}: installed package version is unknown. Continuing update."
+        return 1
+    fi
+
+    if [[ -z "$target_version" ]]; then
+        np_warn "${display_name}: target package version is unknown. Continuing update."
+        return 1
+    fi
+
+    comparison="$(np_compare_versions "$target_version" "$installed_version")"
+    case "$comparison" in
+        1)
+            np_log "${display_name}: update available ${installed_version} -> ${target_version}"
+            return 1
+            ;;
+        0)
+            np_log "${display_name}: installed version ${installed_version} is already up to date. Skipping update."
+            return 0
+            ;;
+        -1)
+            np_warn "${display_name}: target version ${target_version} is not newer than installed version ${installed_version}. Skipping update. Use install to reinstall or downgrade."
+            return 0
+            ;;
+        *)
+            np_warn "${display_name}: failed to compare versions (${installed_version} vs ${target_version}). Continuing update."
+            return 1
+            ;;
+    esac
+}
+
 np_resolve_nologin_shell() {
     local candidate
     for candidate in /usr/sbin/nologin /sbin/nologin /usr/bin/false /bin/false; do
@@ -224,6 +425,127 @@ np_build_github_release_url() {
     printf 'https://github.com/%s/releases/download/%s/%s\n' "$github_repo" "$github_tag" "$asset_name"
 }
 
+np_fetch_github_latest_tag() {
+    local github_repo="$1"
+    local latest_url="https://github.com/${github_repo}/releases/latest"
+    local effective_url=""
+
+    if command -v curl >/dev/null 2>&1; then
+        effective_url="$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$latest_url" 2>/dev/null || true)"
+    elif command -v wget >/dev/null 2>&1; then
+        effective_url="$(wget --server-response --spider --max-redirect=20 "$latest_url" 2>&1 | awk '
+            /^[[:space:]]*Location: / {
+                url=$2
+            }
+            END {
+                gsub(/\r/, "", url)
+                print url
+            }
+        ' || true)"
+    fi
+
+    if [[ -z "$effective_url" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    if [[ "$effective_url" != *"/releases/tag/"* ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    local resolved_tag="${effective_url##*/}"
+    if [[ -z "$resolved_tag" || "$resolved_tag" == "latest" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    printf '%s\n' "$resolved_tag"
+}
+
+np_resolve_github_request_ref() {
+    local source_arg="${1:-}"
+    local explicit_repo="${2:-}"
+    local explicit_tag="${3:-}"
+    local saved_repo="${4:-}"
+
+    local repo="$explicit_repo"
+    local tag="$explicit_tag"
+
+    if [[ -n "$source_arg" ]]; then
+        if np_is_url "$source_arg"; then
+            return 1
+        fi
+
+        local absolute_source
+        absolute_source="$(np_abs_path "$source_arg")"
+        if [[ -d "$absolute_source" || -f "$absolute_source" ]]; then
+            return 1
+        fi
+
+        if [[ "$source_arg" == *"@"* ]]; then
+            local repo_candidate="${source_arg%@*}"
+            local tag_candidate="${source_arg#*@}"
+            if np_is_github_repo "$repo_candidate" && [[ -n "$tag_candidate" ]]; then
+                repo="$repo_candidate"
+                tag="$tag_candidate"
+            fi
+        elif np_is_github_repo "$source_arg"; then
+            repo="$source_arg"
+        elif [[ -n "$repo" ]]; then
+            tag="$(np_first_non_empty "$tag" "$source_arg")"
+        fi
+    fi
+
+    repo="$(np_first_non_empty "$repo" "$saved_repo")"
+    if [[ -z "$repo" ]]; then
+        return 1
+    fi
+
+    printf '%s\n%s\n' "$repo" "$tag"
+}
+
+np_resolve_github_release_target() {
+    local source_arg="${1:-}"
+    local explicit_repo="${2:-}"
+    local explicit_tag="${3:-}"
+    local saved_repo="${4:-}"
+
+    local resolved_ref
+    if ! resolved_ref="$(np_resolve_github_request_ref "$source_arg" "$explicit_repo" "$explicit_tag" "$saved_repo")"; then
+        return 1
+    fi
+
+    local resolved_repo
+    local resolved_tag
+    resolved_repo="$(printf '%s\n' "$resolved_ref" | sed -n '1p')"
+    resolved_tag="$(printf '%s\n' "$resolved_ref" | sed -n '2p')"
+
+    if [[ -z "$resolved_tag" || "$resolved_tag" == "latest" ]]; then
+        resolved_tag="$(np_fetch_github_latest_tag "$resolved_repo")"
+    fi
+
+    printf '%s\n%s\n%s\n' \
+        "$resolved_repo" \
+        "$resolved_tag" \
+        "$(np_normalize_version "$resolved_tag")"
+}
+
+np_resolve_source_version_hint() {
+    local source_arg="${1:-}"
+    local explicit_repo="${2:-}"
+    local explicit_tag="${3:-}"
+    local saved_repo="${4:-}"
+
+    local resolved_target
+    if ! resolved_target="$(np_resolve_github_release_target "$source_arg" "$explicit_repo" "$explicit_tag" "$saved_repo")"; then
+        printf '\n'
+        return 0
+    fi
+
+    printf '%s\n' "$(printf '%s\n' "$resolved_target" | sed -n '3p')"
+}
+
 np_extract_archive() {
     local archive_path="$1"
     local destination_dir="$2"
@@ -274,6 +596,7 @@ np_prepare_github_release_source() {
     local package_prefix="$3"
     local package_rid="${4:-}"
     local temp_root="$5"
+    local resolved_github_tag="$github_tag"
 
     if ! np_is_github_repo "$github_repo"; then
         np_die "Invalid GitHub repository reference: ${github_repo}. Use owner/repo."
@@ -287,15 +610,21 @@ np_prepare_github_release_source() {
         package_rid="$(np_detect_linux_rid)"
     fi
 
+    if [[ -z "$resolved_github_tag" || "$resolved_github_tag" == "latest" ]]; then
+        resolved_github_tag="$(np_fetch_github_latest_tag "$github_repo")"
+    fi
+
     local asset_name
     asset_name="$(np_build_package_asset_name "$package_prefix" "$package_rid")"
 
     local downloaded_archive="${temp_root}/${asset_name}"
     local extracted_dir="${temp_root}/package-extract"
     local release_url
-    release_url="$(np_build_github_release_url "$github_repo" "$asset_name" "$github_tag")"
+    release_url="$(np_build_github_release_url "$github_repo" "$asset_name" "$(np_first_non_empty "$resolved_github_tag" "$github_tag")")"
 
-    if [[ -n "$github_tag" && "$github_tag" != "latest" ]]; then
+    if [[ -n "$resolved_github_tag" ]]; then
+        np_log "Downloading ${asset_name} from GitHub repo ${github_repo} (${resolved_github_tag})"
+    elif [[ -n "$github_tag" && "$github_tag" != "latest" ]]; then
         np_log "Downloading ${asset_name} from GitHub repo ${github_repo} (${github_tag})"
     else
         np_log "Downloading ${asset_name} from GitHub repo ${github_repo} (latest)"
@@ -305,7 +634,7 @@ np_prepare_github_release_source() {
 
     NODEPANEL_SOURCE_MODE="github"
     NODEPANEL_RESOLVED_GITHUB_REPO="$github_repo"
-    NODEPANEL_RESOLVED_GITHUB_TAG="$github_tag"
+    NODEPANEL_RESOLVED_GITHUB_TAG="$(np_first_non_empty "$resolved_github_tag" "$github_tag")"
     NODEPANEL_RESOLVED_PACKAGE_RID="$package_rid"
 
     np_extract_archive "$downloaded_archive" "$extracted_dir"

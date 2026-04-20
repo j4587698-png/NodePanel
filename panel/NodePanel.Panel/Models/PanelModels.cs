@@ -1,5 +1,6 @@
 using NodePanel.ControlPlane.Configuration;
 using NodePanel.ControlPlane.Protocol;
+using NodePanel.Core.Runtime;
 
 namespace NodePanel.Panel.Models;
 
@@ -14,6 +15,8 @@ public sealed record PanelState
     public IReadOnlyList<PanelOrderRecord> Orders { get; init; } = Array.Empty<PanelOrderRecord>();
 
     public IReadOnlyList<PanelUserTrafficRecord> TrafficRecords { get; init; } = Array.Empty<PanelUserTrafficRecord>();
+
+    public IReadOnlyList<PanelScopedTrafficRecord> ScopedTrafficRecords { get; init; } = Array.Empty<PanelScopedTrafficRecord>();
 
     public IReadOnlyList<PanelSettingRecord> Settings { get; init; } = Array.Empty<PanelSettingRecord>();
 }
@@ -67,6 +70,23 @@ public sealed record PanelPlanRecord
 public sealed record PanelUserTrafficRecord
 {
     public string UserId { get; init; } = string.Empty;
+
+    public long UploadBytes { get; init; }
+
+    public long DownloadBytes { get; init; }
+
+    public DateTimeOffset? LastResetAt { get; init; }
+}
+
+public sealed record PanelScopedTrafficRecord
+{
+    public string UserId { get; init; } = string.Empty;
+
+    public string Protocol { get; init; } = string.Empty;
+
+    public string InboundTag { get; init; } = string.Empty;
+
+    public string RuntimeKey => RuntimeUserKeys.Create(Protocol, InboundTag, UserId);
 
     public long UploadBytes { get; init; }
 
@@ -237,6 +257,12 @@ public sealed record PanelMutationResult
 
 public sealed record PanelUserTrafficTotal
 {
+    public string RuntimeKey { get; init; } = string.Empty;
+
+    public string Protocol { get; init; } = string.Empty;
+
+    public string InboundTag { get; init; } = string.Empty;
+
     public string UserId { get; init; } = string.Empty;
 
     public long UploadBytes { get; init; }
@@ -312,4 +338,6 @@ public sealed record PanelStateView
     public required IReadOnlyDictionary<string, string> Settings { get; init; }
 
     public required IReadOnlyDictionary<string, PanelUserTrafficSummary> TrafficSummaries { get; init; }
+
+    public required IReadOnlyDictionary<string, IReadOnlyList<PanelScopedTrafficRecord>> ScopedTrafficRecordsByUser { get; init; }
 }

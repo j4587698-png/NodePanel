@@ -8,11 +8,9 @@ namespace NodePanel.Core.Protocol;
 public sealed class VmessHandshakeReader
 {
     private const int AeadTagLength = 16;
-    private const int AuthIdToleranceSeconds = 120;
     private const string DrainErrorPrefix = "common/drain: ";
     private const string VmessEncodingErrorPrefix = "proxy/vmess/encoding: ";
 
-    private static readonly byte[] SaltAuthIdEncryptionKey = Encoding.ASCII.GetBytes("AES Auth ID Encryption");
     private static readonly byte[] SaltAeadResponseHeaderLengthKey = Encoding.ASCII.GetBytes("AEAD Resp Header Len Key");
     private static readonly byte[] SaltAeadResponseHeaderLengthIv = Encoding.ASCII.GetBytes("AEAD Resp Header Len IV");
     private static readonly byte[] SaltAeadResponseHeaderPayloadKey = Encoding.ASCII.GetBytes("AEAD Resp Header Key");
@@ -73,7 +71,6 @@ public sealed class VmessHandshakeReader
     {
         ArgumentNullException.ThrowIfNull(users);
 
-        var authIdHistory = runtimeState?.AuthIdHistory ?? _authIdHistory;
         var sessionHistory = runtimeState?.SessionHistory ?? _sessionHistory;
         var behaviorSeed = runtimeState?.BehaviorSeed;
         var drainer = drainOnFailure
@@ -84,7 +81,7 @@ public sealed class VmessHandshakeReader
         await TrojanProtocolCodec.ReadExactAsync(stream, authId, cancellationToken).ConfigureAwait(false);
         drainer?.AcknowledgeReceive(authId.Length);
 
-        var (user, authIdError) = ResolveUser(authId, users, authIdHistory);
+        var (user, authIdError) = ResolveUser(authId, users, runtimeState);
         if (user is null)
         {
             throw await DrainAndThrowAsync(
@@ -387,6 +384,20 @@ public sealed class VmessHandshakeReader
         return domain;
     }
 
+    private (VmessUser? User, Exception? Error) ResolveUser(
+        ReadOnlySpan<byte> authId,
+        IReadOnlyList<VmessUser> users,
+        VmessInboundRuntimeState? runtimeState)
+    {
+        if (runtimeState is not null &&
+            runtimeState.TryResolveUser(authId, out var runtimeUser, out var runtimeError))
+        {
+            return (runtimeUser, runtimeError);
+        }
+
+        return ResolveUser(authId, users, _authIdHistory);
+    }
+
     private static (VmessUser? User, Exception? Error) ResolveUser(
         ReadOnlySpan<byte> authId,
         IReadOnlyList<VmessUser> users,
@@ -400,74 +411,24 @@ public sealed class VmessHandshakeReader
                 continue;
             }
 
-            var decryptedAuthId = DecryptAuthId(authId, user.CmdKey);
-            switch (ValidateAuthId(decryptedAuthId))
+            var outcome = VmessAuthIdMatcher.Match(
+                authId,
+                VmessAuthIdMatcher.DeriveAuthIdKey(user.CmdKey),
+                authIdHistory);
+            switch (outcome)
             {
-                case AuthIdValidationResult.InvalidChecksum:
+                case VmessAuthIdMatchOutcome.InvalidChecksum:
                     continue;
 
-                case AuthIdValidationResult.NegativeTime:
-                    return (null, new InvalidDataException("timestamp is negative"));
-
-                case AuthIdValidationResult.InvalidTime:
-                    return (null, new InvalidDataException("invalid timestamp, perhaps unsynchronized time"));
-
-                case AuthIdValidationResult.Valid:
-                    if (!authIdHistory.TryRegister(authId))
-                    {
-                        return (null, new InvalidDataException("replayed request"));
-                    }
-
+                case VmessAuthIdMatchOutcome.Valid:
                     return (user, null);
+
+                default:
+                    return (null, VmessAuthIdMatcher.CreateException(outcome));
             }
         }
 
-        return (null, new InvalidDataException("user do not exist"));
-    }
-
-    private static byte[] DecryptAuthId(ReadOnlySpan<byte> authId, ReadOnlySpan<byte> cmdKey)
-    {
-        var authIdKey = VmessAeadKdf.Kdf16(cmdKey, SaltAuthIdEncryptionKey);
-        using var aes = Aes.Create();
-        aes.Mode = CipherMode.ECB;
-        aes.Padding = PaddingMode.None;
-        aes.Key = authIdKey;
-        using var decryptor = aes.CreateDecryptor();
-
-        var decrypted = new byte[16];
-        var input = authId.ToArray();
-        var written = decryptor.TransformBlock(input, 0, input.Length, decrypted, 0);
-        if (written != decrypted.Length)
-        {
-            throw new InvalidDataException("VMess auth id decryption failed.");
-        }
-
-        return decrypted;
-    }
-
-    private static AuthIdValidationResult ValidateAuthId(ReadOnlySpan<byte> decryptedAuthId)
-    {
-        if (decryptedAuthId.Length != 16)
-        {
-            return AuthIdValidationResult.InvalidChecksum;
-        }
-
-        var timestamp = BinaryPrimitives.ReadInt64BigEndian(decryptedAuthId[..8]);
-        if (timestamp < 0)
-        {
-            return AuthIdValidationResult.NegativeTime;
-        }
-
-        var checksum = BinaryPrimitives.ReadUInt32BigEndian(decryptedAuthId.Slice(12, 4));
-        if (checksum != ComputeCrc32(decryptedAuthId[..12]))
-        {
-            return AuthIdValidationResult.InvalidChecksum;
-        }
-
-        var delta = Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - timestamp);
-        return delta <= AuthIdToleranceSeconds
-            ? AuthIdValidationResult.Valid
-            : AuthIdValidationResult.InvalidTime;
+        return (null, VmessAuthIdMatcher.CreateException(VmessAuthIdMatchOutcome.InvalidChecksum));
     }
 
     private static UnauthorizedAccessException CreateInvalidUserException(Exception? inner)
@@ -541,28 +502,4 @@ public sealed class VmessHandshakeReader
         return hash;
     }
 
-    private static uint ComputeCrc32(ReadOnlySpan<byte> data)
-    {
-        var crc = 0xFFFFFFFFu;
-        foreach (var value in data)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1) != 0
-                    ? (crc >> 1) ^ 0xEDB88320u
-                    : crc >> 1;
-            }
-        }
-
-        return crc ^ 0xFFFFFFFFu;
-    }
-
-    private enum AuthIdValidationResult
-    {
-        InvalidChecksum = 0,
-        NegativeTime = 1,
-        InvalidTime = 2,
-        Valid = 3
-    }
 }

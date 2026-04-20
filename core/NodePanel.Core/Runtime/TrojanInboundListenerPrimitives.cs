@@ -159,6 +159,20 @@ internal sealed class AcceptedConnection : IAsyncDisposable
             socket,
             null);
 
+    public static AcceptedConnection FromStream(
+        Stream stream,
+        EndPoint? remoteEndPoint,
+        EndPoint? localEndPoint,
+        EndPoint? logRemoteEndPoint = null,
+        IDisposable? owner = null)
+        => new(
+            stream ?? throw new ArgumentNullException(nameof(stream)),
+            remoteEndPoint,
+            localEndPoint,
+            logRemoteEndPoint ?? remoteEndPoint,
+            socket: null,
+            owner);
+
     public async ValueTask DisposeAsync()
     {
         await Stream.DisposeAsync().ConfigureAwait(false);

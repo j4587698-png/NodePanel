@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup Condition="'$(BuildingSolutionFile)' == 'true'">
+    <BuildProjectReferences>false</BuildProjectReferences>
+    <BuildInParallel>false</BuildInParallel>
+    <UseSharedCompilation>false</UseSharedCompilation>
+  </PropertyGroup>
+</Project>

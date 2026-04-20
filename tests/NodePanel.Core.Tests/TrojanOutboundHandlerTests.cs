@@ -70,6 +70,61 @@ public sealed class TrojanOutboundHandlerTests
     }
 
     [Fact]
+    public async Task DispatchTcpAsync_uses_system_dns_for_server_when_skip_dns_resolve_is_enabled()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var dispatcher = CreateDispatcher(
+            new TrojanOutboundSettings
+            {
+                Tag = "proxy",
+                ServerHost = "localhost",
+                ServerPort = port,
+                Transport = TrojanOutboundTransports.Tcp,
+                Password = "demo-password"
+            },
+            new TrojanOutboundClient(
+                new TrojanHandshakeWriter(),
+                new ThrowingDnsResolver()));
+
+        var serverTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync(cts.Token);
+            await using var stream = client.GetStream();
+
+            return await new TrojanHandshakeReader().ReadAsync(stream, cts.Token);
+        }, cts.Token);
+
+        await using var outbound = await dispatcher.DispatchTcpAsync(
+            new DispatchContext
+            {
+                InboundProtocol = InboundProtocols.Trojan,
+                InboundTag = "edge",
+                UserId = "user-1",
+                ConnectTimeoutSeconds = 5,
+                Content = new DispatchContent
+                {
+                    SkipDnsResolve = true
+                }
+            },
+            new DispatchDestination
+            {
+                Host = "example.org",
+                Port = 443,
+                Network = DispatchNetwork.Tcp
+            },
+            cts.Token);
+
+        var capture = await serverTask;
+        Assert.Equal(TrojanCommand.Connect, capture.Command);
+        Assert.Equal("example.org", capture.TargetHost);
+        Assert.Equal(443, capture.TargetPort);
+    }
+
+    [Fact]
     public async Task DispatchUdpAsync_routes_through_trojan_associate_transport()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -245,14 +300,14 @@ public sealed class TrojanOutboundHandlerTests
         Assert.Equal("pong", Encoding.ASCII.GetString(response));
     }
 
-    private static IDispatcher CreateDispatcher(TrojanOutboundSettings settings)
+    private static IDispatcher CreateDispatcher(TrojanOutboundSettings settings, TrojanOutboundClient? client = null)
         => new DefaultDispatcher(
             new DefaultOutboundRouter(
                 new IOutboundHandler[]
                 {
                     new FreedomOutboundHandler(),
                     new TrojanOutboundHandler(
-                        new TrojanOutboundClient(),
+                        client ?? new TrojanOutboundClient(),
                         new StaticTrojanOutboundSettingsProvider(settings),
                         new TrojanUdpPacketReader(),
                         new TrojanUdpPacketWriter())
@@ -297,6 +352,12 @@ public sealed class TrojanOutboundHandlerTests
         }
 
         public OutboundRuntimePlan GetCurrentOutboundPlan() => _plan;
+    }
+
+    private sealed class ThrowingDnsResolver : IDnsResolver
+    {
+        public ValueTask<IReadOnlyList<IPAddress>> ResolveAsync(string host, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("The custom DNS resolver should not be used when SkipDnsResolve is enabled.");
     }
 
     private sealed record TcpCapture(TrojanRequest Request, string PayloadText);

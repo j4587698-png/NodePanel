@@ -58,6 +58,8 @@ The release workflow builds each Linux RID on its matching runner so the Native 
 
 If the same release tag already exists, pushes to `main` skip the publish step automatically.
 
+Installed `nodepanel-panel update` and `nodepanel-service update` commands resolve the current GitHub release tag before downloading packages. If the installed version is already the same or newer, the package download is skipped.
+
 You can still trigger the workflow manually from GitHub Actions:
 
 - leave `version` empty: publish using `Directory.Build.props`
@@ -282,6 +284,8 @@ The scripts preserve mutable files on update:
 
 - panel: `appsettings.json`, `server.db`, `panel-state.json`
 - service: `appsettings.json`, `node-runtime-config.json`, `certificates/`
+
+The `update` command only applies the package when its resolved version is newer than the installed `NODEPANEL_PACKAGE_VERSION`. If the target version is the same or older, the update is skipped.
 
 ## Common Commands
 
