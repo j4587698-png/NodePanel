@@ -76,6 +76,8 @@ public sealed class PanelMutationService
         entity.SubscriptionToken = NormalizeSecret(request.SubscriptionToken, existing?.SubscriptionToken);
         entity.TrojanPassword = NormalizeSecret(request.TrojanPassword, existing?.TrojanPassword);
         entity.V2rayUuid = NormalizeUuid(request.V2rayUuid, existing?.V2rayUuid);
+        entity.ShadowsocksCipher = NormalizeShadowsocksCipher(request.ShadowsocksCipher, existing?.ShadowsocksCipher);
+        entity.ShadowsocksPassword = NormalizeSecret(request.ShadowsocksPassword, existing?.ShadowsocksPassword);
         entity.InviteUserId = NodeFormValueCodec.TrimOrEmpty(request.InviteUserId);
         entity.CommissionBalance = request.CommissionBalance;
         entity.CommissionRate = Math.Clamp(request.CommissionRate, 0, 100);
@@ -281,6 +283,8 @@ public sealed class PanelMutationService
                 SubscriptionToken = user.SubscriptionToken,
                 TrojanPassword = user.TrojanPassword,
                 V2rayUuid = user.V2rayUuid,
+                ShadowsocksCipher = user.ShadowsocksCipher,
+                ShadowsocksPassword = user.ShadowsocksPassword,
                 InviteUserId = user.InviteUserId,
                 CommissionBalance = user.CommissionBalance,
                 CommissionRate = user.CommissionRate,
@@ -486,6 +490,23 @@ public sealed class PanelMutationService
         }
 
         return Guid.NewGuid().ToString("N");
+    }
+
+    private static string NormalizeShadowsocksCipher(string? requested, string? current)
+    {
+        var normalizedRequested = ShadowsocksCipherTypes.Normalize(requested);
+        if (!string.IsNullOrWhiteSpace(normalizedRequested))
+        {
+            return normalizedRequested;
+        }
+
+        var normalizedCurrent = ShadowsocksCipherTypes.Normalize(current);
+        if (!string.IsNullOrWhiteSpace(normalizedCurrent))
+        {
+            return normalizedCurrent;
+        }
+
+        return ShadowsocksCipherTypes.ChaCha20Poly1305;
     }
 
     private static string GenerateInviteCodeValue()

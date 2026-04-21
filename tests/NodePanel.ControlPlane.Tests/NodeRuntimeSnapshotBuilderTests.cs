@@ -1538,6 +1538,65 @@ public sealed class NodeRuntimeSnapshotBuilderTests
     }
 
     [Fact]
+    public void TryBuild_accepts_trojan_outbound_with_null_optional_collections_and_restores_defaults()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new TrojanInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            4,
+            new NodeServiceConfig
+            {
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    },
+                    new OutboundConfig
+                    {
+                        Tag = " trojan-edge ",
+                        Enabled = true,
+                        Protocol = " TROJAN ",
+                        ServerHost = " edge.example.com ",
+                        ServerPort = 443,
+                        Password = " secret ",
+                        Fingerprint = null!,
+                        MultiplexSettings = null!,
+                        WebSocketHeaders = null!,
+                        HttpHeaders = null!,
+                        ApplicationProtocols = null!,
+                        CandidateTags = null!,
+                        RealityOptions = null!,
+                        TestSeed = null!
+                    }
+                ]
+            },
+            [OutboundProtocols.Freedom, OutboundProtocols.Trojan],
+            out var snapshot,
+            out var error);
+
+        Assert.True(success, error);
+        var normalizedOutbound = Assert.Single(snapshot.Config.Outbounds, static outbound => outbound.Tag == "trojan-edge");
+        Assert.NotNull(normalizedOutbound.MultiplexSettings);
+        Assert.Empty(normalizedOutbound.WebSocketHeaders);
+        Assert.Empty(normalizedOutbound.HttpHeaders);
+        Assert.Empty(normalizedOutbound.ApplicationProtocols);
+        Assert.Empty(normalizedOutbound.CandidateTags);
+        Assert.Empty(normalizedOutbound.TestSeed);
+        Assert.Equal(string.Empty, normalizedOutbound.Fingerprint);
+        Assert.True(normalizedOutbound.RealityOptions.IsEmpty);
+
+        Assert.True(snapshot.OutboundSettings.TryGetTrojan("trojan-edge", out var trojan));
+        Assert.Empty(trojan.WebSocketHeaders);
+        Assert.Empty(trojan.ApplicationProtocols);
+    }
+
+    [Fact]
     public void TryBuild_builds_vmess_outbound_runtime_settings()
     {
         var builder = new NodeRuntimeSnapshotBuilder(

@@ -27,8 +27,10 @@ public static class InboundProtocols
 
 public static class InboundTransports
 {
+    public const string Tcp = RuntimeInternetTransportProtocols.Tcp;
     public const string Tls = "tls";
     public const string Wss = "wss";
+    public const string HttpUpgrade = RuntimeInternetTransportProtocols.HttpUpgrade;
     public const string Grpc = RuntimeInternetTransportProtocols.Grpc;
     public const string SplitHttp = RuntimeInternetTransportProtocols.SplitHttp;
 
@@ -37,6 +39,9 @@ public static class InboundTransports
             ? Tls
             : value.Trim().ToLowerInvariant() switch
             {
+                Tcp => Tcp,
+                "http-upgrade" => HttpUpgrade,
+                HttpUpgrade => HttpUpgrade,
                 "split-http" or "xhttp" => SplitHttp,
                 "kcp" => RuntimeInternetTransportProtocols.Mkcp,
                 _ => value.Trim().ToLowerInvariant()

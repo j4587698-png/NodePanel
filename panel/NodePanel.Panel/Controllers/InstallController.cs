@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc;
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 using FreeSql;
@@ -98,6 +99,8 @@ public class InstallController : Controller
                     DisplayName = normalizedAdminDisplayName,
                     TrojanPassword = Guid.NewGuid().ToString("N"),
                     V2rayUuid = Guid.NewGuid().ToString("D"),
+                    ShadowsocksCipher = ShadowsocksCipherTypes.ChaCha20Poly1305,
+                    ShadowsocksPassword = Guid.NewGuid().ToString("N"),
                     SubscriptionToken = Guid.NewGuid().ToString("N")
                 };
                 

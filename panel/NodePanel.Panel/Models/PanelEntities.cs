@@ -28,6 +28,10 @@ public class UserEntity
 
     public string V2rayUuid { get; set; } = string.Empty;
 
+    public string ShadowsocksCipher { get; set; } = string.Empty;
+
+    public string ShadowsocksPassword { get; set; } = string.Empty;
+
     public int GroupId { get; set; }
 
     public bool Enabled { get; set; } = true;
@@ -82,6 +86,8 @@ public class UserEntity
         SubscriptionToken = NodeFormValueCodec.TrimOrEmpty(SubscriptionToken),
         TrojanPassword = NodeFormValueCodec.TrimOrEmpty(TrojanPassword),
         V2rayUuid = NodeFormValueCodec.TrimOrEmpty(V2rayUuid),
+        ShadowsocksCipher = NodeFormValueCodec.TrimOrEmpty(ShadowsocksCipher),
+        ShadowsocksPassword = NodeFormValueCodec.TrimOrEmpty(ShadowsocksPassword),
         InviteUserId = NodeFormValueCodec.TrimOrEmpty(InviteUserId),
         CommissionBalance = CommissionBalance,
         CommissionRate = Math.Clamp(CommissionRate, 0, 100),
@@ -108,6 +114,8 @@ public class UserEntity
         SubscriptionToken = record.SubscriptionToken;
         TrojanPassword = record.TrojanPassword;
         V2rayUuid = record.V2rayUuid;
+        ShadowsocksCipher = record.ShadowsocksCipher;
+        ShadowsocksPassword = record.ShadowsocksPassword;
         InviteUserId = record.InviteUserId;
         CommissionBalance = record.CommissionBalance;
         CommissionRate = Math.Clamp(record.CommissionRate, 0, 100);

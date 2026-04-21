@@ -157,6 +157,8 @@ public sealed class NetworkAccountingService : BackgroundService
                     SubscriptionToken = record.SubscriptionToken,
                     TrojanPassword = record.TrojanPassword,
                     V2rayUuid = record.V2rayUuid,
+                    ShadowsocksCipher = record.ShadowsocksCipher,
+                    ShadowsocksPassword = record.ShadowsocksPassword,
                     InviteUserId = record.InviteUserId,
                     CommissionBalance = record.CommissionBalance,
                     CommissionRate = record.CommissionRate,

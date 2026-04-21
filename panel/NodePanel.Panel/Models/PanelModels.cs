@@ -155,6 +155,10 @@ public sealed record PanelUserRecord
 
     public string V2rayUuid { get; init; } = string.Empty;
 
+    public string ShadowsocksCipher { get; init; } = string.Empty;
+
+    public string ShadowsocksPassword { get; init; } = string.Empty;
+
     public string InviteUserId { get; init; } = string.Empty;
 
     public decimal CommissionBalance { get; init; }
@@ -212,6 +216,10 @@ public sealed record UpsertUserRequest
     public string TrojanPassword { get; init; } = string.Empty;
 
     public string V2rayUuid { get; init; } = string.Empty;
+
+    public string ShadowsocksCipher { get; init; } = string.Empty;
+
+    public string ShadowsocksPassword { get; init; } = string.Empty;
 
     public string InviteUserId { get; init; } = string.Empty;
 

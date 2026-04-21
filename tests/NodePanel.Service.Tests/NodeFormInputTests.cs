@@ -425,6 +425,150 @@ public sealed class NodeFormInputTests
     }
 
     [Fact]
+    public void TryToRequest_allows_round_trip_without_enabled_remote_inbounds()
+    {
+        var form = NodeFormInput.FromRecord(
+            new PanelNodeRecord
+            {
+                NodeId = "node-disabled",
+                DisplayName = "Disabled Node",
+                Protocol = InboundProtocols.Vless,
+                Config = new NodeServiceConfig
+                {
+                    Inbounds =
+                    [
+                        NodeServiceConfigInbounds.CreateDefaultInbound(InboundProtocols.Vless, InboundTransports.Tls),
+                        NodeServiceConfigInbounds.CreateDefaultInbound(InboundProtocols.Vless, InboundTransports.Wss)
+                    ]
+                }
+            });
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal(InboundProtocols.Vless, InboundProtocols.Normalize(request.Protocol));
+        Assert.Equal(5, request.Config.Inbounds.Count);
+        Assert.All(request.Config.Inbounds, static inbound => Assert.False(inbound.Enabled));
+    }
+
+    [Fact]
+    public void TryToRequest_builds_shadowsocks_tcp_inbound_only()
+    {
+        var form = CreateBaseForm();
+        form.Protocol = InboundProtocols.Shadowsocks;
+        form.GetOrderedTrojanInbounds();
+        foreach (var inbound in form.Inbounds)
+        {
+            inbound.Enabled = false;
+        }
+
+        form.Inbounds[5].Enabled = true;
+        form.Inbounds[5].ListenAddress = "127.0.0.1";
+        form.Inbounds[5].Port = 8388;
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        var inboundConfig = Assert.Single(request.Config.Inbounds);
+        Assert.Equal(InboundProtocols.Shadowsocks, InboundProtocols.Normalize(inboundConfig.Protocol));
+        Assert.Equal(InboundTransports.Tcp, InboundTransports.Normalize(inboundConfig.Transport));
+        Assert.Equal(RuntimeInternetTransportProtocols.Tcp, inboundConfig.TransportProtocol);
+        Assert.Equal("127.0.0.1", inboundConfig.ListenAddress);
+        Assert.Equal(8388, inboundConfig.Port);
+    }
+
+    [Fact]
+    public void TryToRequest_refreshes_generated_tags_and_grpc_service_name_after_protocol_switch()
+    {
+        var form = CreateBaseForm();
+        form.GetOrderedTrojanInbounds();
+        form.Protocol = InboundProtocols.Vless;
+        form.Inbounds[0].Enabled = true;
+        form.Inbounds[1].Enabled = false;
+        form.Inbounds[2].Enabled = false;
+        form.Inbounds[3].Enabled = true;
+        form.Inbounds[4].Enabled = false;
+        form.Inbounds[3].GrpcServiceName = TrojanInboundFormInput.GetDefaultGrpcServiceName(InboundProtocols.Trojan);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        var tlsInbound = NodeServiceConfigInbounds.GetProtocolTransportInbound(request.Config, InboundProtocols.Vless, InboundTransports.Tls);
+        var grpcInbound = NodeServiceConfigInbounds.GetProtocolTransportInbound(request.Config, InboundProtocols.Vless, InboundTransports.Grpc);
+        Assert.Equal("vless-tcp-tls", tlsInbound.Tag);
+        Assert.Equal("vless-grpc", grpcInbound.Tag);
+        Assert.Equal("/vless/service", grpcInbound.GrpcServiceName);
+    }
+
+    [Fact]
+    public void TryParse_advanced_config_accepts_tcp_httpupgrade_grpc_and_splithttp_inbounds()
+    {
+        const string json =
+            """
+            {
+              "inbounds": [
+                { "transport": "tcp" },
+                { "transport": "http-upgrade" },
+                { "transport": "grpc" },
+                { "transport": "split-http" }
+              ]
+            }
+            """;
+
+        var success = NodeAdvancedConfigInput.TryParse(json, out var input, out var error);
+
+        Assert.True(success, error);
+        Assert.Equal(
+            [InboundTransports.Tcp, InboundTransports.HttpUpgrade, InboundTransports.Grpc, InboundTransports.SplitHttp],
+            input.Inbounds!.Select(static inbound => inbound.Transport).ToArray());
+    }
+
+    [Fact]
+    public void FromRecord_preserves_grpc_advanced_inbound_settings_inside_advanced_json()
+    {
+        var record = new PanelNodeRecord
+        {
+            NodeId = "node-grpc",
+            DisplayName = "Node gRPC",
+            Protocol = InboundProtocols.Vmess,
+            Config = new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "vmess-grpc",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Vmess,
+                        Transport = InboundTransports.Grpc,
+                        TransportProtocol = RuntimeInternetTransportProtocols.Grpc,
+                        TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                        ListenAddress = "0.0.0.0",
+                        Port = 443,
+                        GrpcServiceName = "/vmess/service",
+                        ApplicationProtocols = ["h2"],
+                        Sniffing = new InboundSniffingConfig
+                        {
+                            Enabled = true
+                        }
+                    }
+                ]
+            }
+        };
+
+        var form = NodeFormInput.FromRecord(record);
+
+        Assert.Contains("\"transport\": \"grpc\"", form.AdvancedConfigJson, StringComparison.Ordinal);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        var grpcInbound = NodeServiceConfigInbounds.GetProtocolTransportInbound(request.Config, InboundProtocols.Vmess, InboundTransports.Grpc);
+        Assert.Equal(["h2"], grpcInbound.ApplicationProtocols);
+        Assert.True(grpcInbound.Sniffing.Enabled);
+    }
+
+    [Fact]
     public void Subscription_metadata_round_trips_between_form_request_and_record()
     {
         var form = CreateBaseForm();

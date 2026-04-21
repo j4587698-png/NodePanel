@@ -134,6 +134,88 @@ public sealed class ServiceRuntimeTests
     }
 
     [Fact]
+    public void ApplyBootstrap_accepts_outbound_null_optional_collections_and_restores_defaults()
+    {
+        var testRoot = CreateTestRoot();
+        try
+        {
+            var assetDirectory = Path.Combine(testRoot, "config");
+            Directory.CreateDirectory(assetDirectory);
+            File.WriteAllText(Path.Combine(assetDirectory, "geosite.dat"), string.Empty);
+            File.WriteAllText(Path.Combine(assetDirectory, "geoip.dat"), string.Empty);
+
+            var runtimeConfigStore = new RuntimeConfigStore();
+            var orchestrator = new ConfigOrchestrator(
+                runtimeConfigStore,
+                [
+                    OutboundProtocols.Freedom,
+                    OutboundProtocols.Trojan
+                ],
+                [new TrojanInboundRuntimeCompiler()],
+                new PersistedNodeConfigStore(
+                    new NodePanelOptions
+                    {
+                        CachedConfigPath = Path.Combine(testRoot, "runtime.json")
+                    },
+                    new TestLogger<PersistedNodeConfigStore>()),
+                new TestLogger<ConfigOrchestrator>(),
+                testRoot);
+
+            orchestrator.ApplyBootstrap(
+                new NodeServiceConfig
+                {
+                    Outbounds =
+                    [
+                        new OutboundConfig
+                        {
+                            Tag = "direct",
+                            Enabled = true,
+                            Protocol = OutboundProtocols.Freedom
+                        },
+                        new OutboundConfig
+                        {
+                            Tag = "proxy",
+                            Enabled = true,
+                            Protocol = OutboundProtocols.Trojan,
+                            ServerHost = "edge.example.com",
+                            ServerPort = 443,
+                            Password = "demo-password",
+                            Fingerprint = null!,
+                            MultiplexSettings = null!,
+                            WebSocketHeaders = null!,
+                            HttpHeaders = null!,
+                            ApplicationProtocols = null!,
+                            CandidateTags = null!,
+                            RealityOptions = null!,
+                            TestSeed = null!
+                        }
+                    ]
+                });
+
+            var snapshot = runtimeConfigStore.GetSnapshot();
+            var normalizedOutbound = Assert.Single(snapshot.Config.Outbounds, static outbound => outbound.Tag == "proxy");
+            Assert.NotNull(normalizedOutbound.MultiplexSettings);
+            Assert.Empty(normalizedOutbound.WebSocketHeaders);
+            Assert.Empty(normalizedOutbound.HttpHeaders);
+            Assert.Empty(normalizedOutbound.ApplicationProtocols);
+            Assert.Empty(normalizedOutbound.CandidateTags);
+            Assert.Empty(normalizedOutbound.TestSeed);
+            Assert.Equal(string.Empty, normalizedOutbound.Fingerprint);
+            Assert.True(normalizedOutbound.RealityOptions.IsEmpty);
+
+            TrojanOutboundSettings settings;
+            Assert.True(runtimeConfigStore.TryResolve(new DispatchContext { OutboundTag = "proxy" }, out settings));
+            Assert.Empty(settings.WebSocketHeaders);
+            Assert.Empty(settings.ApplicationProtocols);
+            Assert.Equal(OutboundXudpProxyModes.Reject, settings.MultiplexSettings.XudpProxyUdp443);
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(testRoot);
+        }
+    }
+
+    [Fact]
     public async Task ApplySnapshotAsync_accepts_unified_unix_listener_and_normalizes_timeout_defaults()
     {
         var testRoot = CreateTestRoot();

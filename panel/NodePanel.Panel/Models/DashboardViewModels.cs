@@ -76,11 +76,7 @@ public sealed class NodeFormInput
 
     public bool SubscriptionAllowInsecure { get; set; }
 
-    public List<TrojanInboundFormInput> Inbounds { get; set; } =
-    [
-        TrojanInboundFormInput.CreateDefault(InboundProtocols.Trojan, InboundTransports.Tls),
-        TrojanInboundFormInput.CreateDefault(InboundProtocols.Trojan, InboundTransports.Wss)
-    ];
+    public List<TrojanInboundFormInput> Inbounds { get; set; } = [];
 
     public string CertificateMode { get; set; } = CertificateModes.ManualPfx;
 
@@ -304,8 +300,17 @@ public sealed class NodeFormInput
     public static NodeFormInput FromRecord(PanelNodeRecord record)
     {
         var normalizedProtocol = InboundProtocols.Normalize(record.Protocol);
-        var tcpTls = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, normalizedProtocol, InboundTransports.Tls);
-        var wss = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, normalizedProtocol, InboundTransports.Wss);
+        var proxyProtocol = string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal)
+            ? InboundProtocols.Trojan
+            : normalizedProtocol;
+        var tcpTls = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, proxyProtocol, InboundTransports.Tls);
+        var wss = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, proxyProtocol, InboundTransports.Wss);
+        var httpUpgrade = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, proxyProtocol, InboundTransports.HttpUpgrade);
+        var grpc = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, proxyProtocol, InboundTransports.Grpc);
+        var splitHttp = NodeServiceConfigInbounds.GetProtocolTransportInbound(record.Config, proxyProtocol, InboundTransports.SplitHttp);
+        var shadowsocksInbound = NodeServiceConfigInbounds.GetProtocolInbounds(record.Config, InboundProtocols.Shadowsocks)
+                                     .FirstOrDefault() ??
+                                 NodeServiceConfigInbounds.CreateDefaultInbound(InboundProtocols.Shadowsocks, InboundTransports.Tcp);
 
         return new NodeFormInput
         {
@@ -323,7 +328,11 @@ public sealed class NodeFormInput
             Inbounds =
             [
                 TrojanInboundFormInput.FromInbound(tcpTls),
-                TrojanInboundFormInput.FromInbound(wss)
+                TrojanInboundFormInput.FromInbound(wss),
+                TrojanInboundFormInput.FromInbound(httpUpgrade),
+                TrojanInboundFormInput.FromInbound(grpc),
+                TrojanInboundFormInput.FromInbound(splitHttp),
+                TrojanInboundFormInput.FromInbound(shadowsocksInbound)
             ],
             CertificateMode = CertificateModes.Normalize(record.Config.Certificate.Mode),
             CertificatePfxPath = record.Config.Certificate.PfxPath,
@@ -366,12 +375,21 @@ public sealed class NodeFormInput
     public IReadOnlyList<TrojanInboundFormInput> GetOrderedTrojanInbounds()
     {
         EnsureCollections();
-        var tls = GetOrCreateInbound(InboundTransports.Tls);
-        var wss = GetOrCreateInbound(InboundTransports.Wss);
+        var proxyProtocol = ResolveProxyInboundProtocol();
+        var tls = GetOrCreateInbound(proxyProtocol, InboundTransports.Tls);
+        var wss = GetOrCreateInbound(proxyProtocol, InboundTransports.Wss);
+        var httpUpgrade = GetOrCreateInbound(proxyProtocol, InboundTransports.HttpUpgrade);
+        var grpc = GetOrCreateInbound(proxyProtocol, InboundTransports.Grpc);
+        var splitHttp = GetOrCreateInbound(proxyProtocol, InboundTransports.SplitHttp);
+        var shadowsocks = GetOrCreateInbound(InboundProtocols.Shadowsocks, InboundTransports.Tcp);
         Inbounds =
         [
             tls,
-            wss
+            wss,
+            httpUpgrade,
+            grpc,
+            splitHttp,
+            shadowsocks
         ];
         return Inbounds;
     }
@@ -392,24 +410,38 @@ public sealed class NodeFormInput
         }
     }
 
-    private TrojanInboundFormInput GetOrCreateInbound(string transport)
+    private TrojanInboundFormInput GetOrCreateInbound(string protocol, string transport)
     {
         Inbounds ??= [];
-        var normalizedTransport = InboundTransports.Normalize(transport);
+        var normalizedProtocol = NormalizeInboundProtocol(protocol);
+        var normalizedTransport = TrojanInboundFormInput.NormalizeTransportKey(normalizedProtocol, transport);
+        var isShadowsocksTransport = string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal);
         var existing = Inbounds.FirstOrDefault(item =>
-            string.Equals(InboundTransports.Normalize(item.Transport), normalizedTransport, StringComparison.Ordinal));
+            string.Equals(
+                TrojanInboundFormInput.NormalizeTransportKey(InboundProtocols.Normalize(item.Protocol), item.Transport),
+                normalizedTransport,
+                StringComparison.Ordinal) &&
+            (isShadowsocksTransport
+                ? string.Equals(InboundProtocols.Normalize(item.Protocol), InboundProtocols.Shadowsocks, StringComparison.Ordinal)
+                : !string.Equals(InboundProtocols.Normalize(item.Protocol), InboundProtocols.Shadowsocks, StringComparison.Ordinal)));
         if (existing is not null)
         {
             existing.EnsureCollections();
-            existing.Protocol = NormalizeInboundProtocol(Protocol);
+            existing.Protocol = normalizedProtocol;
             existing.Transport = normalizedTransport;
-            existing.Tag = string.IsNullOrWhiteSpace(existing.Tag)
-                ? TrojanInboundFormInput.GetDefaultTag(existing.Protocol, normalizedTransport)
-                : existing.Tag.Trim();
+            existing.Tag = TrojanInboundFormInput.IsDefaultTag(existing.Tag, normalizedTransport)
+                ? TrojanInboundFormInput.GetDefaultTag(normalizedProtocol, normalizedTransport)
+                : NodeFormValueCodec.TrimOrEmpty(existing.Tag);
+            if (string.Equals(normalizedTransport, InboundTransports.Grpc, StringComparison.Ordinal) &&
+                TrojanInboundFormInput.IsDefaultGrpcServiceName(existing.GrpcServiceName))
+            {
+                existing.GrpcServiceName = TrojanInboundFormInput.GetDefaultGrpcServiceName(normalizedProtocol);
+            }
+
             return existing;
         }
 
-        var created = TrojanInboundFormInput.CreateDefault(NormalizeInboundProtocol(Protocol), normalizedTransport);
+        var created = TrojanInboundFormInput.CreateDefault(normalizedProtocol, normalizedTransport);
         Inbounds.Add(created);
         return created;
     }
@@ -487,12 +519,22 @@ public sealed class NodeFormInput
 
     private IReadOnlyList<InboundConfig> BuildInbounds()
     {
-        var tlsInbound = GetOrCreateInbound(InboundTransports.Tls);
-        var wssInbound = GetOrCreateInbound(InboundTransports.Wss);
+        var normalizedProtocol = NormalizeInboundProtocol(Protocol);
+        if (string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
+        {
+            return
+            [
+                GetOrCreateInbound(InboundProtocols.Shadowsocks, InboundTransports.Tcp).ToInboundConfig()
+            ];
+        }
+
         return
         [
-            tlsInbound.ToInboundConfig(),
-            wssInbound.ToInboundConfig()
+            GetOrCreateInbound(normalizedProtocol, InboundTransports.Tls).ToInboundConfig(),
+            GetOrCreateInbound(normalizedProtocol, InboundTransports.Wss).ToInboundConfig(),
+            GetOrCreateInbound(normalizedProtocol, InboundTransports.HttpUpgrade).ToInboundConfig(),
+            GetOrCreateInbound(normalizedProtocol, InboundTransports.Grpc).ToInboundConfig(),
+            GetOrCreateInbound(normalizedProtocol, InboundTransports.SplitHttp).ToInboundConfig()
         ];
     }
 
@@ -660,6 +702,14 @@ public sealed class NodeFormInput
     private static string NormalizeInboundProtocol(string? value)
         => InboundProtocols.Normalize(value);
 
+    private string ResolveProxyInboundProtocol()
+    {
+        var normalizedProtocol = NormalizeInboundProtocol(Protocol);
+        return string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal)
+            ? InboundProtocols.Trojan
+            : normalizedProtocol;
+    }
+
 }
 
 internal static class DashboardOutboundPolicies
@@ -752,7 +802,7 @@ public sealed record NodeAdvancedConfigInput
             Certificate = null,
             Limits = null,
             Dns = null,
-            Inbounds = null,
+            Inbounds = CreateAdvancedInbounds(protocol, config.Inbounds),
             ProxyInbounds = config.ProxyInbounds.Count > 0 ? config.ProxyInbounds : null,
             Outbounds = CreateAdvancedOutbounds(config.Outbounds),
             RoutingResources = null,
@@ -770,7 +820,7 @@ public sealed record NodeAdvancedConfigInput
            !RoutingResourceFormInput.HasConfiguredValues(RoutingResources) &&
            (RoutingRules is null || RoutingRules.Count == 0);
 
-    private static AdvancedInboundConfigInput? CreateAdvancedInbound(InboundConfig inbound)
+    private static AdvancedInboundConfigInput? CreateAdvancedInbound(InboundConfig inbound, string transport)
     {
         var applicationProtocols = inbound.ApplicationProtocols.Count > 0 ? inbound.ApplicationProtocols : null;
         var sniffing = HasAdvancedSniffing(inbound.Sniffing) ? inbound.Sniffing : null;
@@ -782,11 +832,39 @@ public sealed record NodeAdvancedConfigInput
 
         return new AdvancedInboundConfigInput
         {
-            Transport = InboundTransports.Normalize(inbound.Transport),
+            Transport = transport,
             ApplicationProtocols = applicationProtocols,
             Sniffing = sniffing,
             Fallbacks = fallbacks
         };
+    }
+
+    private static IReadOnlyList<AdvancedInboundConfigInput>? CreateAdvancedInbounds(
+        string protocol,
+        IReadOnlyList<InboundConfig> inbounds)
+    {
+        var normalizedProtocol = InboundProtocols.Normalize(protocol);
+        var preserveStructuredTransports = string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal)
+            ? Array.Empty<string>()
+            :
+            [
+                InboundTransports.Tls,
+                InboundTransports.Wss
+            ];
+
+        var advancedInbounds = inbounds
+            .Where(inbound => string.Equals(InboundProtocols.Normalize(inbound.Protocol), normalizedProtocol, StringComparison.Ordinal))
+            .Select(inbound =>
+            {
+                var transport = TrojanInboundFormInput.ResolveTransportKey(normalizedProtocol, inbound);
+                return CreateAdvancedInbound(inbound, transport);
+            })
+            .Where(static inbound => inbound is not null)
+            .Select(static inbound => inbound!)
+            .Where(inbound => !preserveStructuredTransports.Contains(inbound.Transport, StringComparer.Ordinal))
+            .ToArray();
+
+        return advancedInbounds.Length == 0 ? null : advancedInbounds;
     }
 
     private static IReadOnlyList<OutboundConfig>? CreateAdvancedOutbounds(IReadOnlyList<OutboundConfig> outbounds)
@@ -818,10 +896,11 @@ public sealed record NodeAdvancedConfigInput
         foreach (var inbound in inbounds)
         {
             var transport = InboundTransports.Normalize(inbound.Transport);
-            if (transport is not (InboundTransports.Tls or InboundTransports.Wss))
+            if (!IsSupportedAdvancedInboundTransport(transport))
             {
                 normalizedInbounds = null;
-                error = $"高级配置中的 inbounds.transport 仅支持 '{InboundTransports.Tls}' 或 '{InboundTransports.Wss}'。";
+                error =
+                    $"Advanced config inbounds.transport only supports '{InboundTransports.Tcp}', '{InboundTransports.Tls}', '{InboundTransports.Wss}', '{InboundTransports.HttpUpgrade}', '{InboundTransports.Grpc}' or '{InboundTransports.SplitHttp}'.";
                 return false;
             }
 
@@ -839,6 +918,15 @@ public sealed record NodeAdvancedConfigInput
         error = string.Empty;
         return true;
     }
+
+    private static bool IsSupportedAdvancedInboundTransport(string transport)
+        => transport is
+            InboundTransports.Tcp or
+            InboundTransports.Tls or
+            InboundTransports.Wss or
+            InboundTransports.HttpUpgrade or
+            InboundTransports.Grpc or
+            InboundTransports.SplitHttp;
 
     private static bool HasAdvancedCertificate(CertificateOptions options)
         => options.RejectUnknownSni || HasClientHelloPolicy(options.ClientHelloPolicy);
@@ -925,6 +1013,8 @@ public sealed class TrojanInboundFormInput
 
     public string Path { get; set; } = string.Empty;
 
+    public string GrpcServiceName { get; set; } = string.Empty;
+
     [Range(0, 65535, ErrorMessage = "Early Data 字节数必须在 0 到 65535 之间。")]
     public int EarlyDataBytes { get; set; }
 
@@ -951,9 +1041,10 @@ public sealed class TrojanInboundFormInput
     public static TrojanInboundFormInput CreateDefault(string protocol, string transport)
     {
         var normalizedProtocol = InboundProtocols.Normalize(protocol);
-        var normalizedTransport = InboundTransports.Normalize(transport);
-        var form = normalizedTransport == InboundTransports.Wss
-            ? new TrojanInboundFormInput
+        var normalizedTransport = NormalizeTransportKey(normalizedProtocol, transport);
+        var form = normalizedTransport switch
+        {
+            InboundTransports.Wss => new TrojanInboundFormInput
             {
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
@@ -962,8 +1053,47 @@ public sealed class TrojanInboundFormInput
                 Port = 8443,
                 HandshakeTimeoutSeconds = 10,
                 Path = "/ws"
-            }
-            : new TrojanInboundFormInput
+            },
+            InboundTransports.HttpUpgrade => new TrojanInboundFormInput
+            {
+                Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
+                Protocol = normalizedProtocol,
+                Transport = normalizedTransport,
+                ListenAddress = "0.0.0.0",
+                Port = 8443,
+                HandshakeTimeoutSeconds = 10,
+                Path = "/upgrade"
+            },
+            InboundTransports.Grpc => new TrojanInboundFormInput
+            {
+                Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
+                Protocol = normalizedProtocol,
+                Transport = normalizedTransport,
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                HandshakeTimeoutSeconds = 10,
+                GrpcServiceName = GetDefaultGrpcServiceName(normalizedProtocol)
+            },
+            InboundTransports.SplitHttp => new TrojanInboundFormInput
+            {
+                Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
+                Protocol = normalizedProtocol,
+                Transport = normalizedTransport,
+                ListenAddress = "0.0.0.0",
+                Port = 443,
+                HandshakeTimeoutSeconds = 10,
+                Path = "/xhttp"
+            },
+            InboundTransports.Tcp when string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal) => new TrojanInboundFormInput
+            {
+                Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
+                Protocol = normalizedProtocol,
+                Transport = normalizedTransport,
+                ListenAddress = "0.0.0.0",
+                Port = 8388,
+                HandshakeTimeoutSeconds = 10
+            },
+            _ => new TrojanInboundFormInput
             {
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
@@ -971,28 +1101,35 @@ public sealed class TrojanInboundFormInput
                 ListenAddress = "0.0.0.0",
                 Port = 443,
                 HandshakeTimeoutSeconds = 10
-            };
+            }
+        };
         form.EnsureCollections();
         return form;
     }
 
     public static TrojanInboundFormInput FromInbound(InboundConfig inbound)
     {
-        var normalizedTransport = InboundTransports.Normalize(inbound.Transport);
+        var normalizedProtocol = InboundProtocols.Normalize(inbound.Protocol);
+        var normalizedTransport = ResolveEditableTransport(normalizedProtocol, inbound);
+        var isWebSocketTransport = string.Equals(normalizedTransport, InboundTransports.Wss, StringComparison.Ordinal);
+        var isHttpUpgradeTransport = string.Equals(normalizedTransport, InboundTransports.HttpUpgrade, StringComparison.Ordinal);
+        var isSplitHttpTransport = string.Equals(normalizedTransport, InboundTransports.SplitHttp, StringComparison.Ordinal);
+        var isGrpcTransport = string.Equals(normalizedTransport, InboundTransports.Grpc, StringComparison.Ordinal);
         var form = new TrojanInboundFormInput
         {
-            Tag = string.IsNullOrWhiteSpace(inbound.Tag) ? GetDefaultTag(normalizedTransport) : inbound.Tag,
+            Tag = string.IsNullOrWhiteSpace(inbound.Tag) ? GetDefaultTag(normalizedProtocol, normalizedTransport) : inbound.Tag,
             Enabled = inbound.Enabled,
-            Protocol = InboundProtocols.Normalize(inbound.Protocol),
+            Protocol = normalizedProtocol,
             Transport = normalizedTransport,
             ListenAddress = inbound.ListenAddress,
             Port = Math.Clamp(inbound.Port, 0, 65535),
             HandshakeTimeoutSeconds = Math.Clamp(inbound.HandshakeTimeoutSeconds, 1, 600),
             AcceptProxyProtocol = inbound.AcceptProxyProtocol,
-            Host = inbound.Host,
-            Path = normalizedTransport == InboundTransports.Wss ? inbound.Path : string.Empty,
-            EarlyDataBytes = normalizedTransport == InboundTransports.Wss ? Math.Clamp(inbound.EarlyDataBytes, 0, 65535) : 0,
-            HeartbeatPeriodSeconds = normalizedTransport == InboundTransports.Wss ? Math.Clamp(inbound.HeartbeatPeriodSeconds, 0, 3600) : 0,
+            Host = isWebSocketTransport || isHttpUpgradeTransport ? inbound.Host : string.Empty,
+            Path = isWebSocketTransport || isHttpUpgradeTransport || isSplitHttpTransport ? inbound.Path : string.Empty,
+            GrpcServiceName = isGrpcTransport ? inbound.GrpcServiceName : string.Empty,
+            EarlyDataBytes = isWebSocketTransport ? Math.Clamp(inbound.EarlyDataBytes, 0, 65535) : 0,
+            HeartbeatPeriodSeconds = isWebSocketTransport ? Math.Clamp(inbound.HeartbeatPeriodSeconds, 0, 3600) : 0,
             ApplicationProtocols = NodeFormValueCodec.JoinCsv(inbound.ApplicationProtocols),
             ReceiveOriginalDestination = inbound.ReceiveOriginalDestination,
             Sniffing = InboundSniffingFormInput.FromConfig(inbound.Sniffing),
@@ -1005,21 +1142,40 @@ public sealed class TrojanInboundFormInput
     public InboundConfig ToInboundConfig()
     {
         EnsureCollections();
-        var normalizedTransport = InboundTransports.Normalize(Transport);
+        var normalizedProtocol = InboundProtocols.Normalize(Protocol);
+        var normalizedTransport = NormalizeTransportKey(normalizedProtocol, Transport);
+        var isWebSocketTransport = string.Equals(normalizedTransport, InboundTransports.Wss, StringComparison.Ordinal);
+        var isHttpUpgradeTransport = string.Equals(normalizedTransport, InboundTransports.HttpUpgrade, StringComparison.Ordinal);
+        var isGrpcTransport = string.Equals(normalizedTransport, InboundTransports.Grpc, StringComparison.Ordinal);
+        var isSplitHttpTransport = string.Equals(normalizedTransport, InboundTransports.SplitHttp, StringComparison.Ordinal);
+        var isShadowsocksTransport = string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal);
         return new InboundConfig
         {
-            Tag = string.IsNullOrWhiteSpace(Tag) ? GetDefaultTag(Protocol, normalizedTransport) : Tag.Trim(),
+            Tag = string.IsNullOrWhiteSpace(Tag) ? GetDefaultTag(normalizedProtocol, normalizedTransport) : Tag.Trim(),
             Enabled = Enabled,
-            Protocol = InboundProtocols.Normalize(Protocol),
+            Protocol = normalizedProtocol,
             Transport = normalizedTransport,
+            TransportProtocol = isHttpUpgradeTransport
+                ? RuntimeInternetTransportProtocols.HttpUpgrade
+                : isGrpcTransport
+                    ? RuntimeInternetTransportProtocols.Grpc
+                    : isSplitHttpTransport
+                        ? RuntimeInternetTransportProtocols.SplitHttp
+                        : isShadowsocksTransport
+                            ? RuntimeInternetTransportProtocols.Tcp
+                            : string.Empty,
+            TransportSecurity = isHttpUpgradeTransport || isGrpcTransport || isSplitHttpTransport
+                ? RuntimeInternetSecurityTypes.Tls
+                : string.Empty,
             ListenAddress = NodeFormValueCodec.TrimOrEmpty(ListenAddress),
             Port = Port,
             HandshakeTimeoutSeconds = HandshakeTimeoutSeconds,
             AcceptProxyProtocol = AcceptProxyProtocol,
-            Host = normalizedTransport == InboundTransports.Wss ? NodeFormValueCodec.TrimOrEmpty(Host) : string.Empty,
-            Path = normalizedTransport == InboundTransports.Wss ? NodeFormValueCodec.TrimOrEmpty(Path) : string.Empty,
-            EarlyDataBytes = normalizedTransport == InboundTransports.Wss ? Math.Max(0, EarlyDataBytes) : 0,
-            HeartbeatPeriodSeconds = normalizedTransport == InboundTransports.Wss ? Math.Max(0, HeartbeatPeriodSeconds) : 0,
+            Host = isWebSocketTransport || isHttpUpgradeTransport ? NodeFormValueCodec.TrimOrEmpty(Host) : string.Empty,
+            Path = isWebSocketTransport || isHttpUpgradeTransport || isSplitHttpTransport ? NodeFormValueCodec.TrimOrEmpty(Path) : string.Empty,
+            GrpcServiceName = isGrpcTransport ? NodeFormValueCodec.TrimOrEmpty(GrpcServiceName) : string.Empty,
+            EarlyDataBytes = isWebSocketTransport ? Math.Max(0, EarlyDataBytes) : 0,
+            HeartbeatPeriodSeconds = isWebSocketTransport ? Math.Max(0, HeartbeatPeriodSeconds) : 0,
             ApplicationProtocols = NodeFormValueCodec.ParseCsv(ApplicationProtocols),
             ReceiveOriginalDestination = ReceiveOriginalDestination,
             Sniffing = Sniffing.ToConfig(),
@@ -1034,9 +1190,96 @@ public sealed class TrojanInboundFormInput
         => GetDefaultTag(InboundProtocols.Trojan, transport);
 
     public static string GetDefaultTag(string protocol, string transport)
-        => InboundTransports.Normalize(transport) == InboundTransports.Wss
-            ? $"{InboundProtocols.Normalize(protocol)}-wss"
-            : $"{InboundProtocols.Normalize(protocol)}-tcp-tls";
+    {
+        var normalizedProtocol = InboundProtocols.Normalize(protocol);
+        return NormalizeTransportKey(normalizedProtocol, transport) switch
+        {
+            InboundTransports.Wss => $"{normalizedProtocol}-wss",
+            InboundTransports.HttpUpgrade => $"{normalizedProtocol}-httpupgrade",
+            InboundTransports.Grpc => $"{normalizedProtocol}-grpc",
+            InboundTransports.SplitHttp => $"{normalizedProtocol}-splithttp",
+            InboundTransports.Tcp when string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal) => $"{normalizedProtocol}-tcp",
+            _ => $"{normalizedProtocol}-tcp-tls"
+        };
+    }
+
+    public static string GetDefaultGrpcServiceName(string protocol)
+        => $"/{InboundProtocols.Normalize(protocol)}/service";
+
+    public static bool IsDefaultTag(string? tag, string transport)
+    {
+        var normalizedTag = NodeFormValueCodec.TrimOrEmpty(tag);
+        if (string.IsNullOrEmpty(normalizedTag))
+        {
+            return true;
+        }
+
+        return string.Equals(normalizedTag, GetDefaultTag(InboundProtocols.Trojan, transport), StringComparison.Ordinal) ||
+               string.Equals(normalizedTag, GetDefaultTag(InboundProtocols.Vmess, transport), StringComparison.Ordinal) ||
+               string.Equals(normalizedTag, GetDefaultTag(InboundProtocols.Vless, transport), StringComparison.Ordinal) ||
+               string.Equals(normalizedTag, GetDefaultTag(InboundProtocols.Shadowsocks, transport), StringComparison.Ordinal);
+    }
+
+    public static bool IsDefaultGrpcServiceName(string? serviceName)
+    {
+        var normalizedServiceName = NodeFormValueCodec.TrimOrEmpty(serviceName);
+        if (string.IsNullOrEmpty(normalizedServiceName))
+        {
+            return true;
+        }
+
+        return string.Equals(normalizedServiceName, GetDefaultGrpcServiceName(InboundProtocols.Trojan), StringComparison.Ordinal) ||
+               string.Equals(normalizedServiceName, GetDefaultGrpcServiceName(InboundProtocols.Vmess), StringComparison.Ordinal) ||
+               string.Equals(normalizedServiceName, GetDefaultGrpcServiceName(InboundProtocols.Vless), StringComparison.Ordinal);
+    }
+
+    public static string NormalizeTransportKey(string protocol, string? transport)
+    {
+        var normalizedProtocol = InboundProtocols.Normalize(protocol);
+        var normalizedTransport = InboundTransports.Normalize(transport);
+        if (string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
+        {
+            return InboundTransports.Tcp;
+        }
+
+        return normalizedTransport;
+    }
+
+    private static string ResolveEditableTransport(string protocol, InboundConfig inbound)
+    {
+        if (string.Equals(protocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
+        {
+            return InboundTransports.Tcp;
+        }
+
+        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.Wss))
+        {
+            return InboundTransports.Wss;
+        }
+
+        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.HttpUpgrade))
+        {
+            return InboundTransports.HttpUpgrade;
+        }
+
+        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.Grpc))
+        {
+            return InboundTransports.Grpc;
+        }
+
+        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.SplitHttp))
+        {
+            return InboundTransports.SplitHttp;
+        }
+
+        return InboundTransports.Tls;
+    }
+
+    public static string ResolveTransportKey(string protocol, InboundConfig inbound)
+    {
+        ArgumentNullException.ThrowIfNull(inbound);
+        return ResolveEditableTransport(InboundProtocols.Normalize(protocol), inbound);
+    }
 }
 
 public sealed class UserFormInput
@@ -1056,6 +1299,10 @@ public sealed class UserFormInput
     public string TrojanPassword { get; set; } = string.Empty;
 
     public string V2rayUuid { get; set; } = string.Empty;
+
+    public string ShadowsocksCipher { get; set; } = ShadowsocksCipherTypes.ChaCha20Poly1305;
+
+    public string ShadowsocksPassword { get; set; } = string.Empty;
 
     [Range(0, int.MaxValue, ErrorMessage = "权限组 ID 不能小于 0。")]
     public int GroupId { get; set; }
@@ -1104,6 +1351,8 @@ public sealed class UserFormInput
             SubscriptionToken = NodeFormValueCodec.TrimOrEmpty(SubscriptionToken),
             TrojanPassword = NodeFormValueCodec.TrimOrEmpty(TrojanPassword),
             V2rayUuid = NodeFormValueCodec.TrimOrEmpty(V2rayUuid),
+            ShadowsocksCipher = NodeFormValueCodec.TrimOrEmpty(ShadowsocksCipher),
+            ShadowsocksPassword = NodeFormValueCodec.TrimOrEmpty(ShadowsocksPassword),
             InviteUserId = NodeFormValueCodec.TrimOrEmpty(InviteUserId),
             CommissionBalance = CommissionBalance,
             CommissionRate = CommissionRate,
@@ -1135,6 +1384,8 @@ public sealed class UserFormInput
             SubscriptionToken = record.SubscriptionToken,
             TrojanPassword = record.TrojanPassword,
             V2rayUuid = record.V2rayUuid,
+            ShadowsocksCipher = record.ShadowsocksCipher,
+            ShadowsocksPassword = record.ShadowsocksPassword,
             InviteUserId = record.InviteUserId,
             CommissionBalance = record.CommissionBalance,
             CommissionRate = Math.Clamp(record.CommissionRate, 0, 100),

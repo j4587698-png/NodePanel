@@ -31,6 +31,8 @@ public sealed record SubscriptionEndpoint
 
     public string WsHost { get; init; } = string.Empty;
 
+    public string GrpcServiceName { get; init; } = string.Empty;
+
     public bool SkipCertificateVerification { get; init; }
 }
 

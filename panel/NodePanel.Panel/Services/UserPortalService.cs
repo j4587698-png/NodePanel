@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Configuration;
 using NodePanel.Panel.Models;
 
@@ -173,7 +174,17 @@ public sealed class UserPortalService
         var protocol = string.IsNullOrWhiteSpace(endpoint.Protocol)
             ? "Trojan"
             : endpoint.Protocol.Trim().ToUpperInvariant();
-        var transport = string.Equals(endpoint.Transport, "ws", StringComparison.OrdinalIgnoreCase) ? "WSS" : "TLS";
+        var transport = endpoint.Transport.Trim().ToLowerInvariant() switch
+        {
+            "ws" => "WSS",
+            InboundTransports.Grpc => "gRPC",
+            InboundTransports.HttpUpgrade => "HTTP Upgrade",
+            InboundTransports.SplitHttp => "SplitHTTP",
+            InboundTransports.Tcp => string.Equals(endpoint.Protocol, InboundProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase)
+                ? "TCP"
+                : "TLS",
+            _ => "TLS"
+        };
         return $"{protocol} / {transport}";
     }
 

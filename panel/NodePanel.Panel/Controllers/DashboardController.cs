@@ -513,6 +513,8 @@ public sealed class DashboardController : Controller
                 SubscriptionToken = user.SubscriptionToken,
                 TrojanPassword = user.TrojanPassword,
                 V2rayUuid = user.V2rayUuid,
+                ShadowsocksCipher = user.ShadowsocksCipher,
+                ShadowsocksPassword = user.ShadowsocksPassword,
                 InviteUserId = user.InviteUserId,
                 CommissionBalance = user.CommissionBalance,
                 CommissionRate = user.CommissionRate,

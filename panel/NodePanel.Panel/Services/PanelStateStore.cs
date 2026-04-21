@@ -134,6 +134,8 @@ public sealed class PanelStateStore
                     SubscriptionToken = NormalizeSecret(payload.Request.SubscriptionToken, current?.SubscriptionToken),
                     TrojanPassword = NormalizeSecret(payload.Request.TrojanPassword, current?.TrojanPassword),
                     V2rayUuid = NormalizeUuid(payload.Request.V2rayUuid, current?.V2rayUuid),
+                    ShadowsocksCipher = NormalizeShadowsocksCipher(payload.Request.ShadowsocksCipher, current?.ShadowsocksCipher),
+                    ShadowsocksPassword = NormalizeSecret(payload.Request.ShadowsocksPassword, current?.ShadowsocksPassword),
                     InviteUserId = payload.Request.InviteUserId.Trim(),
                     CommissionBalance = payload.Request.CommissionBalance,
                     CommissionRate = Math.Clamp(payload.Request.CommissionRate, 0, 100),
@@ -451,6 +453,23 @@ public sealed class PanelStateStore
         return Guid.NewGuid().ToString("D");
     }
 
+    private static string NormalizeShadowsocksCipher(string? requested, string? current)
+    {
+        var normalizedRequested = ShadowsocksCipherTypes.Normalize(requested);
+        if (!string.IsNullOrWhiteSpace(normalizedRequested))
+        {
+            return normalizedRequested;
+        }
+
+        var normalizedCurrent = ShadowsocksCipherTypes.Normalize(current);
+        if (!string.IsNullOrWhiteSpace(normalizedCurrent))
+        {
+            return normalizedCurrent;
+        }
+
+        return ShadowsocksCipherTypes.ChaCha20Poly1305;
+    }
+
     private static PanelUserSubscriptionProfile NormalizeUserSubscription(PanelUserSubscriptionProfile subscription)
     {
         ArgumentNullException.ThrowIfNull(subscription);
@@ -685,6 +704,8 @@ public sealed class PanelStateStore
                     SubscriptionToken = user.SubscriptionToken.Trim(),
                     TrojanPassword = user.TrojanPassword.Trim(),
                     V2rayUuid = NormalizeUuid(user.V2rayUuid, null),
+                    ShadowsocksCipher = NormalizeShadowsocksCipher(user.ShadowsocksCipher, null),
+                    ShadowsocksPassword = user.ShadowsocksPassword.Trim(),
                     InviteUserId = user.InviteUserId.Trim(),
                     CommissionRate = Math.Clamp(user.CommissionRate, 0, 100),
                     GroupId = Math.Max(0, user.GroupId),

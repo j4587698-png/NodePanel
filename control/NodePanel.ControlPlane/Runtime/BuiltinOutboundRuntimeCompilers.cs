@@ -247,16 +247,16 @@ internal static class OutboundRuntimeCompilerUtilities
 
         return outbound with
         {
-            Tag = outbound.Tag.Trim(),
+            Tag = NormalizeOptionalValue(outbound.Tag),
             Protocol = protocol,
-            Via = outbound.Via.Trim(),
+            Via = NormalizeOptionalValue(outbound.Via),
             ViaCidr = NormalizeViaCidr(outbound.ViaCidr),
             TargetStrategy = OutboundTargetStrategies.Normalize(outbound.TargetStrategy),
-            ProxyOutboundTag = outbound.ProxyOutboundTag.Trim(),
+            ProxyOutboundTag = NormalizeOptionalValue(outbound.ProxyOutboundTag),
             MultiplexSettings = NormalizeMultiplexSettings(outbound.MultiplexSettings),
             Transport = transport,
             TransportSecurity = transportSecurity,
-            ServerHost = outbound.ServerHost.Trim(),
+            ServerHost = NormalizeOptionalValue(outbound.ServerHost),
             ServerPort = isProxyTransportProtocol
                 ? outbound.ServerPort
                 : isShadowsocksProtocol
@@ -266,7 +266,8 @@ internal static class OutboundRuntimeCompilerUtilities
                     : isHttpProtocol
                         ? NormalizePort(outbound.ServerPort, 8080)
                     : outbound.ServerPort,
-            ServerName = outbound.ServerName.Trim(),
+            ServerName = NormalizeOptionalValue(outbound.ServerName),
+            Fingerprint = NormalizeOptionalValue(outbound.Fingerprint),
             RealityOptions = realityOptions,
             WebSocketPath = isProxyTransportProtocol && isPathBasedProxyTransport
                 ? NormalizeOutboundWebSocketPath(outbound.WebSocketPath)
@@ -306,7 +307,7 @@ internal static class OutboundRuntimeCompilerUtilities
             ReverseTag = string.Equals(protocol, OutboundProtocols.Vless, StringComparison.Ordinal)
                 ? NormalizeOptionalValue(outbound.ReverseTag)
                 : string.Empty,
-            Username = outbound.Username.Trim(),
+            Username = NormalizeOptionalValue(outbound.Username),
             Security = string.Equals(protocol, OutboundProtocols.Vmess, StringComparison.Ordinal)
                 ? VmessOutboundSecurityTypes.Normalize(outbound.Security)
                 : string.Equals(protocol, OutboundProtocols.Shadowsocks, StringComparison.Ordinal)
@@ -314,13 +315,13 @@ internal static class OutboundRuntimeCompilerUtilities
                 : NormalizeOptionalValue(outbound.Security),
             AuthenticatedLength = outbound.AuthenticatedLength,
             NoTerminationSignal = outbound.NoTerminationSignal,
-            Password = outbound.Password.Trim(),
+            Password = NormalizeOptionalValue(outbound.Password),
             UdpOverTcp = isShadowsocksProtocol && outbound.UdpOverTcp,
             UdpOverTcpVersion = isShadowsocksProtocol ? Math.Max(0, outbound.UdpOverTcpVersion) : 0,
             ConnectTimeoutSeconds = Math.Max(0, outbound.ConnectTimeoutSeconds),
             HandshakeTimeoutSeconds = Math.Max(0, outbound.HandshakeTimeoutSeconds),
             CandidateTags = NormalizeStringList(outbound.CandidateTags),
-            SelectedTag = outbound.SelectedTag.Trim(),
+            SelectedTag = NormalizeOptionalValue(outbound.SelectedTag),
             ProbeUrl = string.IsNullOrWhiteSpace(outbound.ProbeUrl)
                 ? StrategyOutboundDefaults.ProbeUrl
                 : outbound.ProbeUrl.Trim(),
@@ -465,12 +466,12 @@ internal static class OutboundRuntimeCompilerUtilities
             Fingerprint = outbound.Fingerprint,
             Transport = outbound.Transport,
             TransportSecurity = outbound.TransportSecurity,
-            RealityOptions = outbound.RealityOptions,
+            RealityOptions = outbound.RealityOptions ?? RuntimeRealityOptions.Empty,
             WebSocketPath = outbound.WebSocketPath,
             WebSocketHeaders = CloneHeaders(outbound.WebSocketHeaders),
             WebSocketEarlyDataBytes = outbound.WebSocketEarlyDataBytes,
             WebSocketHeartbeatPeriodSeconds = outbound.WebSocketHeartbeatPeriodSeconds,
-            ApplicationProtocols = outbound.ApplicationProtocols.ToArray(),
+            ApplicationProtocols = outbound.ApplicationProtocols?.ToArray() ?? Array.Empty<string>(),
             GrpcServiceName = outbound.GrpcServiceName,
             GrpcAuthority = outbound.GrpcAuthority,
             GrpcMultiMode = outbound.GrpcMultiMode,
@@ -523,7 +524,7 @@ internal static class OutboundRuntimeCompilerUtilities
             Username = outbound.Username,
             Password = outbound.Password,
             Headers = CloneHeaders(outbound.HttpHeaders),
-            ApplicationProtocols = outbound.ApplicationProtocols.ToArray(),
+            ApplicationProtocols = outbound.ApplicationProtocols?.ToArray() ?? Array.Empty<string>(),
             ConnectTimeoutSeconds = outbound.ConnectTimeoutSeconds,
             HandshakeTimeoutSeconds = outbound.HandshakeTimeoutSeconds,
             SkipCertificateValidation = outbound.SkipCertificateValidation
@@ -542,12 +543,12 @@ internal static class OutboundRuntimeCompilerUtilities
             Fingerprint = outbound.Fingerprint,
             Transport = outbound.Transport,
             TransportSecurity = outbound.TransportSecurity,
-            RealityOptions = outbound.RealityOptions,
+            RealityOptions = outbound.RealityOptions ?? RuntimeRealityOptions.Empty,
             WebSocketPath = outbound.WebSocketPath,
             WebSocketHeaders = CloneHeaders(outbound.WebSocketHeaders),
             WebSocketEarlyDataBytes = outbound.WebSocketEarlyDataBytes,
             WebSocketHeartbeatPeriodSeconds = outbound.WebSocketHeartbeatPeriodSeconds,
-            ApplicationProtocols = outbound.ApplicationProtocols.ToArray(),
+            ApplicationProtocols = outbound.ApplicationProtocols?.ToArray() ?? Array.Empty<string>(),
             GrpcServiceName = outbound.GrpcServiceName,
             GrpcAuthority = outbound.GrpcAuthority,
             GrpcMultiMode = outbound.GrpcMultiMode,
@@ -563,7 +564,7 @@ internal static class OutboundRuntimeCompilerUtilities
             XorMode = outbound.XorMode,
             Seconds = Math.Max(0, outbound.Seconds),
             Padding = outbound.Padding,
-            TestSeed = outbound.TestSeed.ToArray(),
+            TestSeed = outbound.TestSeed?.ToArray() ?? Array.Empty<uint>(),
             TestPre = Math.Max(0, outbound.TestPre),
             ReverseTag = outbound.ReverseTag,
             ConnectTimeoutSeconds = outbound.ConnectTimeoutSeconds,
@@ -584,12 +585,12 @@ internal static class OutboundRuntimeCompilerUtilities
             Fingerprint = outbound.Fingerprint,
             Transport = outbound.Transport,
             TransportSecurity = outbound.TransportSecurity,
-            RealityOptions = outbound.RealityOptions,
+            RealityOptions = outbound.RealityOptions ?? RuntimeRealityOptions.Empty,
             WebSocketPath = outbound.WebSocketPath,
             WebSocketHeaders = CloneHeaders(outbound.WebSocketHeaders),
             WebSocketEarlyDataBytes = outbound.WebSocketEarlyDataBytes,
             WebSocketHeartbeatPeriodSeconds = outbound.WebSocketHeartbeatPeriodSeconds,
-            ApplicationProtocols = outbound.ApplicationProtocols.ToArray(),
+            ApplicationProtocols = outbound.ApplicationProtocols?.ToArray() ?? Array.Empty<string>(),
             GrpcServiceName = outbound.GrpcServiceName,
             GrpcAuthority = outbound.GrpcAuthority,
             GrpcMultiMode = outbound.GrpcMultiMode,
@@ -607,13 +608,16 @@ internal static class OutboundRuntimeCompilerUtilities
             SkipCertificateValidation = outbound.SkipCertificateValidation
         };
 
-    private static OutboundMultiplexConfig NormalizeMultiplexSettings(OutboundMultiplexConfig settings)
-        => settings with
+    private static OutboundMultiplexConfig NormalizeMultiplexSettings(OutboundMultiplexConfig? settings)
+    {
+        var normalized = settings ?? new OutboundMultiplexConfig();
+        return normalized with
         {
-            Concurrency = settings.Concurrency,
-            XudpConcurrency = settings.XudpConcurrency,
-            XudpProxyUdp443 = OutboundXudpProxyModes.Normalize(settings.XudpProxyUdp443)
+            Concurrency = normalized.Concurrency,
+            XudpConcurrency = normalized.XudpConcurrency,
+            XudpProxyUdp443 = OutboundXudpProxyModes.Normalize(normalized.XudpProxyUdp443)
         };
+    }
 
     private static string NormalizeSenderTransport(string protocol, string transport)
         => protocol switch
@@ -629,7 +633,7 @@ internal static class OutboundRuntimeCompilerUtilities
         string protocol,
         string transport,
         string transportSecurity,
-        IReadOnlyList<string> values)
+        IReadOnlyList<string>? values)
     {
         if (protocol == OutboundProtocols.Http)
         {
@@ -690,9 +694,14 @@ internal static class OutboundRuntimeCompilerUtilities
         return normalized.StartsWith("/", StringComparison.Ordinal) ? normalized : "/" + normalized;
     }
 
-    private static IReadOnlyDictionary<string, string> NormalizeHeaderDictionary(IReadOnlyDictionary<string, string> headers)
+    private static IReadOnlyDictionary<string, string> NormalizeHeaderDictionary(IReadOnlyDictionary<string, string>? headers)
     {
         var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (headers is null)
+        {
+            return normalized;
+        }
+
         foreach (var (name, value) in headers)
         {
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(value))
@@ -706,14 +715,21 @@ internal static class OutboundRuntimeCompilerUtilities
         return normalized;
     }
 
-    private static IReadOnlyDictionary<string, string> CloneHeaders(IReadOnlyDictionary<string, string> headers)
-        => headers.ToDictionary(
+    private static IReadOnlyDictionary<string, string> CloneHeaders(IReadOnlyDictionary<string, string>? headers)
+    {
+        if (headers is null)
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return headers.ToDictionary(
             static pair => pair.Key,
             static pair => pair.Value,
             StringComparer.OrdinalIgnoreCase);
+    }
 
-    private static IReadOnlyList<string> NormalizeStringList(IReadOnlyList<string> values)
-        => values
+    private static IReadOnlyList<string> NormalizeStringList(IReadOnlyList<string>? values)
+        => (values ?? Array.Empty<string>())
             .Where(static value => !string.IsNullOrWhiteSpace(value))
             .Select(static value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)

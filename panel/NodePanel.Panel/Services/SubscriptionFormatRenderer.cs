@@ -1,4 +1,5 @@
 using System.Text;
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 
 namespace NodePanel.Panel.Services;
@@ -205,8 +206,8 @@ public static class SubscriptionFormatRenderer
                 }
                 break;
             case "shadowsocks":
-                builder.AppendLine($"{nestedIndent}cipher: chacha20-ietf-poly1305");
-                builder.AppendLine($"{nestedIndent}password: {YamlString(user.TrojanPassword)}");
+                builder.AppendLine($"{nestedIndent}cipher: {YamlString(ResolveShadowsocksCipher(user))}");
+                builder.AppendLine($"{nestedIndent}password: {YamlString(ResolveShadowsocksPassword(user))}");
                 break;
         }
 
@@ -223,6 +224,12 @@ public static class SubscriptionFormatRenderer
             builder.AppendLine($"{headersIndent}path: {YamlString(string.IsNullOrWhiteSpace(endpoint.Path) ? "/" : endpoint.Path)}");
             builder.AppendLine($"{headersIndent}headers:");
             builder.AppendLine($"{headersIndent}  Host: {YamlString(string.IsNullOrWhiteSpace(endpoint.WsHost) ? endpoint.Host : endpoint.WsHost)}");
+        }
+        else if (string.Equals(endpoint.Transport, InboundTransports.Grpc, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.AppendLine($"{nestedIndent}network: grpc");
+            builder.AppendLine($"{nestedIndent}grpc-opts:");
+            builder.AppendLine($"{headersIndent}grpc-service-name: {YamlString(string.IsNullOrWhiteSpace(endpoint.GrpcServiceName) ? "/" : endpoint.GrpcServiceName)}");
         }
     }
 
@@ -280,6 +287,10 @@ public static class SubscriptionFormatRenderer
             case "vless":
                 values.Add($"username={EscapeSurge(ResolveProtocolUuid(user))}");
                 values.Add("tls=true");
+                break;
+            case "shadowsocks":
+                values.Add($"encrypt-method={EscapeSurge(ResolveShadowsocksCipher(user))}");
+                values.Add($"password={EscapeSurge(ResolveShadowsocksPassword(user))}");
                 break;
         }
 
@@ -357,6 +368,12 @@ public static class SubscriptionFormatRenderer
                 $"password={ResolveProtocolUuid(user)}",
                 "method=none",
                 "obfs=over-tls"
+            },
+            "shadowsocks" => new List<string>
+            {
+                $"shadowsocks={endpoint.Host}:{endpoint.Port}",
+                $"method={ResolveShadowsocksCipher(user)}",
+                $"password={ResolveShadowsocksPassword(user)}"
             },
             _ => []
         };
@@ -509,6 +526,19 @@ public static class SubscriptionFormatRenderer
 
         return string.Empty;
     }
+
+    private static string ResolveShadowsocksCipher(PanelUserRecord user)
+    {
+        var normalized = ShadowsocksCipherTypes.Normalize(user.ShadowsocksCipher);
+        return string.IsNullOrWhiteSpace(normalized)
+            ? ShadowsocksCipherTypes.ChaCha20Poly1305
+            : normalized;
+    }
+
+    private static string ResolveShadowsocksPassword(PanelUserRecord user)
+        => string.IsNullOrWhiteSpace(user.ShadowsocksPassword)
+            ? user.TrojanPassword
+            : user.ShadowsocksPassword;
 
     private static string ToSurgeRule(string rule)
     {

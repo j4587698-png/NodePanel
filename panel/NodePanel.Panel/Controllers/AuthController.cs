@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 
@@ -235,6 +236,8 @@ public sealed class AuthController : Controller
             DisplayName = normalizedDisplayName,
             TrojanPassword = Guid.NewGuid().ToString("N"),
             V2rayUuid = Guid.NewGuid().ToString("D"),
+            ShadowsocksCipher = ShadowsocksCipherTypes.ChaCha20Poly1305,
+            ShadowsocksPassword = Guid.NewGuid().ToString("N"),
             SubscriptionToken = Guid.NewGuid().ToString("N"),
             IsAdmin = false
         };

@@ -10,6 +10,10 @@
     Model.Form.PrepareForEditView();
     var tlsIndex = 0;
     var wssIndex = 1;
+    var httpUpgradeIndex = 2;
+    var grpcIndex = 3;
+    var splitHttpIndex = 4;
+    var shadowsocksIndex = 5;
     var canRequestRenewal = Model.IsEditMode &&
         !string.IsNullOrWhiteSpace(Model.Form.NodeId) &&
         (certificateMode == CertificateModes.AcmeManaged || certificateMode == CertificateModes.AcmeExternal);
@@ -682,8 +686,9 @@
                         <option value="trojan">Trojan</option>
                         <option value="vmess">VMess</option>
                         <option value="vless">VLESS</option>
+                        <option value="shadowsocks">Shadowsocks</option>
                     </select>
-                    <small class="muted">当前面板支持 Trojan / VMess / VLESS，三者共用 TLS / WSS / 证书配置。</small>
+                    <small class="muted">Trojan / VMess / VLESS 可选 TLS、WSS、HTTP Upgrade、gRPC、SplitHTTP；Shadowsocks 使用独立 TCP 入站。</small>
                 </label>
                 <label style="position: relative; overflow: visible;">
                     <span>权限组分配 (多选)</span>
@@ -743,13 +748,13 @@
                 </div>
             </div>
 
-            <div class="config-block simple-block">
-                <div class="config-block__header">
-                    <div>
-                        <h4>接入设置</h4>
-                        <p class="muted compact-note">主界面只配置协议、接入方式、域名和证书。Trojan / VMess / VLESS 共用这套接入模型；TLS 直连对应无伪装，WSS 对应 WebSocket 伪装。</p>
+                <div class="config-block simple-block">
+                    <div class="config-block__header">
+                        <div>
+                            <h4>接入设置</h4>
+                            <p class="muted compact-note">这里仅处理服务端入站。Trojan / VMess / VLESS 共用一套传输入口，Shadowsocks 走独立 TCP 入口；出站仍保持普通模式，不在这里扩展。</p>
+                        </div>
                     </div>
-                </div>
                 <div class="form-grid">
                     <div class="checkbox-field">
                         <span>节点启用</span>
@@ -763,23 +768,31 @@
                         <select id="transportMode">
                             <option value="tls">TLS 直连</option>
                             <option value="wss">WSS / WebSocket</option>
+                            <option value="httpupgrade">HTTP Upgrade</option>
+                            <option value="grpc">gRPC</option>
+                            <option value="splithttp">SplitHTTP</option>
+                            <option value="shadowsocks">Shadowsocks TCP</option>
                             <option value="both">同时启用 TLS + WSS</option>
                         </select>
                     </label>
-                    <label>
+                    <label id="certificateDomainField">
                         <span>接入域名</span>
                         <input asp-for="Form.CertificateDomain" id="primaryDomainInput" placeholder="node.example.com" />
-                        <small class="muted">同时用于证书域名和 WSS Host；选择面板证书后会自动回填对应域名。</small>
+                        <small class="muted">非 Shadowsocks 时用于证书域名，以及 WSS / HTTP Upgrade 的 Host；选择面板证书后会自动回填。</small>
                     </label>
                 </div>
                 <input asp-for="Form.Inbounds[tlsIndex].Enabled" id="tlsEnabledInput" type="hidden" />
                 <input asp-for="Form.Inbounds[wssIndex].Enabled" id="wssEnabledInput" type="hidden" />
+                <input asp-for="Form.Inbounds[httpUpgradeIndex].Enabled" id="httpUpgradeEnabledInput" type="hidden" />
+                <input asp-for="Form.Inbounds[grpcIndex].Enabled" id="grpcEnabledInput" type="hidden" />
+                <input asp-for="Form.Inbounds[splitHttpIndex].Enabled" id="splitHttpEnabledInput" type="hidden" />
+                <input asp-for="Form.Inbounds[shadowsocksIndex].Enabled" id="shadowsocksEnabledInput" type="hidden" />
             </div>
 
             <div id="tls-panel" class="transport-panel">
                 <h4>TLS 直连</h4>
                 <input asp-for="Form.Inbounds[tlsIndex].Tag" type="hidden" />
-                <input asp-for="Form.Inbounds[tlsIndex].Protocol" type="hidden" />
+                <input asp-for="Form.Inbounds[tlsIndex].Protocol" data-proxy-protocol-input type="hidden" />
                 <input asp-for="Form.Inbounds[tlsIndex].Transport" type="hidden" />
                 <div class="form-grid">
                     <label><span>监听地址</span><input asp-for="Form.Inbounds[tlsIndex].ListenAddress" /></label>
@@ -866,7 +879,7 @@
             <div id="wss-panel" class="transport-panel">
                 <h4>WSS / WebSocket</h4>
                 <input asp-for="Form.Inbounds[wssIndex].Tag" type="hidden" />
-                <input asp-for="Form.Inbounds[wssIndex].Protocol" type="hidden" />
+                <input asp-for="Form.Inbounds[wssIndex].Protocol" data-proxy-protocol-input type="hidden" />
                 <input asp-for="Form.Inbounds[wssIndex].Transport" type="hidden" />
                 <input asp-for="Form.Inbounds[wssIndex].Host" id="wssHostInput" type="hidden" />
                 <div class="form-grid">
@@ -953,6 +966,55 @@
             </div>
 
             <h4 class="advanced-panel">限速与遥测</h4>
+            <div id="httpupgrade-panel" class="transport-panel">
+                <h4>HTTP Upgrade</h4>
+                <input asp-for="Form.Inbounds[httpUpgradeIndex].Tag" type="hidden" />
+                <input asp-for="Form.Inbounds[httpUpgradeIndex].Protocol" data-proxy-protocol-input type="hidden" />
+                <input asp-for="Form.Inbounds[httpUpgradeIndex].Transport" type="hidden" />
+                <input asp-for="Form.Inbounds[httpUpgradeIndex].Host" id="httpUpgradeHostInput" type="hidden" />
+                <div class="form-grid">
+                    <label><span>监听地址</span><input asp-for="Form.Inbounds[httpUpgradeIndex].ListenAddress" /></label>
+                    <label><span>监听端口</span><input asp-for="Form.Inbounds[httpUpgradeIndex].Port" /></label>
+                    <label><span>Upgrade 路径</span><input asp-for="Form.Inbounds[httpUpgradeIndex].Path" placeholder="/upgrade" /></label>
+                </div>
+            </div>
+
+            <div id="grpc-panel" class="transport-panel">
+                <h4>gRPC</h4>
+                <input asp-for="Form.Inbounds[grpcIndex].Tag" type="hidden" />
+                <input asp-for="Form.Inbounds[grpcIndex].Protocol" data-proxy-protocol-input type="hidden" />
+                <input asp-for="Form.Inbounds[grpcIndex].Transport" type="hidden" />
+                <div class="form-grid">
+                    <label><span>监听地址</span><input asp-for="Form.Inbounds[grpcIndex].ListenAddress" /></label>
+                    <label><span>监听端口</span><input asp-for="Form.Inbounds[grpcIndex].Port" /></label>
+                    <label><span>Service Name</span><input asp-for="Form.Inbounds[grpcIndex].GrpcServiceName" placeholder="/proxy/service" /></label>
+                </div>
+            </div>
+
+            <div id="splithttp-panel" class="transport-panel">
+                <h4>SplitHTTP</h4>
+                <input asp-for="Form.Inbounds[splitHttpIndex].Tag" type="hidden" />
+                <input asp-for="Form.Inbounds[splitHttpIndex].Protocol" data-proxy-protocol-input type="hidden" />
+                <input asp-for="Form.Inbounds[splitHttpIndex].Transport" type="hidden" />
+                <div class="form-grid">
+                    <label><span>监听地址</span><input asp-for="Form.Inbounds[splitHttpIndex].ListenAddress" /></label>
+                    <label><span>监听端口</span><input asp-for="Form.Inbounds[splitHttpIndex].Port" /></label>
+                    <label><span>SplitHTTP 路径</span><input asp-for="Form.Inbounds[splitHttpIndex].Path" placeholder="/xhttp" /></label>
+                </div>
+            </div>
+
+            <div id="shadowsocks-panel" class="transport-panel">
+                <h4>Shadowsocks TCP</h4>
+                <input asp-for="Form.Inbounds[shadowsocksIndex].Tag" type="hidden" />
+                <input asp-for="Form.Inbounds[shadowsocksIndex].Protocol" id="ssProtocolInput" type="hidden" />
+                <input asp-for="Form.Inbounds[shadowsocksIndex].Transport" type="hidden" />
+                <div class="form-grid">
+                    <label><span>监听地址</span><input asp-for="Form.Inbounds[shadowsocksIndex].ListenAddress" /></label>
+                    <label><span>监听端口</span><input asp-for="Form.Inbounds[shadowsocksIndex].Port" /></label>
+                </div>
+                <p class="muted compact-note">Shadowsocks 的加密方式和密码按用户维度配置，不从节点表单单独填写。</p>
+            </div>
+
             <div class="form-grid advanced-panel">
                 <label><span>全局限速(B/s)</span><input asp-for="Form.GlobalBytesPerSecond" /></label>
                 <label><span>流量倍率 (1.0 = 正常)</span><input asp-for="Form.TrafficMultiplier" type="number" step="0.01" min="0.01" /></label>
@@ -963,6 +1025,7 @@
                 <label><span>遥测刷新(秒)</span><input asp-for="Form.TelemetryFlushIntervalSeconds" /></label>
             </div>
 
+            <div id="certificateSection">
             <h4>证书来源</h4>
             <input asp-for="Form.CertificateMode" id="certificateModeInput" type="hidden" />
             <div class="config-block simple-block">
@@ -1079,6 +1142,7 @@
                     <label><span>允许的 JA3 (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.AllowedJa3" /></label>
                     <label><span>阻止的 JA3 (CSV)</span><input asp-for="Form.CertificateClientHelloPolicy.BlockedJa3" /></label>
                 </div>
+            </div>
             </div>
 
             <h4 class="advanced-panel">DNS</h4>
@@ -1608,29 +1672,101 @@
         });
     }
 
+    function toggleElement(element, shouldShow, displayValue = '') {
+        if (!element) {
+            return;
+        }
+
+        element.style.display = shouldShow ? displayValue : 'none';
+    }
+
+    function normalizeTransportModeSelection(transportMode, normalizedProtocol) {
+        if (!transportMode) {
+            return 'tls';
+        }
+
+        const shadowsocksProtocol = normalizedProtocol === 'shadowsocks';
+        Array.from(transportMode.options).forEach((option) => {
+            if (option.value === 'shadowsocks') {
+                option.disabled = !shadowsocksProtocol;
+                return;
+            }
+
+            option.disabled = shadowsocksProtocol;
+        });
+
+        if (shadowsocksProtocol) {
+            transportMode.value = 'shadowsocks';
+            return 'shadowsocks';
+        }
+
+        if (transportMode.value === 'shadowsocks') {
+            transportMode.value = 'tls';
+        }
+
+        return transportMode.value;
+    }
+
     function updateTransportMode() {
         const transportMode = document.getElementById('transportMode');
         const tlsPanel = document.getElementById('tls-panel');
         const wssPanel = document.getElementById('wss-panel');
+        const httpUpgradePanel = document.getElementById('httpupgrade-panel');
+        const grpcPanel = document.getElementById('grpc-panel');
+        const splitHttpPanel = document.getElementById('splithttp-panel');
+        const shadowsocksPanel = document.getElementById('shadowsocks-panel');
         const tlsEnabledInput = document.getElementById('tlsEnabledInput');
         const wssEnabledInput = document.getElementById('wssEnabledInput');
-        if (!transportMode || !tlsPanel || !wssPanel || !tlsEnabledInput || !wssEnabledInput) {
+        const httpUpgradeEnabledInput = document.getElementById('httpUpgradeEnabledInput');
+        const grpcEnabledInput = document.getElementById('grpcEnabledInput');
+        const splitHttpEnabledInput = document.getElementById('splitHttpEnabledInput');
+        const shadowsocksEnabledInput = document.getElementById('shadowsocksEnabledInput');
+        const protocolInput = document.getElementById('Form_Protocol');
+        const certificateDomainField = document.getElementById('certificateDomainField');
+        const certificateSection = document.getElementById('certificateSection');
+        if (!transportMode || !tlsPanel || !wssPanel || !httpUpgradePanel || !grpcPanel || !splitHttpPanel || !shadowsocksPanel ||
+            !tlsEnabledInput || !wssEnabledInput || !httpUpgradeEnabledInput || !grpcEnabledInput || !splitHttpEnabledInput || !shadowsocksEnabledInput) {
             return;
         }
 
-        const mode = transportMode.value;
-        const enableTls = mode === 'tls' || mode === 'both';
-        const enableWss = mode === 'wss' || mode === 'both';
+        const normalizedProtocol = protocolInput ? protocolInput.value.trim().toLowerCase() : 'trojan';
+        const mode = normalizeTransportModeSelection(transportMode, normalizedProtocol);
+        const enableShadowsocks = mode === 'shadowsocks';
+        const enableTls = !enableShadowsocks && (mode === 'tls' || mode === 'both');
+        const enableWss = !enableShadowsocks && (mode === 'wss' || mode === 'both');
+        const enableHttpUpgrade = !enableShadowsocks && mode === 'httpupgrade';
+        const enableGrpc = !enableShadowsocks && mode === 'grpc';
+        const enableSplitHttp = !enableShadowsocks && mode === 'splithttp';
         tlsEnabledInput.value = enableTls ? 'true' : 'false';
         wssEnabledInput.value = enableWss ? 'true' : 'false';
+        httpUpgradeEnabledInput.value = enableHttpUpgrade ? 'true' : 'false';
+        grpcEnabledInput.value = enableGrpc ? 'true' : 'false';
+        splitHttpEnabledInput.value = enableSplitHttp ? 'true' : 'false';
+        shadowsocksEnabledInput.value = enableShadowsocks ? 'true' : 'false';
         tlsPanel.classList.toggle('is-hidden', !enableTls);
         wssPanel.classList.toggle('is-hidden', !enableWss);
+        httpUpgradePanel.classList.toggle('is-hidden', !enableHttpUpgrade);
+        grpcPanel.classList.toggle('is-hidden', !enableGrpc);
+        splitHttpPanel.classList.toggle('is-hidden', !enableSplitHttp);
+        shadowsocksPanel.classList.toggle('is-hidden', !enableShadowsocks);
+        toggleElement(certificateDomainField, !enableShadowsocks);
+        toggleElement(certificateSection, !enableShadowsocks);
+
+        document.querySelectorAll('[data-proxy-protocol-input]').forEach((input) => {
+            input.value = enableShadowsocks ? 'trojan' : normalizedProtocol;
+        });
+
+        const ssProtocolInput = document.getElementById('ssProtocolInput');
+        if (ssProtocolInput) {
+            ssProtocolInput.value = 'shadowsocks';
+        }
     }
 
     function syncPrimaryDomain() {
         const primaryDomainInput = document.getElementById('primaryDomainInput');
         const wssHostInput = document.getElementById('wssHostInput');
-        if (!primaryDomainInput || !wssHostInput) {
+        const httpUpgradeHostInput = document.getElementById('httpUpgradeHostInput');
+        if (!primaryDomainInput || !wssHostInput || !httpUpgradeHostInput) {
             return;
         }
 
@@ -1639,6 +1775,7 @@
         }
 
         wssHostInput.value = primaryDomainInput.value.trim();
+        httpUpgradeHostInput.value = primaryDomainInput.value.trim();
     }
 
     function syncPanelCertificateDomain(force) {
@@ -1747,8 +1884,25 @@
         const transportMode = document.getElementById('transportMode');
         const tlsEnabledInput = document.getElementById('tlsEnabledInput');
         const wssEnabledInput = document.getElementById('wssEnabledInput');
-        if (transportMode && tlsEnabledInput && wssEnabledInput) {
-            if (readBooleanInputValue(tlsEnabledInput) && readBooleanInputValue(wssEnabledInput)) {
+        const httpUpgradeEnabledInput = document.getElementById('httpUpgradeEnabledInput');
+        const grpcEnabledInput = document.getElementById('grpcEnabledInput');
+        const splitHttpEnabledInput = document.getElementById('splitHttpEnabledInput');
+        const shadowsocksEnabledInput = document.getElementById('shadowsocksEnabledInput');
+        const protocolInput = document.getElementById('Form_Protocol');
+        if (transportMode && tlsEnabledInput && wssEnabledInput && httpUpgradeEnabledInput && grpcEnabledInput && splitHttpEnabledInput && shadowsocksEnabledInput) {
+            if ((protocolInput && protocolInput.value.trim().toLowerCase() === 'shadowsocks') || readBooleanInputValue(shadowsocksEnabledInput)) {
+                transportMode.value = 'shadowsocks';
+            }
+            else if (readBooleanInputValue(splitHttpEnabledInput)) {
+                transportMode.value = 'splithttp';
+            }
+            else if (readBooleanInputValue(grpcEnabledInput)) {
+                transportMode.value = 'grpc';
+            }
+            else if (readBooleanInputValue(httpUpgradeEnabledInput)) {
+                transportMode.value = 'httpupgrade';
+            }
+            else if (readBooleanInputValue(tlsEnabledInput) && readBooleanInputValue(wssEnabledInput)) {
                 transportMode.value = 'both';
             }
             else if (readBooleanInputValue(wssEnabledInput)) {
@@ -1760,6 +1914,10 @@
 
             transportMode.addEventListener('change', updateTransportMode);
             updateTransportMode();
+        }
+
+        if (protocolInput) {
+            protocolInput.addEventListener('change', updateTransportMode);
         }
 
         const certificateModeInput = document.getElementById('certificateModeInput');

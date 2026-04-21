@@ -123,6 +123,21 @@ public static class NodeServiceConfigInbounds
     {
         var normalizedProtocol = InboundProtocols.Normalize(protocol);
         var normalizedTransport = InboundTransports.Normalize(transport);
+        if (string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
+        {
+            return new InboundConfig
+            {
+                Tag = $"{normalizedProtocol}-tcp",
+                Enabled = false,
+                Protocol = normalizedProtocol,
+                Transport = InboundTransports.Tcp,
+                TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                ListenAddress = "0.0.0.0",
+                Port = 8388,
+                HandshakeTimeoutSeconds = 10
+            };
+        }
+
         return normalizedTransport switch
         {
             InboundTransports.Wss => new InboundConfig
@@ -138,6 +153,19 @@ public static class NodeServiceConfigInbounds
                 HandshakeTimeoutSeconds = 10,
                 Path = "/ws"
             },
+            InboundTransports.HttpUpgrade => new InboundConfig
+            {
+                Tag = $"{normalizedProtocol}-httpupgrade",
+                Enabled = false,
+                Protocol = normalizedProtocol,
+                Transport = InboundTransports.HttpUpgrade,
+                TransportProtocol = RuntimeInternetTransportProtocols.HttpUpgrade,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                ListenAddress = "0.0.0.0",
+                Port = 8443,
+                HandshakeTimeoutSeconds = 10,
+                Path = "/upgrade"
+            },
             InboundTransports.Grpc => new InboundConfig
             {
                 Tag = $"{normalizedProtocol}-grpc",
@@ -148,7 +176,8 @@ public static class NodeServiceConfigInbounds
                 TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 443,
-                HandshakeTimeoutSeconds = 10
+                HandshakeTimeoutSeconds = 10,
+                GrpcServiceName = $"/{normalizedProtocol}/service"
             },
             InboundTransports.SplitHttp => new InboundConfig
             {
@@ -298,9 +327,13 @@ public static class NodeServiceConfigInbounds
     }
 
     private static bool HasUsableCredentials(TrojanUserConfig user, string protocol)
-        => string.Equals(protocol, InboundProtocols.Trojan, StringComparison.Ordinal)
-            ? !string.IsNullOrWhiteSpace(user.Password)
-            : !string.IsNullOrWhiteSpace(NormalizeUuid(user.Uuid));
+        => protocol switch
+        {
+            InboundProtocols.Trojan => !string.IsNullOrWhiteSpace(user.Password),
+            InboundProtocols.Shadowsocks => !string.IsNullOrWhiteSpace(user.Cipher) &&
+                                            !string.IsNullOrWhiteSpace(user.Password),
+            _ => !string.IsNullOrWhiteSpace(NormalizeUuid(user.Uuid))
+        };
 
     private static string NormalizeUuid(string value)
         => Guid.TryParse(value?.Trim(), out var uuid)

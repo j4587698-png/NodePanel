@@ -1,3 +1,4 @@
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 
 namespace NodePanel.Panel.Services;
@@ -133,7 +134,7 @@ public sealed class SubscriptionProfileResolver
         foreach (var endpoint in catalog.Endpoints)
         {
             var protocol = NormalizeProtocol(endpoint.Protocol);
-            if (!SupportsFormat(format, protocol))
+            if (!SupportsEndpoint(format, protocol, endpoint.Transport))
             {
                 continue;
             }
@@ -946,14 +947,39 @@ public sealed class SubscriptionProfileResolver
             SubscriptionFormats.Clash or SubscriptionFormats.Stash =>
                 protocol is "trojan" or "vmess" or "vless" or "shadowsocks",
             SubscriptionFormats.Surge or SubscriptionFormats.QuantumultX =>
-                protocol is "trojan" or "vmess" or "vless",
+                protocol is "trojan" or "vmess" or "vless" or "shadowsocks",
             _ => true
         };
+
+    private static bool SupportsEndpoint(string format, string protocol, string? transport)
+    {
+        if (!SupportsFormat(format, protocol))
+        {
+            return false;
+        }
+
+        var normalizedTransport = NormalizeTransport(transport);
+        return format switch
+        {
+            SubscriptionFormats.Clash or SubscriptionFormats.Stash =>
+                normalizedTransport is "tcp" or "ws" or "grpc",
+            SubscriptionFormats.Surge or SubscriptionFormats.QuantumultX =>
+                normalizedTransport is "tcp" or "ws",
+            _ => true
+        };
+    }
 
     private static string NormalizeProtocol(string? protocol)
         => string.IsNullOrWhiteSpace(protocol)
             ? "trojan"
             : protocol.Trim().ToLowerInvariant();
+
+    private static string NormalizeTransport(string? transport)
+        => string.IsNullOrWhiteSpace(transport)
+            ? "tcp"
+            : string.Equals(transport, InboundTransports.Wss, StringComparison.OrdinalIgnoreCase)
+                ? "ws"
+                : transport.Trim().ToLowerInvariant();
 
     private static string ResolveFormat(string? flag, string? userAgent)
         => TryResolveFromValue(flag, out var format)

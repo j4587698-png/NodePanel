@@ -30,14 +30,9 @@ public sealed class PanelSnapshotBuilder
         var users = usersEntity
             .Select(u => u.ToRecord())
             .Where(user => user.Enabled && IsAssignedToNode(user, nodeId))
-            .Select(static user => new TrojanUserConfig
-            {
-                UserId = user.UserId,
-                Uuid = user.V2rayUuid,
-                Password = user.TrojanPassword,
-                BytesPerSecond = user.BytesPerSecond,
-                DeviceLimit = user.DeviceLimit
-            })
+            .Select(user => CreateRuntimeUser(user, InboundProtocols.Normalize(node.Protocol)))
+            .Where(static user => user is not null)
+            .Select(static user => user!)
             .OrderBy(static user => user.UserId, StringComparer.Ordinal)
             .ToArray();
 
@@ -46,7 +41,7 @@ public sealed class PanelSnapshotBuilder
         var config = node.Enabled
             ? node.Config with
             {
-                Inbounds = NodeServiceConfigInbounds.ReplaceProtocolUsers(node.Config.Inbounds, users, normalizedProtocol),
+                Inbounds = ReplaceManagedUsers(node.Config.Inbounds, users, normalizedProtocol),
                 Users = Array.Empty<TrojanUserConfig>()
             }
             : node.Config with
@@ -104,4 +99,60 @@ public sealed class PanelSnapshotBuilder
 
     private static bool IsAssignedToNode(PanelUserRecord user, string nodeId)
         => user.NodeIds.Count == 0 || user.NodeIds.Contains(nodeId, StringComparer.Ordinal);
+
+    private static TrojanUserConfig? CreateRuntimeUser(PanelUserRecord user, string protocol)
+        => protocol switch
+        {
+            InboundProtocols.Trojan => string.IsNullOrWhiteSpace(user.TrojanPassword)
+                ? null
+                : new TrojanUserConfig
+                {
+                    UserId = user.UserId,
+                    Password = user.TrojanPassword,
+                    BytesPerSecond = user.BytesPerSecond,
+                    DeviceLimit = user.DeviceLimit
+                },
+            InboundProtocols.Shadowsocks => string.IsNullOrWhiteSpace(user.ShadowsocksPassword)
+                                            || string.IsNullOrWhiteSpace(ShadowsocksCipherTypes.Normalize(user.ShadowsocksCipher))
+                ? null
+                : new TrojanUserConfig
+                {
+                    UserId = user.UserId,
+                    Cipher = ShadowsocksCipherTypes.Normalize(user.ShadowsocksCipher),
+                    Password = user.ShadowsocksPassword,
+                    BytesPerSecond = user.BytesPerSecond,
+                    DeviceLimit = user.DeviceLimit
+                },
+            InboundProtocols.Vless or InboundProtocols.Vmess => Guid.TryParse(user.V2rayUuid, out var uuid)
+                ? new TrojanUserConfig
+                {
+                    UserId = user.UserId,
+                    Uuid = uuid.ToString("D"),
+                    BytesPerSecond = user.BytesPerSecond,
+                    DeviceLimit = user.DeviceLimit
+                }
+                : null,
+            _ => null
+        };
+
+    private static IReadOnlyList<InboundConfig> ReplaceManagedUsers(
+        IReadOnlyList<InboundConfig> inbounds,
+        IReadOnlyList<TrojanUserConfig> users,
+        string protocol)
+    {
+        var updated = NodeServiceConfigInbounds.ReplaceProtocolUsers(inbounds, users, protocol);
+        if (!string.Equals(protocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
+        {
+            return updated;
+        }
+
+        return updated
+            .Select(inbound => string.Equals(InboundProtocols.Normalize(inbound.Protocol), protocol, StringComparison.Ordinal)
+                ? inbound with
+                {
+                    ShadowsocksUsers = Array.Empty<ShadowsocksUserConfig>()
+                }
+                : inbound)
+            .ToArray();
+    }
 }

@@ -1048,6 +1048,243 @@ public sealed class PanelMutationServiceTests
         Assert.Null(redirectUri);
     }
 
+    [Theory]
+    [InlineData("vless", "vless-tcp-tls")]
+    [InlineData("vmess", "vmess-tcp-tls")]
+    public async Task PanelSnapshotBuilder_injects_uuid_users_for_v2ray_inbounds(string protocol, string tag)
+    {
+        using var harness = new PanelMutationHarness();
+        var nodeId = $"node-{protocol}";
+        const string userId = "user-v2ray";
+        var uuid = Guid.NewGuid().ToString("D");
+
+        await harness.MutationService.SaveNodeAsync(
+            nodeId,
+            new UpsertNodeRequest
+            {
+                DisplayName = nodeId,
+                Protocol = protocol,
+                Config = new NodeServiceConfig
+                {
+                    Inbounds =
+                    [
+                        new InboundConfig
+                        {
+                            Tag = tag,
+                            Enabled = true,
+                            Protocol = protocol,
+                            Transport = InboundTransports.Tls,
+                            TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                            TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                            ListenAddress = "0.0.0.0",
+                            Port = 443,
+                            Users =
+                            [
+                                new TrojanUserConfig
+                                {
+                                    UserId = userId,
+                                    Uuid = Guid.NewGuid().ToString("D")
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveUserAsync(
+            userId,
+            CreateUserRequest([nodeId]) with
+            {
+                V2rayUuid = uuid
+            },
+            CancellationToken.None);
+
+        var snapshotBuilder = new PanelSnapshotBuilder(harness.DatabaseService);
+        var result = await snapshotBuilder.TryBuildAsync(nodeId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        var inbound = Assert.Single(result.Config.Inbounds);
+        var user = Assert.Single(inbound.Users);
+        Assert.Equal(protocol, InboundProtocols.Normalize(inbound.Protocol));
+        Assert.Equal(userId, user.UserId);
+        Assert.Equal(uuid, user.Uuid);
+    }
+
+    [Fact]
+    public async Task PanelSnapshotBuilder_injects_shadowsocks_users_and_clears_legacy_shadowsocks_user_collection()
+    {
+        using var harness = new PanelMutationHarness();
+        const string nodeId = "node-ss";
+        const string userId = "user-ss";
+
+        await harness.MutationService.SaveNodeAsync(
+            nodeId,
+            new UpsertNodeRequest
+            {
+                DisplayName = "node-ss",
+                Protocol = InboundProtocols.Shadowsocks,
+                Config = new NodeServiceConfig
+                {
+                    Inbounds =
+                    [
+                        new InboundConfig
+                        {
+                            Tag = "shadowsocks-tcp",
+                            Enabled = true,
+                            Protocol = InboundProtocols.Shadowsocks,
+                            Transport = InboundTransports.Tcp,
+                            TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                            ListenAddress = "0.0.0.0",
+                            Port = 8388,
+                            Users =
+                            [
+                                new TrojanUserConfig
+                                {
+                                    UserId = userId,
+                                    Cipher = ShadowsocksCipherTypes.Aes128Gcm,
+                                    Password = "legacy-password"
+                                }
+                            ],
+                            ShadowsocksUsers =
+                            [
+                                new ShadowsocksUserConfig
+                                {
+                                    UserId = userId,
+                                    Cipher = ShadowsocksCipherTypes.Aes128Gcm,
+                                    Password = "legacy-password"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveUserAsync(
+            userId,
+            CreateUserRequest([nodeId]) with
+            {
+                ShadowsocksCipher = ShadowsocksCipherTypes.ChaCha20Poly1305,
+                ShadowsocksPassword = "ss-secret"
+            },
+            CancellationToken.None);
+
+        var snapshotBuilder = new PanelSnapshotBuilder(harness.DatabaseService);
+        var result = await snapshotBuilder.TryBuildAsync(nodeId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        var inbound = Assert.Single(result.Config.Inbounds);
+        var user = Assert.Single(inbound.Users);
+        Assert.Equal(InboundProtocols.Shadowsocks, InboundProtocols.Normalize(inbound.Protocol));
+        Assert.Equal(userId, user.UserId);
+        Assert.Equal(ShadowsocksCipherTypes.ChaCha20Poly1305, user.Cipher);
+        Assert.Equal("ss-secret", user.Password);
+        Assert.Empty(inbound.ShadowsocksUsers);
+    }
+
+    [Fact]
+    public async Task SubscriptionCatalogService_builds_manual_vless_endpoints_for_httpupgrade_grpc_and_splithttp()
+    {
+        using var harness = new PanelMutationHarness();
+        const string nodeId = "node-edge";
+        const string userId = "user-edge";
+        const string uuid = "11111111-1111-1111-1111-111111111111";
+
+        await harness.MutationService.SaveNodeAsync(
+            nodeId,
+            new UpsertNodeRequest
+            {
+                DisplayName = "Edge",
+                Protocol = InboundProtocols.Vless,
+                SubscriptionHost = "edge.example.com",
+                SubscriptionSni = "sni.example.com",
+                Config = new NodeServiceConfig
+                {
+                    Inbounds =
+                    [
+                        new InboundConfig
+                        {
+                            Tag = "vless-httpupgrade",
+                            Enabled = true,
+                            Protocol = InboundProtocols.Vless,
+                            Transport = InboundTransports.HttpUpgrade,
+                            TransportProtocol = RuntimeInternetTransportProtocols.HttpUpgrade,
+                            TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                            ListenAddress = "0.0.0.0",
+                            Port = 8443,
+                            Host = "cdn.example.com",
+                            Path = "/upgrade"
+                        },
+                        new InboundConfig
+                        {
+                            Tag = "vless-grpc",
+                            Enabled = true,
+                            Protocol = InboundProtocols.Vless,
+                            Transport = InboundTransports.Grpc,
+                            TransportProtocol = RuntimeInternetTransportProtocols.Grpc,
+                            TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                            ListenAddress = "0.0.0.0",
+                            Port = 443,
+                            GrpcServiceName = "/grpc"
+                        },
+                        new InboundConfig
+                        {
+                            Tag = "vless-splithttp",
+                            Enabled = true,
+                            Protocol = InboundProtocols.Vless,
+                            Transport = InboundTransports.SplitHttp,
+                            TransportProtocol = RuntimeInternetTransportProtocols.SplitHttp,
+                            TransportSecurity = RuntimeInternetSecurityTypes.Tls,
+                            ListenAddress = "0.0.0.0",
+                            Port = 443,
+                            Host = "cdn-split.example.com",
+                            Path = "/xhttp"
+                        }
+                    ]
+                }
+            },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveUserAsync(
+            userId,
+            CreateUserRequest([nodeId]) with
+            {
+                V2rayUuid = uuid
+            },
+            CancellationToken.None);
+
+        var service = new SubscriptionCatalogService(harness.DatabaseService);
+        var result = await service.TryBuildByUserIdAsync(userId, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(3, result.Catalog.Endpoints.Count);
+
+        var httpUpgrade = Assert.Single(
+            result.Catalog.Endpoints,
+            static endpoint => string.Equals(endpoint.Transport, InboundTransports.HttpUpgrade, StringComparison.Ordinal));
+        var grpc = Assert.Single(
+            result.Catalog.Endpoints,
+            static endpoint => string.Equals(endpoint.Transport, InboundTransports.Grpc, StringComparison.Ordinal));
+        var splitHttp = Assert.Single(
+            result.Catalog.Endpoints,
+            static endpoint => string.Equals(endpoint.Transport, InboundTransports.SplitHttp, StringComparison.Ordinal));
+
+        Assert.Equal("Edge-httpupgrade", httpUpgrade.Label);
+        Assert.Equal("cdn.example.com", httpUpgrade.WsHost);
+        Assert.Contains("type=httpupgrade", service.BuildUri(result.Catalog.User, httpUpgrade), StringComparison.Ordinal);
+
+        Assert.Equal("Edge-grpc", grpc.Label);
+        Assert.Equal("/grpc", grpc.GrpcServiceName);
+        Assert.Contains("type=grpc", service.BuildUri(result.Catalog.User, grpc), StringComparison.Ordinal);
+        Assert.Contains("serviceName=%2Fgrpc", service.BuildUri(result.Catalog.User, grpc), StringComparison.Ordinal);
+
+        Assert.Equal("Edge-splithttp", splitHttp.Label);
+        Assert.Equal("cdn-split.example.com", splitHttp.WsHost);
+        Assert.Contains("type=splithttp", service.BuildUri(result.Catalog.User, splitHttp), StringComparison.Ordinal);
+        Assert.Contains("host=cdn-split.example.com", service.BuildUri(result.Catalog.User, splitHttp), StringComparison.Ordinal);
+    }
+
     private static UpsertUserRequest CreateUserRequest(IReadOnlyList<string> nodeIds)
         => new()
         {

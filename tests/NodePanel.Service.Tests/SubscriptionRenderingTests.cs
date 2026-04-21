@@ -1,3 +1,4 @@
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 
@@ -415,10 +416,148 @@ public sealed class SubscriptionRenderingTests
         Assert.Equal(["香港"], derivedGroup.Proxies);
     }
 
+    [Fact]
+    public void BuildPlan_clash_keeps_grpc_but_filters_httpupgrade_and_splithttp_proxies()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+
+        var catalog = CreateCatalogWithEndpoints(
+            new PanelNodeRecord
+            {
+                NodeId = "node-edge",
+                DisplayName = "Edge",
+                Protocol = InboundProtocols.Vless
+            },
+            new SubscriptionEndpoint
+            {
+                NodeId = "node-edge",
+                DisplayName = "Edge",
+                Host = "edge.example.com",
+                Port = 443,
+                Sni = "edge.example.com",
+                Label = "Edge-grpc",
+                Protocol = InboundProtocols.Vless,
+                Transport = InboundTransports.Grpc,
+                GrpcServiceName = "/edge"
+            },
+            new SubscriptionEndpoint
+            {
+                NodeId = "node-edge",
+                DisplayName = "Edge",
+                Host = "edge.example.com",
+                Port = 8443,
+                Sni = "edge.example.com",
+                Label = "Edge-httpupgrade",
+                Protocol = InboundProtocols.Vless,
+                Transport = InboundTransports.HttpUpgrade,
+                Path = "/upgrade",
+                WsHost = "cdn.example.com"
+            },
+            new SubscriptionEndpoint
+            {
+                NodeId = "node-edge",
+                DisplayName = "Edge",
+                Host = "edge.example.com",
+                Port = 443,
+                Sni = "edge.example.com",
+                Label = "Edge-splithttp",
+                Protocol = InboundProtocols.Vless,
+                Transport = InboundTransports.SplitHttp,
+                Path = "/xhttp",
+                WsHost = "cdn.example.com"
+            });
+
+        var plan = resolver.BuildPlan(catalog, request);
+
+        Assert.Equal(["Edge-grpc"], plan.Proxies.Select(static proxy => proxy.Name).ToArray());
+    }
+
+    [Fact]
+    public void RenderSurge_includes_shadowsocks_proxy_definitions()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Surge,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        var catalog = CreateShadowsocksCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
+        var proxyLine = GetLine(rendered.Content, "SS-Node-ss=shadowsocks");
+
+        Assert.Contains("encrypt-method=chacha20-ietf-poly1305", proxyLine, StringComparison.Ordinal);
+        Assert.Contains("password=ss-secret", proxyLine, StringComparison.Ordinal);
+        Assert.Contains("udp-relay=true", proxyLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderQuantumultX_includes_shadowsocks_proxy_definitions()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.QuantumultX,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        var catalog = CreateShadowsocksCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
+
+        Assert.Contains("shadowsocks=ss.example.com:8388", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("method=chacha20-ietf-poly1305", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("password=ss-secret", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("tag=SS-Node-ss", rendered.Content, StringComparison.Ordinal);
+    }
+
     private static string GetLine(string content, string prefix)
         => content
             .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
             .First(line => line.StartsWith(prefix, StringComparison.Ordinal));
+
+    private static SubscriptionCatalog CreateCatalogWithEndpoints(
+        PanelNodeRecord node,
+        params SubscriptionEndpoint[] endpoints)
+        => new()
+        {
+            User = CreateCatalog().User,
+            AssignedNodes = [node],
+            Endpoints = endpoints
+        };
+
+    private static SubscriptionCatalog CreateShadowsocksCatalog()
+        => CreateCatalogWithEndpoints(
+            new PanelNodeRecord
+            {
+                NodeId = "node-ss",
+                DisplayName = "SS-Node",
+                Protocol = InboundProtocols.Shadowsocks
+            },
+            new SubscriptionEndpoint
+            {
+                NodeId = "node-ss",
+                DisplayName = "SS-Node",
+                Host = "ss.example.com",
+                Port = 8388,
+                Sni = string.Empty,
+                Label = "SS-Node-ss",
+                Protocol = InboundProtocols.Shadowsocks,
+                Transport = InboundTransports.Tcp
+            }) with
+        {
+            User = CreateCatalog().User with
+            {
+                ShadowsocksCipher = ShadowsocksCipherTypes.ChaCha20Poly1305,
+                ShadowsocksPassword = "ss-secret"
+            }
+        };
 
     private static SubscriptionCatalog CreateCatalog()
         => new()
