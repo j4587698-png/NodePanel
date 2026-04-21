@@ -80,27 +80,32 @@ public sealed class NodeRuntimeSnapshotBuilder
     {
         ArgumentNullException.ThrowIfNull(config);
 
+        var limits = config.Limits ?? new InboundLimitsConfig();
+        var telemetry = config.Telemetry ?? new TelemetryOptions();
         var normalized = config with
         {
+            Inbounds = config.Inbounds ?? Array.Empty<InboundConfig>(),
             ProxyInbounds = NormalizeProxyInbounds(config.ProxyInbounds),
             Outbounds = NormalizeOutbounds(config.Outbounds),
             RoutingRules = NormalizeRoutingRules(config.RoutingRules),
             RoutingResources = NormalizeRoutingResources(config.RoutingResources),
             Certificate = NormalizeCertificateOptions(config.Certificate),
             Dns = NormalizeDnsOptions(config.Dns),
-            Limits = config.Limits with
+            Limits = limits with
             {
-                GlobalBytesPerSecond = Math.Max(0, config.Limits.GlobalBytesPerSecond),
-                ConnectTimeoutSeconds = NormalizePositive(config.Limits.ConnectTimeoutSeconds, 10),
-                ConnectionIdleSeconds = NormalizePositive(config.Limits.ConnectionIdleSeconds, 300),
-                UplinkOnlySeconds = NormalizePositive(config.Limits.UplinkOnlySeconds, 1),
-                DownlinkOnlySeconds = NormalizePositive(config.Limits.DownlinkOnlySeconds, 1)
+                GlobalBytesPerSecond = Math.Max(0, limits.GlobalBytesPerSecond),
+                ConnectTimeoutSeconds = NormalizePositive(limits.ConnectTimeoutSeconds, 10),
+                ConnectionIdleSeconds = NormalizePositive(limits.ConnectionIdleSeconds, 300),
+                UplinkOnlySeconds = NormalizePositive(limits.UplinkOnlySeconds, 1),
+                DownlinkOnlySeconds = NormalizePositive(limits.DownlinkOnlySeconds, 1)
             },
             Policy = NormalizePolicyOptions(config.Policy),
-            Telemetry = config.Telemetry with
+            Telemetry = telemetry with
             {
-                FlushIntervalSeconds = NormalizePositive(config.Telemetry.FlushIntervalSeconds, 15)
-            }
+                FlushIntervalSeconds = NormalizePositive(telemetry.FlushIntervalSeconds, 15)
+            },
+            Users = config.Users ?? Array.Empty<TrojanUserConfig>(),
+            Fallbacks = config.Fallbacks ?? Array.Empty<TrojanFallbackConfig>()
         };
 
         foreach (var compiler in _inboundProtocolCompilers)
@@ -424,31 +429,32 @@ public sealed class NodeRuntimeSnapshotBuilder
                 .ToArray()
         };
 
-    private static PolicyConfig NormalizePolicyOptions(PolicyConfig options)
+    private static PolicyConfig NormalizePolicyOptions(PolicyConfig? options)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        var normalizedOptions = options ?? new PolicyConfig();
 
         var normalized = new Dictionary<int, SessionLevelPolicyConfig>();
-        foreach (var (level, entry) in options.Level)
+        foreach (var (level, entry) in normalizedOptions.Level ?? new Dictionary<int, SessionLevelPolicyConfig>())
         {
             if (level < 0)
             {
                 continue;
             }
 
+            var timeout = entry?.Timeout ?? new SessionTimeoutPolicyConfig();
             normalized[level] = new SessionLevelPolicyConfig
             {
                 Timeout = new SessionTimeoutPolicyConfig
                 {
-                    Handshake = NormalizeOptionalPositive(entry.Timeout.Handshake),
-                    ConnectionIdle = NormalizeOptionalPositive(entry.Timeout.ConnectionIdle),
-                    UplinkOnly = NormalizeOptionalPositive(entry.Timeout.UplinkOnly),
-                    DownlinkOnly = NormalizeOptionalPositive(entry.Timeout.DownlinkOnly)
+                    Handshake = NormalizeOptionalPositive(timeout.Handshake),
+                    ConnectionIdle = NormalizeOptionalPositive(timeout.ConnectionIdle),
+                    UplinkOnly = NormalizeOptionalPositive(timeout.UplinkOnly),
+                    DownlinkOnly = NormalizeOptionalPositive(timeout.DownlinkOnly)
                 }
             };
         }
 
-        return options with
+        return normalizedOptions with
         {
             Level = normalized
         };
@@ -674,16 +680,17 @@ public sealed class NodeRuntimeSnapshotBuilder
         return true;
     }
 
-    private static CertificateOptions NormalizeCertificateOptions(CertificateOptions options)
+    private static CertificateOptions NormalizeCertificateOptions(CertificateOptions? options)
     {
-        var normalizedMode = CertificateModes.Normalize(options.Mode);
-        var altNames = options.AltNames
+        var normalizedOptions = options ?? new CertificateOptions();
+        var normalizedMode = CertificateModes.Normalize(normalizedOptions.Mode);
+        var altNames = (normalizedOptions.AltNames ?? Array.Empty<string>())
             .Where(static name => !string.IsNullOrWhiteSpace(name))
             .Select(static name => name.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var environmentVariables = options.EnvironmentVariables
+        var environmentVariables = (normalizedOptions.EnvironmentVariables ?? Array.Empty<CertificateEnvironmentVariable>())
             .Where(static item => !string.IsNullOrWhiteSpace(item.Name))
             .Select(static item => item with
             {
@@ -692,37 +699,40 @@ public sealed class NodeRuntimeSnapshotBuilder
             })
             .ToArray();
 
-        return options with
+        return normalizedOptions with
         {
             Mode = normalizedMode,
-            PfxPath = ResolveCertificatePath(normalizedMode, options.PfxPath, options.PanelCertificateId),
-            PfxPassword = options.PfxPassword.Trim(),
-            PanelCertificateId = options.PanelCertificateId.Trim(),
-            DistributedAsset = NormalizeDistributedCertificateAsset(options.DistributedAsset),
-            Domain = options.Domain.Trim(),
+            PfxPath = ResolveCertificatePath(normalizedMode, normalizedOptions.PfxPath, normalizedOptions.PanelCertificateId),
+            PfxPassword = normalizedOptions.PfxPassword.Trim(),
+            PanelCertificateId = normalizedOptions.PanelCertificateId.Trim(),
+            DistributedAsset = NormalizeDistributedCertificateAsset(normalizedOptions.DistributedAsset),
+            Domain = normalizedOptions.Domain.Trim(),
             AltNames = altNames,
-            Email = options.Email.Trim(),
-            AcmeDirectoryUrl = options.AcmeDirectoryUrl.Trim(),
-            ChallengeType = CertificateChallengeTypes.Normalize(options.ChallengeType),
-            RenewBeforeDays = Math.Max(1, options.RenewBeforeDays),
-            CheckIntervalMinutes = NormalizePositive(options.CheckIntervalMinutes, 60),
-            HttpChallengeListenAddress = NormalizeListenAddress(options.HttpChallengeListenAddress),
-            HttpChallengePort = NormalizePort(options.HttpChallengePort, 80),
-            ExternalTimeoutSeconds = NormalizePositive(options.ExternalTimeoutSeconds, 300),
-            ClientHelloPolicy = NormalizeClientHelloPolicyOptions(options.ClientHelloPolicy),
-            ExternalToolPath = options.ExternalToolPath.Trim(),
-            ExternalArguments = options.ExternalArguments.Trim(),
-            WorkingDirectory = options.WorkingDirectory.Trim(),
+            Email = normalizedOptions.Email.Trim(),
+            AcmeDirectoryUrl = normalizedOptions.AcmeDirectoryUrl.Trim(),
+            ChallengeType = CertificateChallengeTypes.Normalize(normalizedOptions.ChallengeType),
+            RenewBeforeDays = Math.Max(1, normalizedOptions.RenewBeforeDays),
+            CheckIntervalMinutes = NormalizePositive(normalizedOptions.CheckIntervalMinutes, 60),
+            HttpChallengeListenAddress = NormalizeListenAddress(normalizedOptions.HttpChallengeListenAddress),
+            HttpChallengePort = NormalizePort(normalizedOptions.HttpChallengePort, 80),
+            ExternalTimeoutSeconds = NormalizePositive(normalizedOptions.ExternalTimeoutSeconds, 300),
+            ClientHelloPolicy = NormalizeClientHelloPolicyOptions(normalizedOptions.ClientHelloPolicy),
+            ExternalToolPath = normalizedOptions.ExternalToolPath.Trim(),
+            ExternalArguments = normalizedOptions.ExternalArguments.Trim(),
+            WorkingDirectory = normalizedOptions.WorkingDirectory.Trim(),
             EnvironmentVariables = environmentVariables
         };
     }
 
-    private static DistributedCertificateAsset NormalizeDistributedCertificateAsset(DistributedCertificateAsset asset)
-        => asset with
+    private static DistributedCertificateAsset NormalizeDistributedCertificateAsset(DistributedCertificateAsset? asset)
+    {
+        var normalizedAsset = asset ?? new DistributedCertificateAsset();
+        return normalizedAsset with
         {
-            PfxBase64 = asset.PfxBase64.Trim(),
-            Thumbprint = asset.Thumbprint.Trim()
+            PfxBase64 = normalizedAsset.PfxBase64.Trim(),
+            Thumbprint = normalizedAsset.Thumbprint.Trim()
         };
+    }
 
     private static string ResolveCertificatePath(string mode, string path, string panelCertificateId)
     {
@@ -758,20 +768,24 @@ public sealed class NodeRuntimeSnapshotBuilder
         return new string(buffer);
     }
 
-    private static TlsClientHelloPolicyConfig NormalizeClientHelloPolicyOptions(TlsClientHelloPolicyConfig options)
-        => options with
-        {
-            AllowedServerNames = NormalizeLowerStringList(options.AllowedServerNames),
-            BlockedServerNames = NormalizeLowerStringList(options.BlockedServerNames),
-            AllowedApplicationProtocols = NormalizeLowerStringList(options.AllowedApplicationProtocols),
-            BlockedApplicationProtocols = NormalizeLowerStringList(options.BlockedApplicationProtocols),
-            AllowedJa3 = NormalizeLowerStringList(options.AllowedJa3),
-            BlockedJa3 = NormalizeLowerStringList(options.BlockedJa3)
-        };
-
-    private static DnsOptions NormalizeDnsOptions(DnsOptions options)
+    private static TlsClientHelloPolicyConfig NormalizeClientHelloPolicyOptions(TlsClientHelloPolicyConfig? options)
     {
-        var servers = options.Servers
+        var normalizedOptions = options ?? new TlsClientHelloPolicyConfig();
+        return normalizedOptions with
+        {
+            AllowedServerNames = NormalizeLowerStringList(normalizedOptions.AllowedServerNames),
+            BlockedServerNames = NormalizeLowerStringList(normalizedOptions.BlockedServerNames),
+            AllowedApplicationProtocols = NormalizeLowerStringList(normalizedOptions.AllowedApplicationProtocols),
+            BlockedApplicationProtocols = NormalizeLowerStringList(normalizedOptions.BlockedApplicationProtocols),
+            AllowedJa3 = NormalizeLowerStringList(normalizedOptions.AllowedJa3),
+            BlockedJa3 = NormalizeLowerStringList(normalizedOptions.BlockedJa3)
+        };
+    }
+
+    private static DnsOptions NormalizeDnsOptions(DnsOptions? options)
+    {
+        var normalizedOptions = options ?? new DnsOptions();
+        var servers = (normalizedOptions.Servers ?? Array.Empty<DnsHttpServerConfig>())
             .Where(static server => !string.IsNullOrWhiteSpace(server.Url))
             .Select(static server => server with
             {
@@ -780,18 +794,18 @@ public sealed class NodeRuntimeSnapshotBuilder
             })
             .ToArray();
 
-        return options with
+        return normalizedOptions with
         {
-            Mode = DnsModes.Normalize(options.Mode),
-            TimeoutSeconds = NormalizePositive(options.TimeoutSeconds, 5),
-            CacheTtlSeconds = Math.Max(0, options.CacheTtlSeconds),
+            Mode = DnsModes.Normalize(normalizedOptions.Mode),
+            TimeoutSeconds = NormalizePositive(normalizedOptions.TimeoutSeconds, 5),
+            CacheTtlSeconds = Math.Max(0, normalizedOptions.CacheTtlSeconds),
             Servers = servers
         };
     }
 
-    private static IReadOnlyList<OutboundConfig> NormalizeOutbounds(IReadOnlyList<OutboundConfig> outbounds)
+    private static IReadOnlyList<OutboundConfig> NormalizeOutbounds(IReadOnlyList<OutboundConfig>? outbounds)
     {
-        if (outbounds.Count == 0)
+        if (outbounds is null || outbounds.Count == 0)
         {
             return
             [
@@ -805,112 +819,68 @@ public sealed class NodeRuntimeSnapshotBuilder
         }
 
         return outbounds
-            .Where(static outbound => !string.IsNullOrWhiteSpace(outbound.Tag))
-            .Select(NormalizeOutbound)
+            .Where(static outbound => outbound is not null && !string.IsNullOrWhiteSpace(outbound.Tag))
+            .Select(static outbound => NormalizeOutbound(outbound!))
             .ToArray();
     }
 
-    private static IReadOnlyList<ProxyInboundConfig> NormalizeProxyInbounds(IReadOnlyList<ProxyInboundConfig> proxyInbounds)
-        => proxyInbounds
-            .Where(static inbound => !string.IsNullOrWhiteSpace(inbound.Tag))
+    private static IReadOnlyList<ProxyInboundConfig> NormalizeProxyInbounds(IReadOnlyList<ProxyInboundConfig>? proxyInbounds)
+        => (proxyInbounds ?? Array.Empty<ProxyInboundConfig>())
+            .Where(static inbound => inbound is not null && !string.IsNullOrWhiteSpace(inbound.Tag))
             .Select(static inbound => inbound with
             {
-                Tag = inbound.Tag.Trim(),
+                Tag = inbound!.Tag.Trim(),
                 Protocol = ProxyInboundProtocols.Normalize(inbound.Protocol),
                 ListenAddress = NormalizeProxyInboundListenAddress(inbound.ListenAddress),
                 Port = NormalizeProxyInboundPort(inbound.Port),
                 UserLevel = Math.Max(0, inbound.UserLevel),
                 HandshakeTimeoutSeconds = NormalizePositive(inbound.HandshakeTimeoutSeconds, 10),
-                SocksUsers = inbound.SocksUsers
-                    .Where(static user => !string.IsNullOrWhiteSpace(user.Username))
-                    .Select(static user => user with
-                    {
-                        Username = user.Username.Trim()
-                    })
-                    .ToArray(),
-                HttpUsers = inbound.HttpUsers
-                    .Where(static user => !string.IsNullOrWhiteSpace(user.Username))
-                    .Select(static user => user with
-                    {
-                        Username = user.Username.Trim()
-                    })
-                    .ToArray()
+                SocksUsers = NormalizeLocalProxyUsers(inbound.SocksUsers),
+                HttpUsers = NormalizeLocalProxyUsers(inbound.HttpUsers)
             })
             .ToArray();
 
-    private static IReadOnlyList<RoutingRuleConfig> NormalizeRoutingRules(IReadOnlyList<RoutingRuleConfig> routingRules)
-        => routingRules
-            .Where(static rule => !string.IsNullOrWhiteSpace(rule.OutboundTag))
+    private static IReadOnlyList<RoutingRuleConfig> NormalizeRoutingRules(IReadOnlyList<RoutingRuleConfig>? routingRules)
+        => (routingRules ?? Array.Empty<RoutingRuleConfig>())
+            .Where(static rule => rule is not null && !string.IsNullOrWhiteSpace(rule.OutboundTag))
             .Select(static rule => rule with
             {
-                RuleTag = rule.RuleTag?.Trim() ?? string.Empty,
-                InboundTags = rule.InboundTags
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                Protocols = rule.Protocols
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
+                RuleTag = rule!.RuleTag?.Trim() ?? string.Empty,
+                InboundTags = NormalizeStringList(rule.InboundTags),
+                Protocols = NormalizeStringList(rule.Protocols)
                     .Select(static value => RoutingProtocols.Normalize(value))
+                    .Where(static value => !string.IsNullOrWhiteSpace(value))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
-                Networks = rule.Networks
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
+                Networks = NormalizeStringList(rule.Networks)
                     .Select(static value => RoutingNetworks.Normalize(value))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
-                UserIds = rule.UserIds
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
+                UserIds = NormalizeTrimmedStringList(rule.UserIds)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
-                Processes = rule.Processes
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
+                Processes = NormalizeTrimmedStringList(rule.Processes)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
-                Domains = rule.Domains
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                SourceCidrs = rule.SourceCidrs
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                DestinationCidrs = rule.DestinationCidrs
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                DestinationPorts = rule.DestinationPorts
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                SourcePorts = rule.SourcePorts
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                LocalCidrs = rule.LocalCidrs
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                LocalPorts = rule.LocalPorts
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                VlessRoutes = rule.VlessRoutes
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .Select(static value => value.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
+                Domains = NormalizeStringList(rule.Domains),
+                SourceCidrs = NormalizeStringList(rule.SourceCidrs),
+                DestinationCidrs = NormalizeStringList(rule.DestinationCidrs),
+                DestinationPorts = NormalizeStringList(rule.DestinationPorts),
+                SourcePorts = NormalizeStringList(rule.SourcePorts),
+                LocalCidrs = NormalizeStringList(rule.LocalCidrs),
+                LocalPorts = NormalizeStringList(rule.LocalPorts),
+                VlessRoutes = NormalizeStringList(rule.VlessRoutes),
                 Attributes = NormalizeRoutingAttributeDictionary(rule.Attributes),
                 OutboundTag = rule.OutboundTag.Trim()
+            })
+            .ToArray();
+
+    private static IReadOnlyList<LocalSocksUserConfig> NormalizeLocalProxyUsers(IReadOnlyList<LocalSocksUserConfig>? users)
+        => (users ?? Array.Empty<LocalSocksUserConfig>())
+            .Where(static user => user is not null && !string.IsNullOrWhiteSpace(user.Username))
+            .Select(static user => user! with
+            {
+                Username = user.Username.Trim()
             })
             .ToArray();
 
@@ -934,9 +904,14 @@ public sealed class NodeRuntimeSnapshotBuilder
     private static string NormalizeProxyInboundListenAddress(string value)
         => string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value.Trim();
 
-    private static IReadOnlyDictionary<string, string> NormalizeHeaderDictionary(IReadOnlyDictionary<string, string> headers)
+    private static IReadOnlyDictionary<string, string> NormalizeHeaderDictionary(IReadOnlyDictionary<string, string>? headers)
     {
         var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (headers is null)
+        {
+            return normalized;
+        }
+
         foreach (var (name, value) in headers)
         {
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(value))
@@ -950,9 +925,14 @@ public sealed class NodeRuntimeSnapshotBuilder
         return normalized;
     }
 
-    private static IReadOnlyDictionary<string, string> NormalizeRoutingAttributeDictionary(IReadOnlyDictionary<string, string> attributes)
+    private static IReadOnlyDictionary<string, string> NormalizeRoutingAttributeDictionary(IReadOnlyDictionary<string, string>? attributes)
     {
         var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (attributes is null)
+        {
+            return normalized;
+        }
+
         foreach (var (name, value) in attributes)
         {
             if (string.IsNullOrWhiteSpace(name))
@@ -966,14 +946,20 @@ public sealed class NodeRuntimeSnapshotBuilder
         return normalized;
     }
 
-    private static IReadOnlyList<string> NormalizeStringList(IReadOnlyList<string> values)
-        => values
+    private static IReadOnlyList<string> NormalizeStringList(IReadOnlyList<string>? values)
+        => (values ?? Array.Empty<string>())
             .Where(static value => !string.IsNullOrWhiteSpace(value))
             .Select(static value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static IReadOnlyList<string> NormalizeLowerStringList(IReadOnlyList<string> values)
+    private static IReadOnlyList<string> NormalizeTrimmedStringList(IReadOnlyList<string>? values)
+        => (values ?? Array.Empty<string>())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value.Trim())
+            .ToArray();
+
+    private static IReadOnlyList<string> NormalizeLowerStringList(IReadOnlyList<string>? values)
         => NormalizeStringList(values)
             .Select(static value => value.ToLowerInvariant())
             .ToArray();

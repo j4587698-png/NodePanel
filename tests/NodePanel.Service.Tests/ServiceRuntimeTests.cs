@@ -92,6 +92,48 @@ public sealed class ServiceRuntimeTests
     }
 
     [Fact]
+    public void ApplyBootstrap_accepts_null_proxy_inbounds_and_restores_defaults()
+    {
+        var testRoot = CreateTestRoot();
+        try
+        {
+            var assetDirectory = Path.Combine(testRoot, "config");
+            Directory.CreateDirectory(assetDirectory);
+            File.WriteAllText(Path.Combine(assetDirectory, "geosite.dat"), string.Empty);
+            File.WriteAllText(Path.Combine(assetDirectory, "geoip.dat"), string.Empty);
+
+            var runtimeConfigStore = new RuntimeConfigStore();
+            var orchestrator = new ConfigOrchestrator(
+                runtimeConfigStore,
+                [OutboundProtocols.Freedom],
+                [new TrojanInboundRuntimeCompiler()],
+                new PersistedNodeConfigStore(
+                    new NodePanelOptions
+                    {
+                        CachedConfigPath = Path.Combine(testRoot, "runtime.json")
+                    },
+                    new TestLogger<PersistedNodeConfigStore>()),
+                new TestLogger<ConfigOrchestrator>(),
+                testRoot);
+
+            orchestrator.ApplyBootstrap(
+                new NodeServiceConfig
+                {
+                    ProxyInbounds = null!
+                });
+
+            var snapshot = runtimeConfigStore.GetSnapshot();
+            Assert.NotNull(snapshot.Config.ProxyInbounds);
+            Assert.Empty(snapshot.Config.ProxyInbounds);
+            Assert.False(snapshot.ProxyInbounds.HasListeners);
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(testRoot);
+        }
+    }
+
+    [Fact]
     public async Task ApplySnapshotAsync_accepts_unified_unix_listener_and_normalizes_timeout_defaults()
     {
         var testRoot = CreateTestRoot();

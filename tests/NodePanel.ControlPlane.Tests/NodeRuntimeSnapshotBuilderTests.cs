@@ -268,6 +268,62 @@ public sealed class NodeRuntimeSnapshotBuilderTests
     }
 
     [Fact]
+    public void TryBuild_accepts_proxy_inbound_null_user_lists_and_normalizes_them_to_empty()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new TrojanInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            3,
+            new NodeServiceConfig
+            {
+                ProxyInbounds =
+                [
+                    new ProxyInboundConfig
+                    {
+                        Tag = " socks-local ",
+                        Enabled = true,
+                        Protocol = " SOCKS ",
+                        ListenAddress = " 127.0.0.1 ",
+                        Port = 10808,
+                        SocksUsers = null!,
+                        HttpUsers = null!
+                    }
+                ],
+                Certificate = new CertificateOptions
+                {
+                    PfxPath = "runtime.pfx"
+                },
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    }
+                ]
+            },
+            [OutboundProtocols.Freedom],
+            out var snapshot,
+            out var error);
+
+        Assert.True(success, error);
+
+        var proxyInbound = Assert.Single(snapshot.Config.ProxyInbounds);
+        Assert.NotNull(proxyInbound.SocksUsers);
+        Assert.NotNull(proxyInbound.HttpUsers);
+        Assert.Empty(proxyInbound.SocksUsers);
+        Assert.Empty(proxyInbound.HttpUsers);
+
+        var listener = Assert.Single(snapshot.ProxyInbounds.SocksListeners);
+        Assert.Equal("socks-local", listener.Tag);
+        Assert.False(snapshot.ProxyInbounds.SocksAuthenticationsByTag.ContainsKey("socks-local"));
+    }
+
+    [Fact]
     public void TryBuild_normalizes_routing_rule_attributes_and_enables_content_routing()
     {
         var builder = new NodeRuntimeSnapshotBuilder(
