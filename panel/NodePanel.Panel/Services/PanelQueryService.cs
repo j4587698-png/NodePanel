@@ -280,9 +280,13 @@ public sealed class PanelQueryService
     {
         if (!_db.IsConfigured) return Array.Empty<ServerGroupViewModel>();
         var records = await _db.FSql.Select<ServerGroupEntity>().OrderBy(t => t.GroupId).ToListAsync(cancellationToken);
+        var nodes = await _db.FSql.Select<NodeEntity>().ToListAsync(cancellationToken);
         return records.Select(r => new ServerGroupViewModel
         {
-            GroupId = r.GroupId, Name = r.Name, CreatedAt = r.CreatedAt
+            GroupId = r.GroupId,
+            Name = r.Name,
+            CreatedAt = r.CreatedAt,
+            NodeCount = nodes.Count(node => node.GroupIds.Contains(r.GroupId))
         }).ToArray();
     }
     

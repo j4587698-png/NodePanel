@@ -92,6 +92,14 @@
                         }
                     </td>
                     <td class="table-actions">
+                        @if (!node.Runtime.Connected)
+                        {
+                            <form asp-action="DeleteNode" asp-route-nodeId="@node.Definition.NodeId" method="post" class="inline-form" onsubmit="return confirm('确定要删除这个离线节点吗？');">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="returnUrl" value="@indexReturnUrl" />
+                                <button type="submit" class="button button--small button--danger">删除</button>
+                            </form>
+                        }
                         @if (node.CanRequestCertificateRenewal)
                         {
                             <form asp-action="RenewNodeCertificate" asp-route-nodeId="@node.Definition.NodeId" method="post" class="inline-form">

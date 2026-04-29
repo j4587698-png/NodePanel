@@ -243,16 +243,27 @@ main() {
     np_bootstrap_download_helpers
 
     if [[ -n "$BOOTSTRAP_COMMAND" ]]; then
-        NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
-            "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
-            "$BOOTSTRAP_COMMAND" \
-            "${BOOTSTRAP_FORWARD_ARGS[@]}"
+        if [[ "${#BOOTSTRAP_FORWARD_ARGS[@]}" -gt 0 ]]; then
+            NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
+                "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
+                "$BOOTSTRAP_COMMAND" \
+                "${BOOTSTRAP_FORWARD_ARGS[@]}"
+        else
+            NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
+                "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
+                "$BOOTSTRAP_COMMAND"
+        fi
         return 0
     fi
 
-    NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
-        "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
-        "${BOOTSTRAP_FORWARD_ARGS[@]}"
+    if [[ "${#BOOTSTRAP_FORWARD_ARGS[@]}" -gt 0 ]]; then
+        NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
+            "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
+            "${BOOTSTRAP_FORWARD_ARGS[@]}"
+    else
+        NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
+            "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh"
+    fi
 }
 
 main "$@"

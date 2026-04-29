@@ -702,7 +702,11 @@ public sealed class NodeRuntimeSnapshotBuilder
         return normalizedOptions with
         {
             Mode = normalizedMode,
-            PfxPath = ResolveCertificatePath(normalizedMode, normalizedOptions.PfxPath, normalizedOptions.PanelCertificateId),
+            PfxPath = ResolveCertificatePath(
+                normalizedMode,
+                normalizedOptions.PfxPath,
+                normalizedOptions.PanelCertificateId,
+                normalizedOptions.Domain),
             PfxPassword = normalizedOptions.PfxPassword.Trim(),
             PanelCertificateId = normalizedOptions.PanelCertificateId.Trim(),
             DistributedAsset = NormalizeDistributedCertificateAsset(normalizedOptions.DistributedAsset),
@@ -734,19 +738,33 @@ public sealed class NodeRuntimeSnapshotBuilder
         };
     }
 
-    private static string ResolveCertificatePath(string mode, string path, string panelCertificateId)
+    private static string ResolveCertificatePath(string mode, string path, string panelCertificateId, string domain)
     {
         var normalizedPath = path.Trim();
-        if (mode != CertificateModes.PanelDistributed || !string.IsNullOrWhiteSpace(normalizedPath))
+        if (!string.IsNullOrWhiteSpace(normalizedPath))
         {
             return normalizedPath;
         }
 
-        var fileName = string.IsNullOrWhiteSpace(panelCertificateId)
-            ? "panel-distributed.pfx"
-            : $"{SanitizeFileName(panelCertificateId)}.pfx";
+        if (mode == CertificateModes.AcmeManaged)
+        {
+            var fileName = string.IsNullOrWhiteSpace(domain)
+                ? "acme-managed.pfx"
+                : $"{SanitizeFileName(domain)}.pfx";
 
-        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "certificates", fileName));
+            return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "certificates", "acme-managed", fileName));
+        }
+
+        if (mode == CertificateModes.PanelDistributed)
+        {
+            var fileName = string.IsNullOrWhiteSpace(panelCertificateId)
+                ? "panel-distributed.pfx"
+                : $"{SanitizeFileName(panelCertificateId)}.pfx";
+
+            return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "certificates", fileName));
+        }
+
+        return normalizedPath;
     }
 
     private static string SanitizeFileName(string value)

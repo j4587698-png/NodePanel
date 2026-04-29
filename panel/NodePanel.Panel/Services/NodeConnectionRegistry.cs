@@ -58,6 +58,28 @@ public sealed class NodeConnectionRegistry
         }
     }
 
+    public bool IsConnected(string nodeId)
+    {
+        lock (_sync)
+        {
+            return _entries.TryGetValue(nodeId, out var current) && current.Runtime.Connected;
+        }
+    }
+
+    public bool TryRemoveDisconnected(string nodeId)
+    {
+        lock (_sync)
+        {
+            if (_entries.TryGetValue(nodeId, out var current) && current.Runtime.Connected)
+            {
+                return false;
+            }
+
+            _entries.Remove(nodeId);
+            return true;
+        }
+    }
+
     public IReadOnlyDictionary<string, NodeRuntimeSnapshot> GetAllRuntime()
     {
         lock (_sync)

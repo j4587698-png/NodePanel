@@ -363,6 +363,27 @@ public sealed class DashboardController : Controller
         return RedirectToAction(nameof(Node), new { nodeId });
     }
 
+    [HttpPost("nodes/{nodeId}/delete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteNode(string nodeId, string? returnUrl, CancellationToken cancellationToken)
+    {
+        var normalizedNodeId = NodeFormValueCodec.TrimOrEmpty(nodeId);
+        try
+        {
+            var deleted = await _panelMutationService.DeleteNodeAsync(normalizedNodeId, cancellationToken).ConfigureAwait(false);
+            TempData["StatusMessage"] = deleted
+                ? $"节点 {normalizedNodeId} 已删除。"
+                : $"节点 {normalizedNodeId} 不存在。";
+        }
+        catch (InvalidOperationException ex)
+        {
+            TempData["StatusMessage"] = ex.Message;
+            return RedirectToLocalOrDefault(returnUrl, nameof(Node), new { nodeId = normalizedNodeId });
+        }
+
+        return RedirectToAction(nameof(Nodes));
+    }
+
     [HttpPost("nodes/{nodeId}/certificate/renew")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RenewNodeCertificate(string nodeId, string? returnUrl, CancellationToken cancellationToken)
@@ -767,12 +788,14 @@ public sealed class DashboardController : Controller
         });
 
     [HttpGet("groups/new")]
-    public IActionResult NewServerGroup()
-        => View("ServerGroup", new ServerGroupEditorViewModel
-        {
-            Form = new ServerGroupFormInput(),
-            IsEditMode = false
-        });
+    public async Task<IActionResult> NewServerGroup(CancellationToken cancellationToken)
+        => View(
+            "ServerGroup",
+            await BuildServerGroupEditorViewModelAsync(
+                new ServerGroupFormInput(),
+                isEditMode: false,
+                statusMessage: string.Empty,
+                cancellationToken));
 
     [HttpGet("groups/{groupId:int}")]
     public async Task<IActionResult> ServerGroup(int groupId, CancellationToken cancellationToken)
@@ -785,11 +808,18 @@ public sealed class DashboardController : Controller
             return RedirectToAction(nameof(ServerGroups));
         }
 
-        return View("ServerGroup", new ServerGroupEditorViewModel
-        {
-            Form = new ServerGroupFormInput { GroupId = group.GroupId, Name = group.Name },
-            IsEditMode = true
-        });
+        return View(
+            "ServerGroup",
+            await BuildServerGroupEditorViewModelAsync(
+                new ServerGroupFormInput
+                {
+                    GroupId = group.GroupId,
+                    Name = group.Name,
+                    NodeIds = await GetServerGroupNodeIdsAsync(group.GroupId, cancellationToken)
+                },
+                isEditMode: true,
+                statusMessage: string.Empty,
+                cancellationToken));
     }
 
     [HttpPost("groups/save")]
@@ -797,11 +827,52 @@ public sealed class DashboardController : Controller
     public async Task<IActionResult> SaveServerGroup(ServerGroupFormInput form, CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
-            return View("ServerGroup", new ServerGroupEditorViewModel { Form = form, IsEditMode = true, StatusMessage = "填写有误" });
+        {
+            return View(
+                "ServerGroup",
+                await BuildServerGroupEditorViewModelAsync(
+                    form,
+                    form.GroupId > 0,
+                    statusMessage: "填写有误",
+                    cancellationToken));
+        }
 
-        await _panelMutationService.SaveServerGroupAsync(form.GroupId, NodeFormValueCodec.TrimOrEmpty(form.Name), cancellationToken);
+        await _panelMutationService.SaveServerGroupAsync(
+            form.GroupId,
+            NodeFormValueCodec.TrimOrEmpty(form.Name),
+            form.GetNodeIds(),
+            cancellationToken);
         TempData["StatusMessage"] = "权限组已保存。";
         return RedirectToAction(nameof(ServerGroups));
+    }
+
+    private async Task<ServerGroupEditorViewModel> BuildServerGroupEditorViewModelAsync(
+        ServerGroupFormInput form,
+        bool isEditMode,
+        string statusMessage,
+        CancellationToken cancellationToken)
+        => new()
+        {
+            Form = form,
+            IsEditMode = isEditMode,
+            StatusMessage = statusMessage,
+            AvailableNodes = await GetAvailableNodeRecordsAsync(cancellationToken)
+        };
+
+    private async Task<List<string>> GetServerGroupNodeIdsAsync(int groupId, CancellationToken cancellationToken)
+        => (await GetAvailableNodeRecordsAsync(cancellationToken))
+            .Where(node => node.GroupIds.Contains(groupId))
+            .Select(static node => node.NodeId)
+            .OrderBy(static nodeId => nodeId, StringComparer.Ordinal)
+            .ToList();
+
+    private async Task<IReadOnlyList<PanelNodeRecord>> GetAvailableNodeRecordsAsync(CancellationToken cancellationToken)
+    {
+        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
+        return state.Nodes
+            .Select(static node => node.Definition)
+            .OrderBy(static node => node.NodeId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     [HttpPost("groups/{groupId:int}/delete")]

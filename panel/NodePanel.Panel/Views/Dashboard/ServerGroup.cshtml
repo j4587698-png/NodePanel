@@ -2,6 +2,7 @@
 @{
     Layout = "~/Views/Shared/_Layout.cshtml";
     ViewData["Title"] = Model.IsEditMode ? "编辑权限组" : "创建权限组";
+    var selectedNodeIds = new HashSet<string>(Model.Form.GetNodeIds(), StringComparer.Ordinal);
 }
 
 <div class="admin-header">
@@ -28,6 +29,37 @@
             <span class="text-danger" asp-validation-for="Form.Name"></span>
             <div class="muted" style="margin-top:8px;">这个名称将展示在套餐表单、用户编排以及节点映射的多选框里。清晰的命名能防呆解患。</div>
         </div>
+
+        @if (Model.IsEditMode)
+        {
+            <div class="form-group" style="margin-top: 24px;">
+                <label>包含节点</label>
+                @if (Model.AvailableNodes.Count == 0)
+                {
+                    <div class="muted">暂无节点。创建节点后可在这里直接分配到当前权限组。</div>
+                }
+                else
+                {
+                    <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+                        @foreach (var node in Model.AvailableNodes)
+                        {
+                            var checkedAttribute = selectedNodeIds.Contains(node.NodeId) ? "checked" : null;
+                            <label style="display:flex; gap:10px; align-items:flex-start; padding:12px; border:1px solid var(--admin-border); border-radius:12px; background:rgba(255,255,255,0.03);">
+                                <input type="checkbox" name="Form.NodeIds" value="@node.NodeId" checked="@checkedAttribute" style="margin-top:3px; width:16px; height:16px; min-width:16px;" />
+                                <span>
+                                    <strong>@(string.IsNullOrWhiteSpace(node.DisplayName) ? node.NodeId : node.DisplayName)</strong>
+                                    <span class="muted mono" style="display:block;">@node.NodeId</span>
+                                </span>
+                            </label>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="muted" style="margin-top: 16px;">创建权限组后，可回到编辑页直接分配包含的节点。</div>
+        }
 
         <div style="margin-top: 32px; display: flex; gap: 16px;">
             <button type="submit" class="button button--primary">保存权限组</button>

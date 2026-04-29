@@ -195,6 +195,54 @@ public sealed class NodeRuntimeSnapshotBuilderTests
     }
 
     [Fact]
+    public void TryBuild_defaults_acme_managed_certificate_path_when_empty()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new TrojanInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            1,
+            new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "trojan-entry",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Trojan,
+                        Transport = InboundTransports.Tls,
+                        ListenAddress = "127.0.0.1",
+                        Port = 443,
+                        Users =
+                        [
+                            new TrojanUserConfig
+                            {
+                                UserId = "demo-user",
+                                Password = "secret"
+                            }
+                        ]
+                    }
+                ],
+                Certificate = new CertificateOptions
+                {
+                    Mode = CertificateModes.AcmeManaged,
+                    Domain = " edge.example.com "
+                }
+            },
+            [OutboundProtocols.Freedom],
+            out var snapshot,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "certificates", "acme-managed", "edge.example.com.pfx")),
+            snapshot.Config.Certificate.PfxPath);
+    }
+
+    [Fact]
     public void TryBuild_builds_http_local_proxy_authentication_and_transparent_settings()
     {
         var builder = new NodeRuntimeSnapshotBuilder(

@@ -1532,6 +1532,7 @@ public sealed class ServerGroupViewModel
     public int GroupId { get; set; }
     public string Name { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
+    public int NodeCount { get; set; }
 }
 
 public sealed class ServerGroupEditorViewModel
@@ -1539,6 +1540,7 @@ public sealed class ServerGroupEditorViewModel
     public required ServerGroupFormInput Form { get; init; }
     public required bool IsEditMode { get; init; }
     public string StatusMessage { get; init; } = string.Empty;
+    public IReadOnlyList<PanelNodeRecord> AvailableNodes { get; init; } = Array.Empty<PanelNodeRecord>();
 }
 
 public sealed class ServerGroupFormInput
@@ -1547,6 +1549,16 @@ public sealed class ServerGroupFormInput
     
     [Required(ErrorMessage = "权限组名称不能为空。")]
     public string Name { get; set; } = string.Empty;
+
+    public List<string> NodeIds { get; set; } = [];
+
+    public IReadOnlyList<string> GetNodeIds()
+        => (NodeIds ?? [])
+            .Where(static nodeId => !string.IsNullOrWhiteSpace(nodeId))
+            .Select(static nodeId => nodeId.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static nodeId => nodeId, StringComparer.Ordinal)
+            .ToArray();
 
     public static ServerGroupFormInput FromEntity(ServerGroupEntity entity)
         => new()

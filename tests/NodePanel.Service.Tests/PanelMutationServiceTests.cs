@@ -216,6 +216,92 @@ public sealed class PanelMutationServiceTests
     }
 
     [Fact]
+    public async Task DeleteNodeAsync_deletes_offline_node_and_preserves_explicit_user_scope()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node-a");
+        await harness.CreateNodeAsync("node-b");
+        await harness.MutationService.SaveUserAsync(
+            "user-a",
+            CreateUserRequest(["node-a", "node-b"]),
+            CancellationToken.None);
+        await harness.MutationService.SaveUserAsync(
+            "user-b",
+            CreateUserRequest(["node-a"]),
+            CancellationToken.None);
+
+        var deleted = await harness.MutationService.DeleteNodeAsync("node-a", CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.False(await harness.DatabaseService.FSql.Select<NodeEntity>()
+            .Where(x => x.NodeId == "node-a")
+            .AnyAsync(CancellationToken.None));
+        Assert.Equal(["node-b"], (await harness.GetUserAsync("user-a")).NodeIds);
+        Assert.Equal(["node-a"], (await harness.GetUserAsync("user-b")).NodeIds);
+    }
+
+    [Fact]
+    public async Task DeleteNodeAsync_rejects_connected_node()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node-a");
+        harness.NodeConnectionRegistry.RecordHeartbeat("node-a", DateTimeOffset.UtcNow);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            harness.MutationService.DeleteNodeAsync("node-a", CancellationToken.None));
+
+        Assert.Contains("当前在线", exception.Message, StringComparison.Ordinal);
+        Assert.True(await harness.DatabaseService.FSql.Select<NodeEntity>()
+            .Where(x => x.NodeId == "node-a")
+            .AnyAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveServerGroupAsync_updates_node_memberships_from_group_editor()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.MutationService.SaveNodeAsync(
+            "node-a",
+            new UpsertNodeRequest { DisplayName = "Node A", Config = new NodeServiceConfig() },
+            CancellationToken.None);
+        await harness.MutationService.SaveNodeAsync(
+            "node-b",
+            new UpsertNodeRequest { DisplayName = "Node B", Config = new NodeServiceConfig() },
+            CancellationToken.None);
+        await harness.MutationService.SaveNodeAsync(
+            "node-c",
+            new UpsertNodeRequest { DisplayName = "Node C", GroupIds = [7, 9], Config = new NodeServiceConfig() },
+            CancellationToken.None);
+
+        await harness.MutationService.SaveServerGroupAsync(7, "VIP", ["node-a", "node-c"], CancellationToken.None);
+
+        Assert.Equal([7], (await harness.GetNodeAsync("node-a")).GroupIds);
+        Assert.Empty((await harness.GetNodeAsync("node-b")).GroupIds);
+        Assert.Equal([7, 9], (await harness.GetNodeAsync("node-c")).GroupIds);
+
+        await harness.MutationService.SaveServerGroupAsync(7, "VIP", ["node-b"], CancellationToken.None);
+
+        Assert.Empty((await harness.GetNodeAsync("node-a")).GroupIds);
+        Assert.Equal([7], (await harness.GetNodeAsync("node-b")).GroupIds);
+        Assert.Equal([9], (await harness.GetNodeAsync("node-c")).GroupIds);
+    }
+
+    [Fact]
+    public async Task DeleteServerGroupAsync_removes_group_membership_from_nodes()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.MutationService.SaveNodeAsync(
+            "node-a",
+            new UpsertNodeRequest { DisplayName = "Node A", GroupIds = [7, 9], Config = new NodeServiceConfig() },
+            CancellationToken.None);
+        await harness.MutationService.SaveServerGroupAsync(7, "VIP", ["node-a"], CancellationToken.None);
+
+        await harness.MutationService.DeleteServerGroupAsync(7, CancellationToken.None);
+
+        Assert.Equal([9], (await harness.GetNodeAsync("node-a")).GroupIds);
+    }
+
+    [Fact]
     public async Task SaveUserAsync_increments_only_affected_nodes_for_scoped_user_changes()
     {
         using var harness = new PanelMutationHarness();
@@ -1365,17 +1451,20 @@ public sealed class PanelMutationServiceTests
                     DbType = "sqlite",
                     DbConnectionString = $"Data Source={dbPath}"
                 });
+            NodeConnectionRegistry = new NodeConnectionRegistry();
 
             var snapshotBuilder = new PanelSnapshotBuilder(DatabaseService);
             var pushService = new ControlPlanePushService(
                 snapshotBuilder,
-                new NodeConnectionRegistry(),
+                NodeConnectionRegistry,
                 NullLogger<ControlPlanePushService>.Instance);
 
-            MutationService = new PanelMutationService(DatabaseService, pushService, _panelHttpsRuntime);
+            MutationService = new PanelMutationService(DatabaseService, pushService, NodeConnectionRegistry, _panelHttpsRuntime);
         }
 
         public DatabaseService DatabaseService { get; }
+
+        public NodeConnectionRegistry NodeConnectionRegistry { get; }
 
         public PanelMutationService MutationService { get; }
 

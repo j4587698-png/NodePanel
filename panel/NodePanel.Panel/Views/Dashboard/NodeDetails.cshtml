@@ -233,6 +233,14 @@
         <p class="muted">节点运行态与遥测数据已经从编辑页拆出。当前节点按 `@Model.Form.TelemetryFlushIntervalSeconds` 秒上报一次，本页每 `@autoRefreshSeconds` 秒自动刷新。</p>
     </div>
     <div class="page-actions">
+        @if (!Model.Runtime.Connected)
+        {
+            <form asp-action="DeleteNode" asp-route-nodeId="@Model.Form.NodeId" method="post" class="inline-form" onsubmit="return confirm('确定要删除这个离线节点吗？');">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="returnUrl" value='@Url.Action("Nodes", "Dashboard")' />
+                <button type="submit" class="button button--danger">删除节点</button>
+            </form>
+        }
         <a class="button" asp-action="Nodes">返回节点列表</a>
         <a class="button button--primary" asp-action="NodeEdit" asp-route-nodeId="@Model.Form.NodeId">编辑节点</a>
     </div>

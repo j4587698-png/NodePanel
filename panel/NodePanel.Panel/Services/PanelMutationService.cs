@@ -9,22 +9,50 @@ public sealed class PanelMutationService
 {
     private readonly ControlPlanePushService _controlPlanePushService;
     private readonly DatabaseService _db;
+    private readonly NodeConnectionRegistry _nodeConnectionRegistry;
     private readonly PanelHttpsRuntime _panelHttpsRuntime;
 
-    public PanelMutationService(DatabaseService db, ControlPlanePushService controlPlanePushService, PanelHttpsRuntime panelHttpsRuntime)
+    public PanelMutationService(
+        DatabaseService db,
+        ControlPlanePushService controlPlanePushService,
+        NodeConnectionRegistry nodeConnectionRegistry,
+        PanelHttpsRuntime panelHttpsRuntime)
     {
         _db = db;
         _controlPlanePushService = controlPlanePushService;
+        _nodeConnectionRegistry = nodeConnectionRegistry;
         _panelHttpsRuntime = panelHttpsRuntime;
     }
 
     public async Task SaveServerGroupAsync(int groupId, string name, CancellationToken cancellationToken)
+        => await SaveServerGroupAsync(groupId, name, Array.Empty<string>(), updateNodeMembership: false, cancellationToken)
+            .ConfigureAwait(false);
+
+    public async Task SaveServerGroupAsync(
+        int groupId,
+        string name,
+        IReadOnlyList<string> nodeIds,
+        CancellationToken cancellationToken)
+        => await SaveServerGroupAsync(groupId, name, nodeIds, updateNodeMembership: true, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task SaveServerGroupAsync(
+        int groupId,
+        string name,
+        IReadOnlyList<string> nodeIds,
+        bool updateNodeMembership,
+        CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
         var existing = await _db.FSql.Select<ServerGroupEntity>().Where(x => x.GroupId == groupId).FirstAsync(cancellationToken);
         var entity = existing ?? new ServerGroupEntity { GroupId = groupId };
         entity.Name = name;
         await _db.FSql.InsertOrUpdate<ServerGroupEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
+
+        if (updateNodeMembership && groupId > 0)
+        {
+            await UpdateServerGroupNodesAsync(groupId, nodeIds, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task DeleteServerGroupAsync(int groupId, CancellationToken cancellationToken)
@@ -36,7 +64,34 @@ public sealed class PanelMutationService
         {
             throw new InvalidOperationException($"不能删除组 {groupId}，因为有 {usersUsing} 个用户和 {plansUsing} 个套餐正在使用它。");
         }
+        await UpdateServerGroupNodesAsync(groupId, Array.Empty<string>(), cancellationToken).ConfigureAwait(false);
         await _db.FSql.Delete<ServerGroupEntity>().Where(g => g.GroupId == groupId).ExecuteAffrowsAsync(cancellationToken);
+    }
+
+    private async Task UpdateServerGroupNodesAsync(
+        int groupId,
+        IReadOnlyList<string> selectedNodeIds,
+        CancellationToken cancellationToken)
+    {
+        var selected = NormalizeNodeIds(selectedNodeIds).ToHashSet(StringComparer.Ordinal);
+        var nodes = await _db.FSql.Select<NodeEntity>().ToListAsync(cancellationToken);
+        foreach (var node in nodes)
+        {
+            var currentGroupIds = NormalizeGroupIds(node.GroupIds);
+            var hasGroup = currentGroupIds.Contains(groupId);
+            var shouldHaveGroup = selected.Contains(node.NodeId);
+            if (hasGroup == shouldHaveGroup)
+            {
+                continue;
+            }
+
+            node.GroupIds = shouldHaveGroup
+                ? NormalizeGroupIds(currentGroupIds.Concat([groupId]))
+                : NormalizeGroupIds(currentGroupIds.Where(id => id != groupId));
+            await _db.FSql.InsertOrUpdate<NodeEntity>()
+                .SetSource(node)
+                .ExecuteAffrowsAsync(cancellationToken);
+        }
     }
 
     public async Task<PanelNodeRecord> SaveNodeAsync(string nodeId, UpsertNodeRequest request, CancellationToken cancellationToken)
@@ -62,6 +117,42 @@ public sealed class PanelMutationService
 
         await _controlPlanePushService.PushSnapshotsAsync(new[] { nodeId }, cancellationToken).ConfigureAwait(false);
         return entity.ToRecord();
+    }
+
+    public async Task<bool> DeleteNodeAsync(string nodeId, CancellationToken cancellationToken)
+    {
+        if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
+
+        var normalizedNodeId = NodeFormValueCodec.TrimOrEmpty(nodeId);
+        if (string.IsNullOrWhiteSpace(normalizedNodeId))
+        {
+            throw new InvalidOperationException("节点 ID 不能为空。");
+        }
+
+        if (_nodeConnectionRegistry.IsConnected(normalizedNodeId))
+        {
+            throw new InvalidOperationException($"节点 {normalizedNodeId} 当前在线，不能删除。请先停止节点服务，确认离线后再删除。");
+        }
+
+        var existing = await _db.FSql.Select<NodeEntity>()
+            .Where(x => x.NodeId == normalizedNodeId)
+            .FirstAsync(cancellationToken);
+        if (existing is null)
+        {
+            return false;
+        }
+
+        if (!_nodeConnectionRegistry.TryRemoveDisconnected(normalizedNodeId))
+        {
+            throw new InvalidOperationException($"节点 {normalizedNodeId} 当前在线，不能删除。请先停止节点服务，确认离线后再删除。");
+        }
+
+        await RemoveDeletedNodeFromExplicitUserBindingsAsync(normalizedNodeId, cancellationToken).ConfigureAwait(false);
+        await _db.FSql.Delete<NodeEntity>()
+            .Where(x => x.NodeId == normalizedNodeId)
+            .ExecuteAffrowsAsync(cancellationToken);
+
+        return true;
     }
 
     public async Task<PanelUserRecord> SaveUserAsync(string userId, UpsertUserRequest request, CancellationToken cancellationToken)
@@ -433,6 +524,32 @@ public sealed class PanelMutationService
         }
     }
 
+    private async Task RemoveDeletedNodeFromExplicitUserBindingsAsync(string nodeId, CancellationToken cancellationToken)
+    {
+        var users = await _db.FSql.Select<UserEntity>().ToListAsync(cancellationToken);
+        foreach (var user in users)
+        {
+            var currentNodeIds = user.NodeIds;
+            if (currentNodeIds.Count == 0 || !currentNodeIds.Contains(nodeId, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            var remainingNodeIds = currentNodeIds
+                .Where(id => !string.Equals(id, nodeId, StringComparison.Ordinal))
+                .ToArray();
+            if (remainingNodeIds.Length == 0)
+            {
+                continue;
+            }
+
+            user.NodeIds = remainingNodeIds;
+            await _db.FSql.InsertOrUpdate<UserEntity>()
+                .SetSource(user)
+                .ExecuteAffrowsAsync(cancellationToken);
+        }
+    }
+
     private static IReadOnlyList<string> ResolveAffectedNodeIds(
         IReadOnlyList<string> allNodeIds,
         IReadOnlyList<string>? originalNodeIds,
@@ -518,6 +635,13 @@ public sealed class PanelMutationService
             .Select(static nodeId => nodeId.Trim())
             .Distinct(StringComparer.Ordinal)
             .OrderBy(static nodeId => nodeId, StringComparer.Ordinal)
+            .ToArray();
+
+    private static IReadOnlyList<int> NormalizeGroupIds(IEnumerable<int> groupIds)
+        => groupIds
+            .Where(static groupId => groupId > 0)
+            .Distinct()
+            .OrderBy(static groupId => groupId)
             .ToArray();
 
     private static NodeServiceConfig NormalizeNodeConfig(NodeServiceConfig requested)
