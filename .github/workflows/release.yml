@@ -163,6 +163,7 @@ jobs:
           files: |
             artifacts/linux/*.tar.gz
             scripts/linux/install.sh
+            scripts/linux/nodepanel.sh
             scripts/linux/nodepanel-panel.sh
             scripts/linux/nodepanel-service.sh
             scripts/linux/lib/nodepanel-common.sh

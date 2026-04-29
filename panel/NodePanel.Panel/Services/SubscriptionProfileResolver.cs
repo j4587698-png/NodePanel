@@ -231,6 +231,8 @@ public sealed class SubscriptionProfileResolver
                 Name = profile.LoadBalanceGroupName,
                 Type = "load-balance",
                 Proxies = allProxyNames,
+                Url = request.Settings.TestUrl,
+                IntervalSeconds = request.Settings.TestIntervalSeconds,
                 Strategy = "round-robin"
             });
             proxySelectorTargets.Add(profile.LoadBalanceGroupName);

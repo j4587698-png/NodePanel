@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
@@ -43,6 +44,28 @@ public sealed class InboundServerRuntimeSupportTests
         var authOptions = TlsInboundConnectionAcceptor.BuildAuthenticationOptions(["h2"], tlsOptions);
 
         Assert.True(authOptions.AllowTlsResume);
+    }
+
+    [Fact]
+    public void BuildAuthenticationOptions_includes_configured_intermediate_certificates()
+    {
+        using var certificateChain = TestServerCertificateChain.Create("edge.example.com");
+        var tlsOptions = new RuntimeTlsOptions
+        {
+            Certificate = certificateChain.Leaf,
+            AdditionalCertificates = [certificateChain.Intermediate]
+        };
+
+        var authOptions = TlsInboundConnectionAcceptor.BuildAuthenticationOptions(["h2"], tlsOptions);
+        Assert.NotNull(authOptions.ServerCertificateContext);
+        var certificateContext = authOptions.ServerCertificateContext;
+        var intermediateCertificatesProperty = certificateContext.GetType().GetProperty("IntermediateCertificates");
+
+        Assert.NotNull(intermediateCertificatesProperty);
+        var intermediateCertificates = Assert.IsAssignableFrom<IEnumerable<X509Certificate2>>(
+            intermediateCertificatesProperty!.GetValue(certificateContext));
+        var intermediate = Assert.Single(intermediateCertificates);
+        Assert.Equal(certificateChain.Intermediate.Thumbprint, intermediate.Thumbprint);
     }
 
     [Fact]
@@ -337,5 +360,108 @@ public sealed class InboundServerRuntimeSupportTests
         }
 
         return false;
+    }
+
+    private sealed class TestServerCertificateChain : IDisposable
+    {
+        private TestServerCertificateChain(
+            X509Certificate2 root,
+            X509Certificate2 intermediate,
+            X509Certificate2 leaf)
+        {
+            Root = root;
+            Intermediate = intermediate;
+            Leaf = leaf;
+        }
+
+        public X509Certificate2 Root { get; }
+
+        public X509Certificate2 Intermediate { get; }
+
+        public X509Certificate2 Leaf { get; }
+
+        public static TestServerCertificateChain Create(string commonName)
+        {
+            var now = DateTimeOffset.UtcNow;
+            using var rootKey = RSA.Create(2048);
+            using var intermediateKey = RSA.Create(2048);
+            using var leafKey = RSA.Create(2048);
+
+            var rootRequest = CreateCertificateRequest("NodePanel Test Root", rootKey, isCertificateAuthority: true);
+            var root = rootRequest.CreateSelfSigned(now.AddDays(-1), now.AddDays(30));
+
+            var intermediateRequest = CreateCertificateRequest("NodePanel Test Intermediate", intermediateKey, isCertificateAuthority: true);
+            using var intermediatePublic = intermediateRequest.Create(root, now.AddDays(-1), now.AddDays(30), CreateSerialNumber());
+            using var intermediateWithPrivateKey = intermediatePublic.CopyWithPrivateKey(intermediateKey);
+            var intermediate = X509CertificateLoader.LoadCertificate(
+                intermediateWithPrivateKey.Export(X509ContentType.Cert));
+
+            var leafRequest = CreateServerCertificateRequest(commonName, leafKey);
+            using var leafPublic = leafRequest.Create(intermediateWithPrivateKey, now.AddDays(-1), now.AddDays(30), CreateSerialNumber());
+            var leaf = leafPublic.CopyWithPrivateKey(leafKey);
+
+            return new TestServerCertificateChain(root, intermediate, leaf);
+        }
+
+        public void Dispose()
+        {
+            Leaf.Dispose();
+            Intermediate.Dispose();
+            Root.Dispose();
+        }
+
+        private static CertificateRequest CreateCertificateRequest(
+            string commonName,
+            RSA key,
+            bool isCertificateAuthority)
+        {
+            var request = new CertificateRequest(
+                $"CN={commonName}",
+                key,
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(
+                isCertificateAuthority,
+                false,
+                0,
+                critical: true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(
+                X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+                critical: true));
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+            return request;
+        }
+
+        private static CertificateRequest CreateServerCertificateRequest(string commonName, RSA key)
+        {
+            var request = new CertificateRequest(
+                $"CN={commonName}",
+                key,
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(
+                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+                critical: true));
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+                new OidCollection
+                {
+                    new("1.3.6.1.5.5.7.3.1")
+                },
+                critical: false));
+
+            var sanBuilder = new SubjectAlternativeNameBuilder();
+            sanBuilder.AddDnsName(commonName);
+            request.CertificateExtensions.Add(sanBuilder.Build());
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+            return request;
+        }
+
+        private static byte[] CreateSerialNumber()
+        {
+            var serialNumber = RandomNumberGenerator.GetBytes(16);
+            serialNumber[0] &= 0x7F;
+            return serialNumber;
+        }
     }
 }

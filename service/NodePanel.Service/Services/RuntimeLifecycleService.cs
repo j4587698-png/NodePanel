@@ -17,7 +17,7 @@ public sealed class RuntimeLifecycleService : BackgroundService
     private readonly IRuntime _runtime;
     private readonly XrayRuntimeOptions _xrayRuntimeOptions;
 
-    private X509Certificate2? _loadedCertificate;
+    private LoadedCertificatePackage? _loadedCertificatePackage;
     private bool _runtimeStarted;
 
     public RuntimeLifecycleService(
@@ -104,7 +104,7 @@ public sealed class RuntimeLifecycleService : BackgroundService
         PreparedRuntimePlan preparedPlan,
         CancellationToken cancellationToken)
     {
-        var previousCertificate = _loadedCertificate;
+        var previousCertificatePackage = _loadedCertificatePackage;
 
         try
         {
@@ -118,14 +118,14 @@ public sealed class RuntimeLifecycleService : BackgroundService
                 _runtimeStarted = true;
             }
 
-            _loadedCertificate = preparedPlan.DetachCertificate();
+            _loadedCertificatePackage = preparedPlan.DetachCertificatePackage();
             _appliedRuntimeSnapshotStore.MarkApplied(snapshot);
-            previousCertificate?.Dispose();
+            previousCertificatePackage?.Dispose();
         }
         catch
         {
-            previousCertificate?.Dispose();
-            _loadedCertificate = null;
+            previousCertificatePackage?.Dispose();
+            _loadedCertificatePackage = null;
             throw;
         }
         finally
@@ -155,10 +155,13 @@ public sealed class RuntimeLifecycleService : BackgroundService
 
         try
         {
-            var certificate = CertificateLoader.Load(snapshot.Config.Certificate);
+            var certificatePackage = CertificateLoader.LoadPackage(snapshot.Config.Certificate);
             preparedPlan = new PreparedRuntimePlan(
-                snapshot.CreateRuntimePlan(certificate, _xrayRuntimeOptions.UseCone),
-                certificate);
+                snapshot.CreateRuntimePlan(
+                    certificatePackage.Certificate,
+                    certificatePackage.AdditionalCertificates,
+                    _xrayRuntimeOptions.UseCone),
+                certificatePackage);
             error = null;
             return true;
         }
@@ -172,8 +175,8 @@ public sealed class RuntimeLifecycleService : BackgroundService
 
     private async Task StopRuntimeAsync(CancellationToken cancellationToken)
     {
-        var certificate = _loadedCertificate;
-        _loadedCertificate = null;
+        var certificatePackage = _loadedCertificatePackage;
+        _loadedCertificatePackage = null;
 
         try
         {
@@ -185,7 +188,7 @@ public sealed class RuntimeLifecycleService : BackgroundService
         finally
         {
             _runtimeStarted = false;
-            certificate?.Dispose();
+            certificatePackage?.Dispose();
         }
     }
 
@@ -403,27 +406,27 @@ public sealed class RuntimeLifecycleService : BackgroundService
 
     private sealed class PreparedRuntimePlan : IDisposable
     {
-        private X509Certificate2? _certificate;
+        private LoadedCertificatePackage? _certificatePackage;
 
-        public PreparedRuntimePlan(RuntimePlan plan, X509Certificate2? certificate)
+        public PreparedRuntimePlan(RuntimePlan plan, LoadedCertificatePackage? certificatePackage)
         {
             Plan = plan;
-            _certificate = certificate;
+            _certificatePackage = certificatePackage;
         }
 
         public RuntimePlan Plan { get; }
 
-        public X509Certificate2? DetachCertificate()
+        public LoadedCertificatePackage? DetachCertificatePackage()
         {
-            var certificate = _certificate;
-            _certificate = null;
-            return certificate;
+            var certificatePackage = _certificatePackage;
+            _certificatePackage = null;
+            return certificatePackage;
         }
 
         public void Dispose()
         {
-            _certificate?.Dispose();
-            _certificate = null;
+            _certificatePackage?.Dispose();
+            _certificatePackage = null;
         }
     }
 }

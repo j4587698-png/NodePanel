@@ -244,9 +244,7 @@ public static class SubscriptionFormatRenderer
         builder.AppendLine($"  - name: {YamlString(group.Name)}");
         builder.AppendLine($"    type: {group.Type}");
 
-        if ((string.Equals(group.Type, "url-test", StringComparison.Ordinal) ||
-             string.Equals(group.Type, "fallback", StringComparison.Ordinal)) &&
-            !string.IsNullOrWhiteSpace(group.Url))
+        if (RequiresClashProbeFields(group.Type) && !string.IsNullOrWhiteSpace(group.Url))
         {
             builder.AppendLine($"    url: {YamlString(group.Url)}");
             builder.AppendLine($"    interval: {Math.Max(60, group.IntervalSeconds)}");
@@ -328,9 +326,7 @@ public static class SubscriptionFormatRenderer
         var values = new List<string> { $"{EscapeSurge(group.Name)} = {group.Type}" };
         values.AddRange(group.Proxies.Select(EscapeSurge));
 
-        if ((string.Equals(group.Type, "url-test", StringComparison.Ordinal) ||
-             string.Equals(group.Type, "fallback", StringComparison.Ordinal)) &&
-            !string.IsNullOrWhiteSpace(group.Url))
+        if (RequiresBasicProbeFields(group.Type) && !string.IsNullOrWhiteSpace(group.Url))
         {
             values.Add($"url={EscapeSurge(group.Url)}");
             values.Add($"interval={Math.Max(60, group.IntervalSeconds)}");
@@ -343,6 +339,14 @@ public static class SubscriptionFormatRenderer
 
         return string.Join(",", values);
     }
+
+    private static bool RequiresClashProbeFields(string groupType)
+        => RequiresBasicProbeFields(groupType) ||
+           string.Equals(groupType, "load-balance", StringComparison.Ordinal);
+
+    private static bool RequiresBasicProbeFields(string groupType)
+        => string.Equals(groupType, "url-test", StringComparison.Ordinal) ||
+           string.Equals(groupType, "fallback", StringComparison.Ordinal);
 
     private static string BuildQuantumultXServerLine(PanelUserRecord user, SubscriptionRenderProxy proxy)
     {

@@ -10,6 +10,7 @@ BOOTSTRAP_HELPER_REPO=""
 BOOTSTRAP_HELPER_TAG=""
 BOOTSTRAP_FORWARD_ARGS=()
 BOOTSTRAP_TEMP_ROOT=""
+BOOTSTRAP_MANAGER_SCRIPT=""
 
 usage() {
     cat <<'EOF'
@@ -40,6 +41,9 @@ Examples:
   bash install.sh service
   bash install.sh service install --github-repo owner/repo --version v0.1.0 --panel https://panel.example.com --node-id node-001 --access-token your-token
   bash install.sh service update
+
+After install:
+  sudo nodepanel
 EOF
 }
 
@@ -206,6 +210,25 @@ np_bootstrap_download_file() {
     np_bootstrap_die "Neither curl nor wget is available for downloading helper scripts."
 }
 
+np_bootstrap_try_download_file() {
+    local url="$1"
+    local output_path="$2"
+
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fL --retry 3 --connect-timeout 15 -o "$output_path" "$url"; then
+            return 0
+        fi
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        if wget -O "$output_path" "$url"; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 np_bootstrap_build_asset_url() {
     local github_repo="$1"
     local asset_name="$2"
@@ -226,16 +249,38 @@ np_bootstrap_download_helpers() {
     local component_asset
     component_asset="nodepanel-${BOOTSTRAP_COMPONENT}.sh"
     local common_asset="nodepanel-common.sh"
+    local manager_asset="nodepanel.sh"
     local component_url
     local common_url
+    local manager_url
 
     component_url="$(np_bootstrap_build_asset_url "$BOOTSTRAP_HELPER_REPO" "$component_asset" "$BOOTSTRAP_HELPER_TAG")"
     common_url="$(np_bootstrap_build_asset_url "$BOOTSTRAP_HELPER_REPO" "$common_asset" "$BOOTSTRAP_HELPER_TAG")"
+    manager_url="$(np_bootstrap_build_asset_url "$BOOTSTRAP_HELPER_REPO" "$manager_asset" "$BOOTSTRAP_HELPER_TAG")"
 
     np_bootstrap_log "Downloading ${component_asset} from ${BOOTSTRAP_HELPER_REPO}${BOOTSTRAP_HELPER_TAG:+ (${BOOTSTRAP_HELPER_TAG})}"
     np_bootstrap_download_file "$component_url" "${BOOTSTRAP_TEMP_ROOT}/${component_asset}"
     np_bootstrap_download_file "$common_url" "${BOOTSTRAP_TEMP_ROOT}/${common_asset}"
     chmod 755 "${BOOTSTRAP_TEMP_ROOT}/${component_asset}"
+
+    if np_bootstrap_try_download_file "$manager_url" "${BOOTSTRAP_TEMP_ROOT}/${manager_asset}"; then
+        chmod 755 "${BOOTSTRAP_TEMP_ROOT}/${manager_asset}"
+        BOOTSTRAP_MANAGER_SCRIPT="${BOOTSTRAP_TEMP_ROOT}/${manager_asset}"
+    else
+        BOOTSTRAP_MANAGER_SCRIPT=""
+        np_bootstrap_log "Optional ${manager_asset} was not found in the release. Skipping common manager installation."
+    fi
+}
+
+np_bootstrap_run_component() {
+    local -a env_args
+    env_args=("NODEPANEL_DEFAULT_GITHUB_REPO=${BOOTSTRAP_HELPER_REPO}")
+
+    if [[ -n "$BOOTSTRAP_MANAGER_SCRIPT" ]]; then
+        env_args+=("NODEPANEL_MANAGER_SCRIPT_SOURCE=${BOOTSTRAP_MANAGER_SCRIPT}")
+    fi
+
+    env "${env_args[@]}" "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" "$@"
 }
 
 main() {
@@ -244,25 +289,17 @@ main() {
 
     if [[ -n "$BOOTSTRAP_COMMAND" ]]; then
         if [[ "${#BOOTSTRAP_FORWARD_ARGS[@]}" -gt 0 ]]; then
-            NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
-                "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
-                "$BOOTSTRAP_COMMAND" \
-                "${BOOTSTRAP_FORWARD_ARGS[@]}"
+            np_bootstrap_run_component "$BOOTSTRAP_COMMAND" "${BOOTSTRAP_FORWARD_ARGS[@]}"
         else
-            NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
-                "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
-                "$BOOTSTRAP_COMMAND"
+            np_bootstrap_run_component "$BOOTSTRAP_COMMAND"
         fi
         return 0
     fi
 
     if [[ "${#BOOTSTRAP_FORWARD_ARGS[@]}" -gt 0 ]]; then
-        NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
-            "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh" \
-            "${BOOTSTRAP_FORWARD_ARGS[@]}"
+        np_bootstrap_run_component "${BOOTSTRAP_FORWARD_ARGS[@]}"
     else
-        NODEPANEL_DEFAULT_GITHUB_REPO="$BOOTSTRAP_HELPER_REPO" \
-            "${BOOTSTRAP_TEMP_ROOT}/nodepanel-${BOOTSTRAP_COMPONENT}.sh"
+        np_bootstrap_run_component
     fi
 }
 

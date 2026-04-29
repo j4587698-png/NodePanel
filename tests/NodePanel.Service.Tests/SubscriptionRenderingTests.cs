@@ -142,6 +142,93 @@ public sealed class SubscriptionRenderingTests
     }
 
     [Fact]
+    public void RenderClash_outputs_probe_fields_for_every_probe_group()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SubscriptionSettingKeys.TestUrl] = "https://cp.cloudflare.com/generate_204",
+                [SubscriptionSettingKeys.TestIntervalSeconds] = "600"
+            });
+        var catalog = CreateCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
+
+        foreach (var group in plan.Groups.Where(static group => IsProbeGroup(group.Type)))
+        {
+            var block = GetClashGroupBlock(rendered.Content, group.Name);
+            Assert.Contains("    url: 'https://cp.cloudflare.com/generate_204'", block, StringComparison.Ordinal);
+            Assert.Contains("    interval: 600", block, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("    strategy: round-robin", GetClashGroupBlock(rendered.Content, "Load Balance"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderClash_keeps_generated_select_groups_without_probe_fields()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SubscriptionSettingKeys.TestUrl] = "https://cp.cloudflare.com/generate_204",
+                [SubscriptionSettingKeys.TestIntervalSeconds] = "600"
+            });
+        var catalog = CreateCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
+
+        foreach (var group in plan.Groups.Where(static group => string.Equals(group.Type, "select", StringComparison.Ordinal)))
+        {
+            var block = GetClashGroupBlock(rendered.Content, group.Name);
+            Assert.DoesNotContain("    url:", block, StringComparison.Ordinal);
+            Assert.DoesNotContain("    interval:", block, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void RenderClash_custom_load_balance_group_uses_default_probe_fields()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Minimal,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SubscriptionSettingKeys.CustomGroupsJson] =
+                    """
+                    [
+                      {
+                        "name": "Node Pool",
+                        "type": "load-balance",
+                        "includeAllNodes": true
+                      }
+                    ]
+                    """
+            });
+        var catalog = CreateCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
+        var block = GetClashGroupBlock(rendered.Content, "Node Pool");
+
+        Assert.Contains("    type: load-balance", block, StringComparison.Ordinal);
+        Assert.Contains("    url: 'http://www.gstatic.com/generate_204'", block, StringComparison.Ordinal);
+        Assert.Contains("    interval: 300", block, StringComparison.Ordinal);
+        Assert.Contains("    strategy: round-robin", block, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RenderClash_managed_profile_uses_site_name_primary_group()
     {
         var resolver = new SubscriptionProfileResolver();
@@ -521,6 +608,28 @@ public sealed class SubscriptionRenderingTests
         => content
             .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
             .First(line => line.StartsWith(prefix, StringComparison.Ordinal));
+
+    private static string GetClashGroupBlock(string content, string groupName)
+    {
+        var marker = $"  - name: '{groupName.Replace("'", "''", StringComparison.Ordinal)}'";
+        var start = content.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Clash group '{groupName}' was not rendered.");
+
+        var next = content.IndexOf("\n  - name:", start + marker.Length, StringComparison.Ordinal);
+        if (next < 0)
+        {
+            next = content.IndexOf("\nrules:", start + marker.Length, StringComparison.Ordinal);
+        }
+
+        return next < 0
+            ? content[start..]
+            : content[start..next];
+    }
+
+    private static bool IsProbeGroup(string groupType)
+        => string.Equals(groupType, "url-test", StringComparison.Ordinal) ||
+           string.Equals(groupType, "fallback", StringComparison.Ordinal) ||
+           string.Equals(groupType, "load-balance", StringComparison.Ordinal);
 
     private static SubscriptionCatalog CreateCatalogWithEndpoints(
         PanelNodeRecord node,

@@ -171,6 +171,8 @@ public sealed record RuntimeTlsOptions
 {
     public required X509Certificate2 Certificate { get; init; }
 
+    public IReadOnlyList<X509Certificate2> AdditionalCertificates { get; init; } = Array.Empty<X509Certificate2>();
+
     public RuntimeTlsServerNamePolicyOptions ServerNamePolicy { get; init; } = new();
 
     public RuntimeTlsClientHelloPolicyOptions ClientHelloPolicy { get; init; } = RuntimeTlsClientHelloPolicyOptions.Disabled;

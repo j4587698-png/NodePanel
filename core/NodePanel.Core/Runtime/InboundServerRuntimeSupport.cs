@@ -1073,7 +1073,7 @@ internal static class TlsInboundConnectionAcceptor
             ClientCertificateRequired = false
         };
 
-        TryAttachServerCertificateContext(options, serverCertificate);
+        TryAttachServerCertificateContext(options, serverCertificate, tlsOptions.AdditionalCertificates);
 
         if (applicationProtocols.Count > 0)
         {
@@ -1088,16 +1088,18 @@ internal static class TlsInboundConnectionAcceptor
 
     private static void TryAttachServerCertificateContext(
         SslServerAuthenticationOptions authenticationOptions,
-        X509Certificate2 certificate)
+        X509Certificate2 certificate,
+        IReadOnlyList<X509Certificate2> additionalCertificates)
     {
         ArgumentNullException.ThrowIfNull(authenticationOptions);
         ArgumentNullException.ThrowIfNull(certificate);
+        ArgumentNullException.ThrowIfNull(additionalCertificates);
 
         try
         {
             authenticationOptions.ServerCertificateContext = SslStreamCertificateContext.Create(
                 certificate,
-                additionalCertificates: [],
+                CreateAdditionalCertificateCollection(certificate, additionalCertificates),
                 offline: true);
         }
         catch (CryptographicException)
@@ -1106,5 +1108,42 @@ internal static class TlsInboundConnectionAcceptor
         catch (NotSupportedException)
         {
         }
+    }
+
+    private static X509Certificate2Collection CreateAdditionalCertificateCollection(
+        X509Certificate2 leafCertificate,
+        IReadOnlyList<X509Certificate2> additionalCertificates)
+    {
+        var collection = new X509Certificate2Collection();
+        if (additionalCertificates.Count == 0)
+        {
+            return collection;
+        }
+
+        var seenThumbprints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddThumbprint(seenThumbprints, leafCertificate);
+
+        foreach (var certificate in additionalCertificates)
+        {
+            if (certificate is null || !AddThumbprint(seenThumbprints, certificate))
+            {
+                continue;
+            }
+
+            collection.Add(certificate);
+        }
+
+        return collection;
+    }
+
+    private static bool AddThumbprint(ISet<string> seenThumbprints, X509Certificate2 certificate)
+    {
+        var thumbprint = certificate.Thumbprint;
+        if (string.IsNullOrWhiteSpace(thumbprint))
+        {
+            return true;
+        }
+
+        return seenThumbprints.Add(thumbprint);
     }
 }

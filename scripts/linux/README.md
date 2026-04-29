@@ -11,6 +11,8 @@ This directory contains Linux deployment helpers for both components:
   Installs, updates and manages the panel with `systemd`.
 - `nodepanel-service.sh`
   Installs, updates and manages the service with `systemd`.
+- `nodepanel.sh`
+  Common manager command installed as `nodepanel`; opens a menu for installed panel/service components.
 
 ## Build Packages
 
@@ -80,6 +82,12 @@ Install panel from the latest release:
 sudo bash install.sh panel
 ```
 
+The install flow also registers the common manager command:
+
+```bash
+sudo nodepanel
+```
+
 Install service from the latest release:
 
 ```bash
@@ -130,6 +138,7 @@ Default paths:
 
 - install root: `/usr/local/nodepanel-panel`
 - command: `/usr/local/bin/nodepanel-panel`
+- common command: `/usr/local/bin/nodepanel`
 - env file: `/etc/nodepanel/panel.env`
 - systemd unit: `nodepanel-panel`
 
@@ -187,6 +196,7 @@ Default paths:
 
 - install root: `/usr/local/nodepanel-service`
 - command: `/usr/local/bin/nodepanel-service`
+- common command: `/usr/local/bin/nodepanel`
 - env file: `/etc/nodepanel/service.env`
 - systemd unit: `nodepanel-service`
 
@@ -288,6 +298,33 @@ The scripts preserve mutable files on update:
 The `update` command only applies the package when its resolved version is newer than the installed `NODEPANEL_PACKAGE_VERSION`. If the target version is the same or older, the update is skipped.
 
 ## Common Commands
+
+Common menu:
+
+```bash
+sudo nodepanel
+```
+
+The common menu can:
+
+- show panel/service status
+- update installed components
+- restart, start and stop components
+- view or follow logs
+- reconfigure service node information
+- enable or disable auto start
+- open the service advanced menu
+- uninstall panel/service with confirmation
+
+Direct common commands:
+
+```bash
+nodepanel status
+sudo nodepanel update all
+sudo nodepanel restart service
+sudo nodepanel service configure
+sudo nodepanel log service -f 200
+```
 
 ```bash
 sudo nodepanel-panel status

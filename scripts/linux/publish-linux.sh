@@ -107,6 +107,7 @@ package_component() {
     local package_dir="${work_root}/${package_name}"
     local tarball_path="${OUTPUT_ROOT}/${package_name}.tar.gz"
     local common_script_path="${SCRIPT_DIR}/lib/nodepanel-common.sh"
+    local manager_script_path="${SCRIPT_DIR}/nodepanel.sh"
     local readme_path="${SCRIPT_DIR}/README.md"
     local build_time
     local git_commit
@@ -163,8 +164,10 @@ package_component() {
     cp -a "$publish_dir/." "$package_dir/app/"
     cp "$installer_path" "$package_dir/install.sh"
     cp "$common_script_path" "$package_dir/nodepanel-common.sh"
+    cp "$manager_script_path" "$package_dir/nodepanel.sh"
     cp "$readme_path" "$package_dir/README.md"
     chmod +x "$package_dir/install.sh" || true
+    chmod +x "$package_dir/nodepanel.sh" || true
 
     build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     git_commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)"

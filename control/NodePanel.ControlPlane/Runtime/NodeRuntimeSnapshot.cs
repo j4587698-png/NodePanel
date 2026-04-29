@@ -58,9 +58,17 @@ public sealed record NodeRuntimeSnapshot
         };
 
     public RuntimePlan CreateRuntimePlan(X509Certificate2? certificate, bool useCone = true)
-        => CreateRuntimePlan(CreateTlsOptions(certificate), useCone);
+        => CreateRuntimePlan(certificate, Array.Empty<X509Certificate2>(), useCone);
 
-    private RuntimeTlsOptions? CreateTlsOptions(X509Certificate2? certificate)
+    public RuntimePlan CreateRuntimePlan(
+        X509Certificate2? certificate,
+        IReadOnlyList<X509Certificate2> additionalCertificates,
+        bool useCone = true)
+        => CreateRuntimePlan(CreateTlsOptions(certificate, additionalCertificates), useCone);
+
+    private RuntimeTlsOptions? CreateTlsOptions(
+        X509Certificate2? certificate,
+        IReadOnlyList<X509Certificate2> additionalCertificates)
     {
         if (certificate is null)
         {
@@ -70,6 +78,7 @@ public sealed record NodeRuntimeSnapshot
         return new RuntimeTlsOptions
         {
             Certificate = certificate,
+            AdditionalCertificates = additionalCertificates.ToArray(),
             ServerNamePolicy = new RuntimeTlsServerNamePolicyOptions
             {
                 RejectUnknownServerName = Config.Certificate.RejectUnknownSni,

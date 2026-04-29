@@ -732,6 +732,8 @@ np_install_runtime_scripts() {
     local common_script_source="$2"
     local installed_script_path="$3"
     local installed_common_dir="$4"
+    local manager_script_source="${5:-}"
+    local installed_manager_path="${6:-}"
     local installed_common_path="${installed_common_dir}/nodepanel-common.sh"
 
     mkdir -p "$installed_common_dir"
@@ -743,6 +745,29 @@ np_install_runtime_scripts() {
     if [[ ! -e "$installed_script_path" || ! "$component_script_source" -ef "$installed_script_path" ]]; then
         install -m 755 "$component_script_source" "$installed_script_path"
     fi
+
+    if [[ -n "$manager_script_source" && -n "$installed_manager_path" && -f "$manager_script_source" ]]; then
+        if [[ ! -e "$installed_manager_path" || ! "$manager_script_source" -ef "$installed_manager_path" ]]; then
+            install -m 755 "$manager_script_source" "$installed_manager_path"
+        fi
+    fi
+}
+
+np_resolve_manager_script_source() {
+    local script_dir="$1"
+    local env_source="${NODEPANEL_MANAGER_SCRIPT_SOURCE:-}"
+
+    if [[ -n "$env_source" && -f "$env_source" ]]; then
+        np_abs_path "$env_source"
+        return 0
+    fi
+
+    if [[ -f "${script_dir}/nodepanel.sh" ]]; then
+        np_abs_path "${script_dir}/nodepanel.sh"
+        return 0
+    fi
+
+    printf '\n'
 }
 
 np_copy_dir_contents() {

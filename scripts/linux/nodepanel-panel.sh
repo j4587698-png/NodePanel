@@ -27,6 +27,7 @@ readonly INSTALL_ROOT="/usr/local/nodepanel-panel"
 readonly APP_DIR="${INSTALL_ROOT}/app"
 readonly DATA_DIR="${INSTALL_ROOT}/data"
 readonly BIN_PATH="/usr/local/bin/nodepanel-panel"
+readonly MANAGER_BIN_PATH="/usr/local/bin/nodepanel"
 readonly COMMON_INSTALL_DIR="/usr/local/lib/nodepanel"
 readonly ENV_DIR="/etc/nodepanel"
 readonly ENV_FILE="${ENV_DIR}/panel.env"
@@ -355,7 +356,13 @@ install_or_update() {
     preserve_existing_files "$APP_DIR" "$staged_app_dir"
     write_launcher_file "$staged_launcher"
 
-    np_install_runtime_scripts "$SELF_SCRIPT_SOURCE" "$COMMON_SCRIPT_SOURCE" "$BIN_PATH" "$COMMON_INSTALL_DIR"
+    np_install_runtime_scripts \
+        "$SELF_SCRIPT_SOURCE" \
+        "$COMMON_SCRIPT_SOURCE" \
+        "$BIN_PATH" \
+        "$COMMON_INSTALL_DIR" \
+        "$(np_resolve_manager_script_source "$SCRIPT_DIR")" \
+        "$MANAGER_BIN_PATH"
 
     if [[ ! -f "$ENV_FILE" ]]; then
         write_default_env_file
