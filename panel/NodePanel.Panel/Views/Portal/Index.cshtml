@@ -180,7 +180,7 @@ else
                 <div class="portal-referral-actions">
                     <span class="portal-inline-muted">上限：@Model.Referral.MaxInviteCodesText</span>
                     <span class="portal-inline-muted">剩余：@Model.Referral.RemainingInviteCodesText</span>
-                    <form asp-action="GenerateInviteCode" method="post" class="inline-form">
+                    <form asp-controller="UserPortal" asp-action="GenerateInviteCode" method="post" class="inline-form">
                         @Html.AntiForgeryToken()
                         <button type="submit" class="button button--primary" disabled="@(Model.Referral.CanGenerateInviteCode ? null : "disabled")">生成邀请码</button>
                     </form>
