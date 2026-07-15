@@ -135,6 +135,8 @@ else
         </article>
     </section>
 
+@if (User.Identity?.IsAuthenticated == true)
+{
     <section class="portal-grid">
         <article class="portal-card">
             <div class="card__header">
@@ -298,6 +300,7 @@ else
             </div>
         }
     </section>
+}
 
     <section class="portal-card">
         <div class="card__header">
