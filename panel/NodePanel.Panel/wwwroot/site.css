@@ -329,7 +329,7 @@ label > small { margin-top: 0; line-height: 1.5; }
    PORTAL (CYBERPUNK NEON VIBE)
    ========================================================= */
 
-.portal-shell { min-height: 100vh; padding: 40px; position: relative; overflow-x: hidden; }
+.portal-shell { min-height: 100vh; padding: 40px; position: relative; overflow: hidden; }
 /* Decorative background blurred orbs */
 .portal-shell::before { content: ""; position: absolute; top: 10%; left: -10%; width: 500px; height: 500px; background: rgba(144, 98, 255, 0.15); filter: blur(100px); border-radius: 50%; z-index: -1; pointer-events: none; }
 .portal-shell::after { content: ""; position: absolute; bottom: -10%; right: -5%; width: 600px; height: 600px; background: rgba(255, 51, 102, 0.12); filter: blur(120px); border-radius: 50%; z-index: -1; pointer-events: none; }
