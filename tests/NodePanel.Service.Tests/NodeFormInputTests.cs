@@ -276,6 +276,88 @@ public sealed class NodeFormInputTests
     }
 
     [Fact]
+    public void TryToRequest_maps_reality_server_options_only_when_reality_inbound_is_enabled()
+    {
+        var form = CreateBaseForm();
+        form.GetOrderedTrojanInbounds();
+        form.Inbounds[0].TransportSecurity = RuntimeInternetSecurityTypes.Reality;
+        form.Reality = new RealityServerFormInput
+        {
+            ServerNames = "download.microsoft.com, update.microsoft.com",
+            Dest = "download.microsoft.com:443",
+            Type = "tcp",
+            PrivateKey = "UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc",
+            ShortIds = "0123456789abcdef",
+            MaxTimeDiffMilliseconds = 30000,
+            ClientHelloPolicy = new ClientHelloPolicyFormInput
+            {
+                Enabled = true,
+                AllowedApplicationProtocols = "h2,http/1.1"
+            }
+        };
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        var inbound = NodeServiceConfigInbounds.GetProtocolTransportInbound(
+            request.Config,
+            InboundProtocols.Trojan,
+            InboundTransports.Tls);
+        Assert.Equal(RuntimeInternetTransportProtocols.Tcp, inbound.TransportProtocol);
+        Assert.Equal(RuntimeInternetSecurityTypes.Reality, inbound.TransportSecurity);
+        Assert.NotNull(request.Config.Reality);
+        Assert.Equal(["download.microsoft.com", "update.microsoft.com"], request.Config.Reality.ServerNames);
+        Assert.Equal("download.microsoft.com:443", request.Config.Reality.Dest);
+        Assert.Equal("tcp", request.Config.Reality.Type);
+        Assert.Equal("UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc", request.Config.Reality.PrivateKey);
+        Assert.Equal(["0123456789abcdef"], request.Config.Reality.ShortIds);
+        Assert.Equal(30000, request.Config.Reality.MaxTimeDiffMilliseconds);
+        Assert.True(request.Config.Reality.ClientHelloPolicy.Enabled);
+        Assert.Equal(["h2", "http/1.1"], request.Config.Reality.ClientHelloPolicy.AllowedApplicationProtocols);
+    }
+
+    [Fact]
+    public void TryToRequest_does_not_require_reality_private_key_for_tls_inbound()
+    {
+        var form = CreateBaseForm();
+        form.GetOrderedTrojanInbounds();
+        form.Inbounds[0].TransportSecurity = RuntimeInternetSecurityTypes.Tls;
+        form.Reality = new RealityServerFormInput
+        {
+            ServerNames = "download.microsoft.com",
+            Dest = "download.microsoft.com:443",
+            ShortIds = "0123456789abcdef",
+            PrivateKey = string.Empty
+        };
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.Null(request.Config.Reality);
+        var inbound = NodeServiceConfigInbounds.GetProtocolTransportInbound(
+            request.Config,
+            InboundProtocols.Trojan,
+            InboundTransports.Tls);
+        Assert.Equal(RuntimeInternetSecurityTypes.Tls, inbound.TransportSecurity);
+    }
+
+    [Fact]
+    public void PrepareForEditView_applies_reality_download_site_defaults()
+    {
+        var form = CreateBaseForm();
+        form.Reality = new RealityServerFormInput
+        {
+            ServerNames = string.Empty,
+            Dest = string.Empty
+        };
+
+        form.PrepareForEditView();
+
+        Assert.Equal("dl.google.com", form.Reality.ServerNames);
+        Assert.Equal("dl.google.com:443", form.Reality.Dest);
+    }
+
+    [Fact]
     public void FromRecord_maps_structured_fields_and_leaves_fallback_json_empty()
     {
         var record = new PanelNodeRecord
@@ -401,6 +483,66 @@ public sealed class NodeFormInputTests
         Assert.Equal("assets", request.Config.RoutingResources.ResourceDirectory);
         Assert.Equal("assets/geosite.dat", request.Config.RoutingResources.GeoSitePath);
         Assert.Equal("assets/geoip.dat", request.Config.RoutingResources.GeoIpPath);
+    }
+
+    [Fact]
+    public void FromRecord_maps_reality_server_options_and_security_selection()
+    {
+        var record = new PanelNodeRecord
+        {
+            NodeId = "node-reality",
+            DisplayName = "Node Reality",
+            Protocol = InboundProtocols.Vless,
+            Config = new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "vless-tcp-reality",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Vless,
+                        Transport = RuntimeInternetTransportProtocols.Tcp,
+                        TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                        TransportSecurity = RuntimeInternetSecurityTypes.Reality,
+                        ListenAddress = "0.0.0.0",
+                        Port = 443
+                    }
+                ],
+                Reality = new RuntimeRealityServerOptions
+                {
+                    ServerNames = ["download.microsoft.com", "update.microsoft.com"],
+                    Dest = "download.microsoft.com:443",
+                    Type = "tcp",
+                    PrivateKey = "UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc",
+                    ShortIds = ["0123456789abcdef"],
+                    MaxTimeDiffMilliseconds = 30000,
+                    ClientHelloPolicy = new RuntimeTlsClientHelloPolicyOptions
+                    {
+                        Enabled = true,
+                        AllowedApplicationProtocols = ["h2", "http/1.1"]
+                    }
+                }
+            }
+        };
+
+        var form = NodeFormInput.FromRecord(record);
+
+        Assert.Equal(RuntimeInternetSecurityTypes.Reality, form.Inbounds[0].TransportSecurity);
+        Assert.Equal("download.microsoft.com, update.microsoft.com", form.Reality.ServerNames);
+        Assert.Equal("download.microsoft.com:443", form.Reality.Dest);
+        Assert.Equal("UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc", form.Reality.PrivateKey);
+        Assert.Equal("0123456789abcdef", form.Reality.ShortIds);
+        Assert.Equal(30000, form.Reality.MaxTimeDiffMilliseconds);
+        Assert.True(form.Reality.ClientHelloPolicy.Enabled);
+        Assert.Equal("h2, http/1.1", form.Reality.ClientHelloPolicy.AllowedApplicationProtocols);
+
+        var success = form.TryToRequest(out var request, out var error);
+
+        Assert.True(success, error);
+        Assert.NotNull(request.Config.Reality);
+        Assert.Equal(["download.microsoft.com", "update.microsoft.com"], request.Config.Reality.ServerNames);
+        Assert.Equal(RuntimeInternetSecurityTypes.Reality, request.Config.Inbounds[0].TransportSecurity);
     }
 
     [Theory]

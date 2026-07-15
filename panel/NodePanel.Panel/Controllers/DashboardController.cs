@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NodePanel.ControlPlane.Configuration;
+using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 
@@ -363,6 +364,64 @@ public sealed class DashboardController : Controller
         return RedirectToAction(nameof(Node), new { nodeId });
     }
 
+    [HttpPost("nodes/reality/test-target")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TestRealityTarget(RealityTargetProbeFormInput form, CancellationToken cancellationToken)
+    {
+        var dest = NodeFormValueCodec.TrimOrEmpty(form.Dest);
+        if (!TryParseDestination(dest, out var host, out var port, out var error))
+        {
+            return Json(new
+            {
+                success = false,
+                message = error,
+                attempts = 0,
+                successes = 0,
+                results = Array.Empty<object>()
+            });
+        }
+
+        var serverName = ResolveFirstCsv(form.ServerName);
+        if (string.IsNullOrWhiteSpace(serverName))
+        {
+            serverName = host;
+        }
+
+        var probe = await RuntimeRealityUtilities
+            .ProbeTargetAsync(
+                new RuntimeRealityTargetProbeRequest
+                {
+                    DestinationHost = host,
+                    DestinationPort = port,
+                    ServerName = serverName,
+                    Fingerprint = string.IsNullOrWhiteSpace(form.Fingerprint) ? "chrome" : form.Fingerprint.Trim(),
+                    Attempts = 3,
+                    Timeout = TimeSpan.FromSeconds(5)
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return Json(new
+        {
+            success = probe.Success,
+            message = probe.Success
+                ? $"目标稳定通过 {probe.Successes}/{probe.Attempts} 次 REALITY 形态探测。"
+                : $"目标仅通过 {probe.Successes}/{probe.Attempts} 次 REALITY 形态探测，建议更换目标或重试。",
+            attempts = probe.Attempts,
+            successes = probe.Successes,
+            results = probe.Results.Select(static item => new
+            {
+                item.Attempt,
+                item.Success,
+                item.Message,
+                cipherSuite = item.CipherSuite.HasValue ? $"0x{item.CipherSuite.Value:X4}" : string.Empty,
+                keyShareGroup = item.KeyShareGroup.HasValue ? $"0x{item.KeyShareGroup.Value:X4}" : string.Empty,
+                item.SawCompatibilityChangeCipherSpec,
+                item.SawEncryptedHandshake
+            }).ToArray()
+        });
+    }
+
     [HttpPost("nodes/{nodeId}/delete")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteNode(string nodeId, string? returnUrl, CancellationToken cancellationToken)
@@ -681,6 +740,47 @@ public sealed class DashboardController : Controller
 
     private string BuildSubscriptionUrl(string token)
         => string.IsNullOrWhiteSpace(token) ? string.Empty : _publicUrlBuilder.BuildSubscriptionUrl(token, null, Request);
+
+    private static bool TryParseDestination(
+        string value,
+        out string host,
+        out int port,
+        out string error)
+    {
+        host = string.Empty;
+        port = 443;
+        error = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = "请填写 Handshake 目标，例如 dl.google.com:443。";
+            return false;
+        }
+
+        var candidate = value.Contains("://", StringComparison.Ordinal)
+            ? value
+            : $"tcp://{value}";
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            error = "Handshake 目标格式不正确，请使用 host:port。";
+            return false;
+        }
+
+        if (uri.Port is < -1 or 0 or > 65535)
+        {
+            error = "Handshake 目标端口不正确。";
+            return false;
+        }
+
+        host = uri.Host;
+        port = uri.IsDefaultPort ? 443 : uri.Port;
+        return true;
+    }
+
+    private static string ResolveFirstCsv(string? value)
+        => (value ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? string.Empty;
 
     private async Task<UserEditorViewModel> BuildUserEditorViewModelAsync(
         UserFormInput form,

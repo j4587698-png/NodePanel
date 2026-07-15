@@ -204,6 +204,21 @@ public static class SubscriptionFormatRenderer
                 {
                     builder.AppendLine($"{nestedIndent}servername: {YamlString(endpoint.Sni)}");
                 }
+
+                if (IsRealityEndpoint(endpoint))
+                {
+                    if (!string.IsNullOrWhiteSpace(endpoint.RealityFingerprint))
+                    {
+                        builder.AppendLine($"{nestedIndent}client-fingerprint: {YamlString(endpoint.RealityFingerprint)}");
+                    }
+
+                    builder.AppendLine($"{nestedIndent}reality-opts:");
+                    builder.AppendLine($"{headersIndent}public-key: {YamlString(endpoint.RealityPublicKey)}");
+                    if (!string.IsNullOrWhiteSpace(endpoint.RealityShortId))
+                    {
+                        builder.AppendLine($"{headersIndent}short-id: {YamlString(endpoint.RealityShortId)}");
+                    }
+                }
                 break;
             case "shadowsocks":
                 builder.AppendLine($"{nestedIndent}cipher: {YamlString(ResolveShadowsocksCipher(user))}");
@@ -579,6 +594,9 @@ public static class SubscriptionFormatRenderer
 
     private static string ToYamlBoolean(bool value)
         => value ? "true" : "false";
+
+    private static bool IsRealityEndpoint(SubscriptionEndpoint endpoint)
+        => string.Equals(endpoint.Security, RuntimeInternetSecurityTypes.Reality, StringComparison.OrdinalIgnoreCase);
 
     private static string EscapeSurge(string value)
         => value.Replace(",", "\\,", StringComparison.Ordinal);

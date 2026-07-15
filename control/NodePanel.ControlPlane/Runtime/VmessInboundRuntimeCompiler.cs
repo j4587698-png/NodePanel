@@ -137,6 +137,7 @@ public sealed class VmessInboundRuntimeCompiler : IInboundProtocolRuntimeCompile
         => inbounds
             .Where(static inbound => inbound.Enabled &&
                                      (NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vmess, InboundTransports.Tls) ||
+                                      NodeServiceConfigInbounds.IsTcpRealityInbound(inbound, InboundProtocols.Vmess) ||
                                       NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vmess, InboundTransports.Wss) ||
                                       NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vmess, RuntimeInternetTransportProtocols.HttpUpgrade) ||
                                       NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vmess, InboundTransports.Grpc) ||

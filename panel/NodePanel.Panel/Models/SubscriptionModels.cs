@@ -25,6 +25,8 @@ public sealed record SubscriptionEndpoint
 
     public string Protocol { get; init; } = "trojan";
 
+    public string Security { get; init; } = "tls";
+
     public string Transport { get; init; } = "tcp";
 
     public string Path { get; init; } = string.Empty;
@@ -32,6 +34,14 @@ public sealed record SubscriptionEndpoint
     public string WsHost { get; init; } = string.Empty;
 
     public string GrpcServiceName { get; init; } = string.Empty;
+
+    public string RealityPublicKey { get; init; } = string.Empty;
+
+    public string RealityShortId { get; init; } = string.Empty;
+
+    public string RealityFingerprint { get; init; } = "chrome";
+
+    public string RealitySpiderX { get; init; } = "/";
 
     public bool SkipCertificateVerification { get; init; }
 }

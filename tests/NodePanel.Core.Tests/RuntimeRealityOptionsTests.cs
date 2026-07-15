@@ -112,6 +112,22 @@ public sealed class RuntimeRealityOptionsTests
     }
 
     [Fact]
+    public void TryDerivePublicKey_derives_x25519_public_key_for_subscription_clients()
+    {
+        var privateKey = Convert.FromHexString("77076D0A7318A57D3C16C17251B26645DF4C2F87EBC0992AB177FBA51DB92C2A");
+
+        var ok = RuntimeRealityUtilities.TryDerivePublicKey(
+            ToBase64Url(privateKey),
+            out var publicKey,
+            out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal(
+            "8520F0098930A754748B7DDCB43EF75A0DBF3A0D26381AF4EBA4A98EAA9B4E6A",
+            Convert.ToHexString(FromBase64Url(publicKey)));
+    }
+
+    [Fact]
     public void Normalize_reencodes_remaining_spider_query_like_xray_core()
     {
         var normalized = new RuntimeRealityOptions
@@ -159,4 +175,18 @@ public sealed class RuntimeRealityOptionsTests
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
+
+    private static byte[] FromBase64Url(string value)
+    {
+        var normalized = value
+            .Replace('-', '+')
+            .Replace('_', '/');
+        var padding = normalized.Length % 4;
+        if (padding > 0)
+        {
+            normalized = normalized.PadRight(normalized.Length + 4 - padding, '=');
+        }
+
+        return Convert.FromBase64String(normalized);
+    }
 }

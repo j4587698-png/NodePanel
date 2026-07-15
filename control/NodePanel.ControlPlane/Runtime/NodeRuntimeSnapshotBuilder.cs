@@ -90,6 +90,7 @@ public sealed class NodeRuntimeSnapshotBuilder
             RoutingRules = NormalizeRoutingRules(config.RoutingRules),
             RoutingResources = NormalizeRoutingResources(config.RoutingResources),
             Certificate = NormalizeCertificateOptions(config.Certificate),
+            Reality = NormalizeRealityOptions(config.Reality),
             Dns = NormalizeDnsOptions(config.Dns),
             Limits = limits with
             {
@@ -160,6 +161,12 @@ public sealed class NodeRuntimeSnapshotBuilder
             return false;
         }
 
+        if (!ValidateRealityOptions(config.Reality, inboundPlans.RequiresReality, out error))
+        {
+            snapshot = CreateEmptySnapshot(revision, config);
+            return false;
+        }
+
         if (!ValidateDnsOptions(config.Dns, out error))
         {
             snapshot = CreateEmptySnapshot(revision, config);
@@ -221,6 +228,7 @@ public sealed class NodeRuntimeSnapshotBuilder
             TransportLimits = CreateTransportLimits(config.Limits),
             SessionPolicies = CreateSessionPolicies(config.Limits, config.Policy),
             Dns = CreateDnsSettings(config.Dns),
+            Reality = config.Reality,
             ProxyInbounds = CreateProxyInboundPlan(config.ProxyInbounds),
             OutboundSettings = CreateOutboundSettings(config),
             ActiveUsers = activeUsers.ToArray()
@@ -620,6 +628,134 @@ public sealed class NodeRuntimeSnapshotBuilder
         return true;
     }
 
+    private static bool ValidateRealityOptions(
+        RuntimeRealityServerOptions? reality,
+        bool requiresReality,
+        out string? error)
+    {
+        if (!requiresReality)
+        {
+            error = null;
+            return true;
+        }
+
+        if (reality is null)
+        {
+            error = "REALITY server settings are required when an inbound listener uses REALITY security.";
+            return false;
+        }
+
+        if (reality.ServerNames.Count == 0)
+        {
+            error = "REALITY inbound requires at least one server name.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(reality.Dest))
+        {
+            error = "REALITY inbound requires a fallback handshake destination.";
+            return false;
+        }
+
+        if (!TryDecodeBase64Url(reality.PrivateKey, out var privateKey) || privateKey.Length != 32)
+        {
+            error = "REALITY inbound private key is invalid.";
+            return false;
+        }
+
+        if (reality.ShortIds.Count == 0)
+        {
+            error = "REALITY inbound requires at least one short ID.";
+            return false;
+        }
+
+        for (var index = 0; index < reality.ShortIds.Count; index++)
+        {
+            var shortId = reality.ShortIds[index]?.Trim() ?? string.Empty;
+            if (shortId.Length > 16 || !TryDecodeHex(shortId, out _))
+            {
+                error = $"REALITY inbound shortIds[{index}] is invalid.";
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(reality.Mldsa65Seed))
+        {
+            if (string.Equals(reality.PrivateKey, reality.Mldsa65Seed.Trim(), StringComparison.Ordinal))
+            {
+                error = "REALITY inbound ML-DSA-65 seed cannot match the private key.";
+                return false;
+            }
+
+            if (!TryDecodeBase64Url(reality.Mldsa65Seed, out var mldsa65Seed) || mldsa65Seed.Length != 32)
+            {
+                error = "REALITY inbound ML-DSA-65 seed is invalid.";
+                return false;
+            }
+        }
+
+        var fallbackType = TrojanFallbackCompatibility.NormalizeType(reality.Type, reality.Dest);
+        if (!TrojanFallbackCompatibility.IsSupportedTransportType(fallbackType) ||
+            !TrojanFallbackCompatibility.IsValidDestination(fallbackType, reality.Dest))
+        {
+            error = "REALITY inbound fallback destination is invalid.";
+            return false;
+        }
+
+        if (reality.Xver is < 0 or > 2)
+        {
+            error = "REALITY inbound fallback xver only accepts 0, 1 or 2.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool TryDecodeHex(string input, out byte[] bytes)
+    {
+        try
+        {
+            bytes = Convert.FromHexString(input);
+            return true;
+        }
+        catch (FormatException)
+        {
+            bytes = Array.Empty<byte>();
+            return false;
+        }
+    }
+
+    private static bool TryDecodeBase64Url(string input, out byte[] bytes)
+    {
+        try
+        {
+            var normalized = (input ?? string.Empty)
+                .Trim()
+                .Replace('-', '+')
+                .Replace('_', '/');
+            var paddingLength = normalized.Length % 4;
+            if (paddingLength == 1)
+            {
+                bytes = Array.Empty<byte>();
+                return false;
+            }
+
+            if (paddingLength > 0)
+            {
+                normalized = normalized.PadRight(normalized.Length + (4 - paddingLength), '=');
+            }
+
+            bytes = Convert.FromBase64String(normalized);
+            return true;
+        }
+        catch (FormatException)
+        {
+            bytes = Array.Empty<byte>();
+            return false;
+        }
+    }
+
     private bool ValidateOutboundDefinitions(NodeServiceConfig config, out string? error)
     {
         foreach (var compiler in _outboundProtocolCompilers)
@@ -797,6 +933,58 @@ public sealed class NodeRuntimeSnapshotBuilder
             BlockedApplicationProtocols = NormalizeLowerStringList(normalizedOptions.BlockedApplicationProtocols),
             AllowedJa3 = NormalizeLowerStringList(normalizedOptions.AllowedJa3),
             BlockedJa3 = NormalizeLowerStringList(normalizedOptions.BlockedJa3)
+        };
+    }
+
+    private static RuntimeRealityServerOptions? NormalizeRealityOptions(RuntimeRealityServerOptions? options)
+    {
+        if (options is null)
+        {
+            return null;
+        }
+
+        return options with
+        {
+            MasterKeyLog = options.MasterKeyLog?.Trim() ?? string.Empty,
+            Dest = options.Dest?.Trim() ?? string.Empty,
+            Type = string.IsNullOrWhiteSpace(options.Type) ? "tcp" : options.Type.Trim().ToLowerInvariant(),
+            Xver = Math.Clamp(options.Xver, 0, 2),
+            ServerNames = NormalizeLowerStringList(options.ServerNames),
+            PrivateKey = options.PrivateKey?.Trim() ?? string.Empty,
+            MinClientVersion = options.MinClientVersion?.Trim() ?? string.Empty,
+            MaxClientVersion = options.MaxClientVersion?.Trim() ?? string.Empty,
+            MaxTimeDiffMilliseconds = Math.Max(0, options.MaxTimeDiffMilliseconds),
+            ShortIds = NormalizeLowerStringList(options.ShortIds),
+            Mldsa65Seed = options.Mldsa65Seed?.Trim() ?? string.Empty,
+            LimitFallbackUpload = NormalizeFallbackLimitOptions(options.LimitFallbackUpload),
+            LimitFallbackDownload = NormalizeFallbackLimitOptions(options.LimitFallbackDownload),
+            ClientHelloPolicy = NormalizeRuntimeClientHelloPolicyOptions(options.ClientHelloPolicy)
+        };
+    }
+
+    private static RuntimeFallbackLimitOptions NormalizeFallbackLimitOptions(RuntimeFallbackLimitOptions? options)
+    {
+        var normalized = options ?? RuntimeFallbackLimitOptions.Empty;
+        return normalized with
+        {
+            AfterBytes = Math.Max(0, normalized.AfterBytes),
+            BytesPerSecond = Math.Max(0, normalized.BytesPerSecond),
+            BurstBytesPerSecond = Math.Max(0, normalized.BurstBytesPerSecond)
+        };
+    }
+
+    private static RuntimeTlsClientHelloPolicyOptions NormalizeRuntimeClientHelloPolicyOptions(RuntimeTlsClientHelloPolicyOptions? options)
+    {
+        var normalized = options ?? RuntimeTlsClientHelloPolicyOptions.Disabled;
+        return new RuntimeTlsClientHelloPolicyOptions
+        {
+            Enabled = normalized.Enabled,
+            AllowedServerNames = NormalizeLowerStringList(normalized.AllowedServerNames),
+            BlockedServerNames = NormalizeLowerStringList(normalized.BlockedServerNames),
+            AllowedApplicationProtocols = NormalizeLowerStringList(normalized.AllowedApplicationProtocols),
+            BlockedApplicationProtocols = NormalizeLowerStringList(normalized.BlockedApplicationProtocols),
+            AllowedJa3 = NormalizeLowerStringList(normalized.AllowedJa3),
+            BlockedJa3 = NormalizeLowerStringList(normalized.BlockedJa3)
         };
     }
 

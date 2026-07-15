@@ -11,6 +11,7 @@ internal sealed class RuntimeInboundEventBridge : IRuntimeInboundEventSink
     private readonly Action<int, RuntimeInboundConnectionErrorReport> _onInboundConnectionError;
     private readonly Action<int, RuntimeInboundClientHelloRejectedReport> _onInboundClientHelloRejected;
     private readonly Action<int, RuntimeInboundUnknownServerNameRejectedReport> _onInboundUnknownServerNameRejected;
+    private readonly Action<int, ProxyInboundConnectionAccessedContext> _onConnectionAccessed;
 
     public RuntimeInboundEventBridge(
         int revision,
@@ -19,7 +20,8 @@ internal sealed class RuntimeInboundEventBridge : IRuntimeInboundEventSink
         Action<int, string, ProxyInboundListenerDefinition, string> onProxyInboundListenerStarted,
         Action<int, RuntimeInboundConnectionErrorReport> onInboundConnectionError,
         Action<int, RuntimeInboundClientHelloRejectedReport> onInboundClientHelloRejected,
-        Action<int, RuntimeInboundUnknownServerNameRejectedReport> onInboundUnknownServerNameRejected)
+        Action<int, RuntimeInboundUnknownServerNameRejectedReport> onInboundUnknownServerNameRejected,
+        Action<int, ProxyInboundConnectionAccessedContext> onConnectionAccessed)
     {
         _revision = revision;
         _startup = startup;
@@ -28,6 +30,7 @@ internal sealed class RuntimeInboundEventBridge : IRuntimeInboundEventSink
         _onInboundConnectionError = onInboundConnectionError;
         _onInboundClientHelloRejected = onInboundClientHelloRejected;
         _onInboundUnknownServerNameRejected = onInboundUnknownServerNameRejected;
+        _onConnectionAccessed = onConnectionAccessed;
     }
 
     public void ReportListenerStarted(IReadOnlyList<string> listenerKeys, string message)
@@ -211,6 +214,12 @@ internal sealed class RuntimeInboundEventBridge : IRuntimeInboundEventSink
         };
     }
 
+    public void ReportConnectionAccessed(ProxyInboundConnectionAccessedContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        _onConnectionAccessed(_revision, context);
+    }
+
     public ProxyInboundServerCallbacks CreateProxyInboundCallbacks(string protocol, string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(protocol);
@@ -227,7 +236,8 @@ internal sealed class RuntimeInboundEventBridge : IRuntimeInboundEventSink
                     RemoteEndPoint = context.RemoteEndPoint?.ToString(),
                     Message = "Proxy inbound connection failed.",
                     Exception = context.Exception
-                })
+                }),
+            ConnectionAccessed = ReportConnectionAccessed
         };
     }
 }

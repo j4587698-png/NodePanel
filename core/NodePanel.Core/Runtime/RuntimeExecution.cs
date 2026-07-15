@@ -49,6 +49,8 @@ public sealed class RuntimeExecutionCallbacks
 
     public required Action<int, RuntimeInboundUnknownServerNameRejectedReport> InboundUnknownServerNameRejected { get; init; }
 
+    public required Action<int, ProxyInboundConnectionAccessedContext> ProxyConnectionAccessed { get; init; }
+
     public Action<IRuntimeExecution, string, IReadOnlyList<string>, Exception> RuntimeTaskFaulted
     {
         get => _runtimeTaskFaulted

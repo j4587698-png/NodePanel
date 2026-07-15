@@ -105,20 +105,6 @@ public sealed class PanelQueryService
         long uploadBytes = record?.UploadBytes ?? 0;
         long downloadBytes = record?.DownloadBytes ?? 0;
 
-        var targetNodeIds = user.NodeIds.Count == 0
-            ? state.Nodes.Select(static node => node.NodeId)
-            : user.NodeIds;
-
-        foreach (var nodeId in targetNodeIds.Distinct(StringComparer.Ordinal))
-        {
-            if (!runtime.TryGetValue(nodeId, out var snapshot)) continue;
-            foreach (var total in snapshot.TrafficTotals.Where(item => string.Equals(item.UserId, user.UserId, StringComparison.Ordinal)))
-            {
-                uploadBytes += total.UploadBytes;
-                downloadBytes += total.DownloadBytes;
-            }
-        }
-
         return new PanelUserTrafficSummary
         {
             UserId = user.UserId,

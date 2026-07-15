@@ -134,7 +134,7 @@ public sealed class SubscriptionProfileResolver
         foreach (var endpoint in catalog.Endpoints)
         {
             var protocol = NormalizeProtocol(endpoint.Protocol);
-            if (!SupportsEndpoint(format, protocol, endpoint.Transport))
+            if (!SupportsEndpoint(format, protocol, endpoint))
             {
                 continue;
             }
@@ -953,14 +953,25 @@ public sealed class SubscriptionProfileResolver
             _ => true
         };
 
-    private static bool SupportsEndpoint(string format, string protocol, string? transport)
+    private static bool SupportsEndpoint(string format, string protocol, SubscriptionEndpoint endpoint)
     {
         if (!SupportsFormat(format, protocol))
         {
             return false;
         }
 
-        var normalizedTransport = NormalizeTransport(transport);
+        var normalizedTransport = NormalizeTransport(endpoint.Transport);
+        if (IsRealityEndpoint(endpoint))
+        {
+            return format switch
+            {
+                SubscriptionFormats.Clash or SubscriptionFormats.Stash =>
+                    protocol == "vless" && normalizedTransport is "tcp" or "grpc",
+                SubscriptionFormats.Surge or SubscriptionFormats.QuantumultX => false,
+                _ => protocol == "vless"
+            };
+        }
+
         return format switch
         {
             SubscriptionFormats.Clash or SubscriptionFormats.Stash =>
@@ -982,6 +993,9 @@ public sealed class SubscriptionProfileResolver
             : string.Equals(transport, InboundTransports.Wss, StringComparison.OrdinalIgnoreCase)
                 ? "ws"
                 : transport.Trim().ToLowerInvariant();
+
+    private static bool IsRealityEndpoint(SubscriptionEndpoint endpoint)
+        => string.Equals(endpoint.Security, RuntimeInternetSecurityTypes.Reality, StringComparison.OrdinalIgnoreCase);
 
     private static string ResolveFormat(string? flag, string? userAgent)
         => TryResolveFromValue(flag, out var format)

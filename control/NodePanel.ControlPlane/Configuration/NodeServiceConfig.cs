@@ -16,6 +16,8 @@ public sealed record NodeServiceConfig
 
     public CertificateOptions Certificate { get; init; } = new();
 
+    public RuntimeRealityServerOptions? Reality { get; init; }
+
     public InboundLimitsConfig Limits { get; init; } = new();
 
     public PolicyConfig Policy { get; init; } = new();

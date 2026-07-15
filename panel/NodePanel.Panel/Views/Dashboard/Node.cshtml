@@ -203,6 +203,38 @@
         margin: 0;
     }
 
+    .reality-probe-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .reality-probe-result {
+        min-width: min(100%, 320px);
+        padding: 8px 10px;
+        border: 1px solid var(--admin-border);
+        border-radius: 8px;
+        color: var(--admin-muted);
+        font-size: 13px;
+        line-height: 1.45;
+    }
+
+    .reality-probe-result--ok {
+        border-color: rgba(75, 179, 125, 0.55);
+        color: #8fe2ad;
+    }
+
+    .reality-probe-result--warn {
+        border-color: rgba(224, 171, 75, 0.55);
+        color: #f0cf86;
+    }
+
+    .reality-probe-result--error {
+        border-color: rgba(224, 90, 90, 0.55);
+        color: #ff9d9d;
+    }
+
     .mode-switch {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -797,6 +829,13 @@
                 <div class="form-grid">
                     <label><span>监听地址</span><input asp-for="Form.Inbounds[tlsIndex].ListenAddress" /></label>
                     <label><span>监听端口</span><input asp-for="Form.Inbounds[tlsIndex].Port" /></label>
+                    <label>
+                        <span>安全模式</span>
+                        <select asp-for="Form.Inbounds[tlsIndex].TransportSecurity" data-reality-security="tls">
+                            <option value="@RuntimeInternetSecurityTypes.Tls">TLS</option>
+                            <option value="@RuntimeInternetSecurityTypes.Reality">REALITY</option>
+                        </select>
+                    </label>
                 </div>
             </div>
 
@@ -987,6 +1026,13 @@
                 <div class="form-grid">
                     <label><span>监听地址</span><input asp-for="Form.Inbounds[grpcIndex].ListenAddress" /></label>
                     <label><span>监听端口</span><input asp-for="Form.Inbounds[grpcIndex].Port" /></label>
+                    <label>
+                        <span>安全模式</span>
+                        <select asp-for="Form.Inbounds[grpcIndex].TransportSecurity" data-reality-security="grpc">
+                            <option value="@RuntimeInternetSecurityTypes.Tls">TLS</option>
+                            <option value="@RuntimeInternetSecurityTypes.Reality">REALITY</option>
+                        </select>
+                    </label>
                     <label><span>Service Name</span><input asp-for="Form.Inbounds[grpcIndex].GrpcServiceName" placeholder="/proxy/service" /></label>
                 </div>
             </div>
@@ -999,7 +1045,65 @@
                 <div class="form-grid">
                     <label><span>监听地址</span><input asp-for="Form.Inbounds[splitHttpIndex].ListenAddress" /></label>
                     <label><span>监听端口</span><input asp-for="Form.Inbounds[splitHttpIndex].Port" /></label>
+                    <label>
+                        <span>安全模式</span>
+                        <select asp-for="Form.Inbounds[splitHttpIndex].TransportSecurity" data-reality-security="splithttp">
+                            <option value="@RuntimeInternetSecurityTypes.Tls">TLS</option>
+                            <option value="@RuntimeInternetSecurityTypes.Reality">REALITY</option>
+                        </select>
+                    </label>
                     <label><span>SplitHTTP 路径</span><input asp-for="Form.Inbounds[splitHttpIndex].Path" placeholder="/xhttp" /></label>
+                </div>
+            </div>
+
+            <div id="reality-section" class="config-block">
+                <div class="config-block__header">
+                    <div>
+                        <h4>REALITY 设置</h4>
+                        <p class="muted compact-note">TCP、gRPC、SplitHTTP 可启用 REALITY；WSS、HTTP Upgrade、Shadowsocks 仍使用原有模式。</p>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label><span>Server Names (CSV)</span><input asp-for="Form.Reality.ServerNames" data-reality-required placeholder="dl.google.com" /></label>
+                    <label><span>Handshake 目标</span><input asp-for="Form.Reality.Dest" data-reality-required placeholder="dl.google.com:443" /></label>
+                    <label><span>客户端指纹</span><input id="realityProbeFingerprint" value="chrome" autocomplete="off" /></label>
+                    <label><span>Fallback Type</span><input asp-for="Form.Reality.Type" placeholder="tcp" /></label>
+                    <label><span>Xver</span><input asp-for="Form.Reality.Xver" type="number" min="0" max="2" /></label>
+                    <label><span>Private Key</span><input asp-for="Form.Reality.PrivateKey" data-reality-required autocomplete="off" /></label>
+                    <label><span>Short IDs (CSV)</span><input asp-for="Form.Reality.ShortIds" data-reality-required placeholder="0123456789abcdef" /></label>
+                    <label><span>Max Time Diff (ms)</span><input asp-for="Form.Reality.MaxTimeDiffMilliseconds" type="number" min="0" /></label>
+                    <label class="advanced-panel"><span>Min Client Version</span><input asp-for="Form.Reality.MinClientVersion" placeholder="1.8.0" /></label>
+                    <label class="advanced-panel"><span>Max Client Version</span><input asp-for="Form.Reality.MaxClientVersion" placeholder="1.9.9" /></label>
+                    <label class="advanced-panel"><span>ML-DSA-65 Seed</span><input asp-for="Form.Reality.Mldsa65Seed" autocomplete="off" /></label>
+                </div>
+                <div class="reality-probe-actions">
+                    <button type="button" class="button button--small" id="realityTargetProbeButton">测试目标站</button>
+                    <span id="realityTargetProbeResult" class="reality-probe-result" hidden></span>
+                </div>
+                <div class="config-block advanced-panel">
+                    <div class="config-block__header">
+                        <div>
+                            <h5>REALITY ClientHello 策略</h5>
+                            <p class="muted">只在 REALITY 握手前过滤 ClientHello。</p>
+                        </div>
+                    </div>
+                    <div class="toggle-grid">
+                        <div class="checkbox-field">
+                            <span>启用策略</span>
+                            <label class="switch">
+                                <input asp-for="Form.Reality.ClientHelloPolicy.Enabled" type="checkbox" />
+                                <span class="switch-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-grid">
+                        <label><span>允许的 ServerNames (CSV)</span><input asp-for="Form.Reality.ClientHelloPolicy.AllowedServerNames" /></label>
+                        <label><span>阻止的 ServerNames (CSV)</span><input asp-for="Form.Reality.ClientHelloPolicy.BlockedServerNames" /></label>
+                        <label><span>允许的 ALPN (CSV)</span><input asp-for="Form.Reality.ClientHelloPolicy.AllowedApplicationProtocols" /></label>
+                        <label><span>阻止的 ALPN (CSV)</span><input asp-for="Form.Reality.ClientHelloPolicy.BlockedApplicationProtocols" /></label>
+                        <label><span>允许的 JA3 (CSV)</span><input asp-for="Form.Reality.ClientHelloPolicy.AllowedJa3" /></label>
+                        <label><span>阻止的 JA3 (CSV)</span><input asp-for="Form.Reality.ClientHelloPolicy.BlockedJa3" /></label>
+                    </div>
                 </div>
             </div>
 
@@ -1680,6 +1784,113 @@
         element.style.display = shouldShow ? displayValue : 'none';
     }
 
+    function readRealitySecurityValue(key) {
+        const input = document.querySelector(`[data-reality-security="${key}"]`);
+        return input ? input.value.trim().toLowerCase() : 'tls';
+    }
+
+    function isRealitySecurity(key) {
+        return readRealitySecurityValue(key) === 'reality';
+    }
+
+    function syncRealityVisibility(mode) {
+        const realitySection = document.getElementById('reality-section');
+        const hasReality = (mode === 'tls' || mode === 'both') && isRealitySecurity('tls') ||
+            mode === 'grpc' && isRealitySecurity('grpc') ||
+            mode === 'splithttp' && isRealitySecurity('splithttp');
+
+        toggleElement(realitySection, hasReality);
+        document.querySelectorAll('[data-reality-required]').forEach((field) => {
+            field.required = hasReality;
+        });
+
+        return hasReality;
+    }
+
+    function readFieldValue(id) {
+        const field = document.getElementById(id);
+        return field ? field.value.trim() : '';
+    }
+
+    function firstCsvValue(value) {
+        return value.split(',').map((item) => item.trim()).find(Boolean) || '';
+    }
+
+    function setRealityProbeResult(kind, message) {
+        const result = document.getElementById('realityTargetProbeResult');
+        if (!result) {
+            return;
+        }
+
+        result.hidden = false;
+        result.className = `reality-probe-result reality-probe-result--${kind}`;
+        result.textContent = message;
+    }
+
+    async function testRealityTarget() {
+        const button = document.getElementById('realityTargetProbeButton');
+        const token = document.querySelector('input[name="__RequestVerificationToken"]');
+        const body = new URLSearchParams();
+        body.set('__RequestVerificationToken', token ? token.value : '');
+        body.set('ServerName', firstCsvValue(readFieldValue('Form_Reality_ServerNames')));
+        body.set('Dest', readFieldValue('Form_Reality_Dest'));
+        body.set('Fingerprint', readFieldValue('realityProbeFingerprint') || 'chrome');
+
+        if (button) {
+            button.disabled = true;
+        }
+
+        setRealityProbeResult('warn', '正在探测目标站...');
+        try {
+            const response = await fetch('@Url.Action("TestRealityTarget", "Dashboard")', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                },
+                body
+            });
+
+            if (!response.ok) {
+                setRealityProbeResult('error', `探测请求失败: HTTP ${response.status}`);
+                return;
+            }
+
+            const payload = await response.json();
+            const details = Array.isArray(payload.results)
+                ? payload.results.map((item) => `${item.attempt}:${item.success ? '通过' : '失败'}`).join(' ')
+                : '';
+            setRealityProbeResult(payload.success ? 'ok' : 'warn', details ? `${payload.message} ${details}` : payload.message);
+        }
+        catch (error) {
+            setRealityProbeResult('error', `探测失败: ${error && error.message ? error.message : error}`);
+        }
+        finally {
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    }
+
+    function modeRequiresCertificate(mode) {
+        if (mode === 'shadowsocks') {
+            return false;
+        }
+
+        if (mode === 'wss' || mode === 'httpupgrade' || mode === 'both') {
+            return true;
+        }
+
+        if (mode === 'grpc') {
+            return !isRealitySecurity('grpc');
+        }
+
+        if (mode === 'splithttp') {
+            return !isRealitySecurity('splithttp');
+        }
+
+        return !isRealitySecurity('tls');
+    }
+
     function normalizeTransportModeSelection(transportMode, normalizedProtocol) {
         if (!transportMode) {
             return 'tls';
@@ -1737,6 +1948,7 @@
         const enableHttpUpgrade = !enableShadowsocks && mode === 'httpupgrade';
         const enableGrpc = !enableShadowsocks && mode === 'grpc';
         const enableSplitHttp = !enableShadowsocks && mode === 'splithttp';
+        const requiresCertificate = modeRequiresCertificate(mode);
         tlsEnabledInput.value = enableTls ? 'true' : 'false';
         wssEnabledInput.value = enableWss ? 'true' : 'false';
         httpUpgradeEnabledInput.value = enableHttpUpgrade ? 'true' : 'false';
@@ -1749,8 +1961,9 @@
         grpcPanel.classList.toggle('is-hidden', !enableGrpc);
         splitHttpPanel.classList.toggle('is-hidden', !enableSplitHttp);
         shadowsocksPanel.classList.toggle('is-hidden', !enableShadowsocks);
-        toggleElement(certificateDomainField, !enableShadowsocks);
-        toggleElement(certificateSection, !enableShadowsocks);
+        toggleElement(certificateDomainField, requiresCertificate);
+        toggleElement(certificateSection, requiresCertificate);
+        syncRealityVisibility(mode);
 
         document.querySelectorAll('[data-proxy-protocol-input]').forEach((input) => {
             input.value = enableShadowsocks ? 'trojan' : normalizedProtocol;
@@ -1913,7 +2126,15 @@
             }
 
             transportMode.addEventListener('change', updateTransportMode);
+            document.querySelectorAll('[data-reality-security]').forEach((input) => {
+                input.addEventListener('change', updateTransportMode);
+            });
             updateTransportMode();
+        }
+
+        const realityTargetProbeButton = document.getElementById('realityTargetProbeButton');
+        if (realityTargetProbeButton) {
+            realityTargetProbeButton.addEventListener('click', testRealityTarget);
         }
 
         if (protocolInput) {

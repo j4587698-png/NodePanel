@@ -263,21 +263,6 @@ public sealed record PanelMutationResult
     public IReadOnlyList<string> AffectedNodeIds { get; init; } = Array.Empty<string>();
 }
 
-public sealed record PanelUserTrafficTotal
-{
-    public string RuntimeKey { get; init; } = string.Empty;
-
-    public string Protocol { get; init; } = string.Empty;
-
-    public string InboundTag { get; init; } = string.Empty;
-
-    public string UserId { get; init; } = string.Empty;
-
-    public long UploadBytes { get; init; }
-
-    public long DownloadBytes { get; init; }
-}
-
 public sealed record PanelUserTrafficSummary
 {
     public string UserId { get; init; } = string.Empty;
@@ -303,7 +288,7 @@ public sealed record NodeRuntimeSnapshot
 
     public NodeStatusPayload? LastStatus { get; init; }
 
-    public IReadOnlyList<PanelUserTrafficTotal> TrafficTotals { get; init; } = Array.Empty<PanelUserTrafficTotal>();
+    public NodeHostResourcePayload? Host => LastStatus?.Host;
 }
 
 public static class CertificateAlertSeverities

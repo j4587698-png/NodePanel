@@ -1031,6 +1031,19 @@ public abstract record RuntimeEvent
     public string Message { get; init; } = string.Empty;
 }
 
+public sealed record RuntimeConnectionAccessedEvent : RuntimeEvent
+{
+    public required string Protocol { get; init; }
+
+    public string Tag { get; init; } = string.Empty;
+
+    public string TargetHost { get; init; } = string.Empty;
+
+    public int TargetPort { get; init; }
+
+    public string Network { get; init; } = string.Empty;
+}
+
 public sealed record RuntimeStateChangedEvent : RuntimeEvent
 {
     public RuntimeState State { get; init; } = RuntimeState.Stopped;

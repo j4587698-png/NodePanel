@@ -122,6 +122,141 @@ public sealed class ClientHelloPolicyFormInput
             AllowedJa3 = NodeFormValueCodec.JoinCsv(config.AllowedJa3),
             BlockedJa3 = NodeFormValueCodec.JoinCsv(config.BlockedJa3)
         };
+
+    public RuntimeTlsClientHelloPolicyOptions ToRuntimeOptions()
+        => new()
+        {
+            Enabled = Enabled,
+            AllowedServerNames = NodeFormValueCodec.ParseCsv(AllowedServerNames),
+            BlockedServerNames = NodeFormValueCodec.ParseCsv(BlockedServerNames),
+            AllowedApplicationProtocols = NodeFormValueCodec.ParseCsv(AllowedApplicationProtocols),
+            BlockedApplicationProtocols = NodeFormValueCodec.ParseCsv(BlockedApplicationProtocols),
+            AllowedJa3 = NodeFormValueCodec.ParseCsv(AllowedJa3),
+            BlockedJa3 = NodeFormValueCodec.ParseCsv(BlockedJa3)
+        };
+
+    public static ClientHelloPolicyFormInput FromRuntimeOptions(RuntimeTlsClientHelloPolicyOptions config)
+        => new()
+        {
+            Enabled = config.Enabled,
+            AllowedServerNames = NodeFormValueCodec.JoinCsv(config.AllowedServerNames),
+            BlockedServerNames = NodeFormValueCodec.JoinCsv(config.BlockedServerNames),
+            AllowedApplicationProtocols = NodeFormValueCodec.JoinCsv(config.AllowedApplicationProtocols),
+            BlockedApplicationProtocols = NodeFormValueCodec.JoinCsv(config.BlockedApplicationProtocols),
+            AllowedJa3 = NodeFormValueCodec.JoinCsv(config.AllowedJa3),
+            BlockedJa3 = NodeFormValueCodec.JoinCsv(config.BlockedJa3)
+        };
+}
+
+public sealed class RealityServerFormInput
+{
+    public const string DefaultServerName = "dl.google.com";
+
+    public const string DefaultDest = "dl.google.com:443";
+
+    public string ServerNames { get; set; } = DefaultServerName;
+
+    public string Dest { get; set; } = DefaultDest;
+
+    public string Type { get; set; } = "tcp";
+
+    [Range(0, 2, ErrorMessage = "REALITY Xver 必须在 0 到 2 之间。")]
+    public int Xver { get; set; }
+
+    public string PrivateKey { get; set; } = string.Empty;
+
+    public string ShortIds { get; set; } = "0123456789abcdef";
+
+    public string MinClientVersion { get; set; } = string.Empty;
+
+    public string MaxClientVersion { get; set; } = string.Empty;
+
+    [Range(0, long.MaxValue, ErrorMessage = "REALITY 最大时间差不能小于 0。")]
+    public long MaxTimeDiffMilliseconds { get; set; }
+
+    public string Mldsa65Seed { get; set; } = string.Empty;
+
+    public ClientHelloPolicyFormInput ClientHelloPolicy { get; set; } = new();
+
+    public void ApplyDefaults()
+    {
+        if (string.IsNullOrWhiteSpace(ServerNames))
+        {
+            ServerNames = DefaultServerName;
+        }
+
+        if (string.IsNullOrWhiteSpace(Dest))
+        {
+            Dest = DefaultDest;
+        }
+
+        if (string.IsNullOrWhiteSpace(Type))
+        {
+            Type = "tcp";
+        }
+
+        if (string.IsNullOrWhiteSpace(ShortIds))
+        {
+            ShortIds = "0123456789abcdef";
+        }
+
+        ClientHelloPolicy ??= new ClientHelloPolicyFormInput();
+    }
+
+    public RuntimeRealityServerOptions ToRuntimeOptions()
+    {
+        ApplyDefaults();
+        return new RuntimeRealityServerOptions
+        {
+            ServerNames = NodeFormValueCodec.ParseCsv(ServerNames),
+            Dest = NodeFormValueCodec.TrimOrEmpty(Dest),
+            Type = NodeFormValueCodec.TrimOrEmpty(Type),
+            Xver = Xver,
+            PrivateKey = NodeFormValueCodec.TrimOrEmpty(PrivateKey),
+            ShortIds = NodeFormValueCodec.ParseCsv(ShortIds),
+            MinClientVersion = NodeFormValueCodec.TrimOrEmpty(MinClientVersion),
+            MaxClientVersion = NodeFormValueCodec.TrimOrEmpty(MaxClientVersion),
+            MaxTimeDiffMilliseconds = Math.Max(0, MaxTimeDiffMilliseconds),
+            Mldsa65Seed = NodeFormValueCodec.TrimOrEmpty(Mldsa65Seed),
+            ClientHelloPolicy = ClientHelloPolicy.ToRuntimeOptions()
+        };
+    }
+
+    public static RealityServerFormInput FromRuntimeOptions(RuntimeRealityServerOptions? options)
+    {
+        if (options is null)
+        {
+            var empty = new RealityServerFormInput();
+            empty.ApplyDefaults();
+            return empty;
+        }
+
+        var form = new RealityServerFormInput
+        {
+            ServerNames = NodeFormValueCodec.JoinCsv(options.ServerNames),
+            Dest = options.Dest,
+            Type = options.Type,
+            Xver = Math.Clamp(options.Xver, 0, 2),
+            PrivateKey = options.PrivateKey,
+            ShortIds = NodeFormValueCodec.JoinCsv(options.ShortIds),
+            MinClientVersion = options.MinClientVersion,
+            MaxClientVersion = options.MaxClientVersion,
+            MaxTimeDiffMilliseconds = Math.Max(0, options.MaxTimeDiffMilliseconds),
+            Mldsa65Seed = options.Mldsa65Seed,
+            ClientHelloPolicy = ClientHelloPolicyFormInput.FromRuntimeOptions(options.ClientHelloPolicy)
+        };
+        form.ApplyDefaults();
+        return form;
+    }
+}
+
+public sealed class RealityTargetProbeFormInput
+{
+    public string ServerName { get; set; } = RealityServerFormInput.DefaultServerName;
+
+    public string Dest { get; set; } = RealityServerFormInput.DefaultDest;
+
+    public string Fingerprint { get; set; } = "chrome";
 }
 
 public sealed class DnsFormInput

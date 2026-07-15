@@ -102,7 +102,8 @@ public class SocksInboundServer
                 connection,
                 options.Limits,
                 options.UseCone,
-                string.Empty);
+                string.Empty,
+                options.Callbacks);
 
             var firstByte = await ReadByteAsync(connection.Stream, handshakeCts.Token).ConfigureAwait(false);
             if (firstByte is null)
@@ -183,6 +184,15 @@ public class SocksInboundServer
                 ScopedUserId = greeting.UserId
             };
 
+        authenticatedOptions.ConnectionAccessed?.Invoke(new ProxyInboundConnectionAccessedContext
+        {
+            Protocol = ProxyInboundProtocols.Socks,
+            InboundTag = authenticatedOptions.InboundTag,
+            TargetHost = request.Host,
+            TargetPort = request.Port,
+            Network = request.Command == Socks5ProtocolConstants.CommandUdpAssociate ? "udp" : "tcp"
+        });
+
         if (request.Command == Socks5ProtocolConstants.CommandUdpAssociate)
         {
             if (listener.UdpAssociateRelay is null)
@@ -253,6 +263,15 @@ public class SocksInboundServer
         {
             return;
         }
+
+        proxyOptions.ConnectionAccessed?.Invoke(new ProxyInboundConnectionAccessedContext
+        {
+            Protocol = ProxyInboundProtocols.Socks,
+            InboundTag = proxyOptions.InboundTag,
+            TargetHost = request.Host,
+            TargetPort = request.Port,
+            Network = "tcp"
+        });
 
         await RelayTcpAsync(
                 clientStream,
@@ -652,13 +671,14 @@ public class SocksInboundServer
         AcceptedConnection connection,
         ProxyInboundServerLimits limits,
         bool useCone,
-        string userId)
+        string userId,
+        ProxyInboundServerCallbacks callbacks)
         => new()
         {
             InboundTag = listener.Tag,
             UserLevel = Math.Max(0, listener.UserLevel),
-            UserId = userId,
-            ScopedUserId = userId,
+            UserId = string.IsNullOrEmpty(userId) ? "proxy-user" : userId,
+            ScopedUserId = string.IsNullOrEmpty(userId) ? "proxy-user" : userId,
             HandshakeTimeoutSeconds = listener.HandshakeTimeoutSeconds,
             ConnectTimeoutSeconds = limits.ConnectTimeoutSeconds,
             ConnectionIdleSeconds = limits.ConnectionIdleSeconds,
@@ -666,8 +686,9 @@ public class SocksInboundServer
             DownlinkOnlySeconds = limits.DownlinkOnlySeconds,
             UseCone = useCone,
             Sniffing = listener.Sniffing ?? new RuntimeSniffingOptions(),
-            RemoteEndPoint = connection.RemoteEndPoint,
-            LocalEndPoint = connection.LocalEndPoint
+            RemoteEndPoint = connection.LogRemoteEndPoint ?? connection.RemoteEndPoint,
+            LocalEndPoint = connection.LocalEndPoint,
+            ConnectionAccessed = callbacks.ConnectionAccessed
         };
 
     private static Socks5LocalAuthenticationOptions ResolveAuthentication(

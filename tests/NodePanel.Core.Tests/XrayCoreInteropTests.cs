@@ -18,7 +18,7 @@ namespace NodePanel.Core.Tests;
 [Trait("Category", "Interop")]
 public sealed class XrayCoreInteropTests
 {
-    private static readonly TimeSpan GoHelperTestTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan GoHelperTestTimeout = TimeSpan.FromMinutes(5);
     private const string UserId = "interop-user";
     private const string UserUuid = "33333333-3333-3333-3333-333333333333";
     private const string TrojanSharedPassword = "interop-password";
@@ -36,6 +36,12 @@ public sealed class XrayCoreInteropTests
     private const string InteropRealityPrivateKey = "aGSYystUbf59_9_6LKRxD27rmSW_-2_nyd9YG_Gwbks";
     private const string InteropRealityPublicKey = "E59WjnvZcQMu7tR7_BgyhycuEdBS-CtKxfImRCdAvFM";
     private const string InteropRealityShortId = "0123456789abcdef";
+    private static string SingBoxRealityServerName =>
+        Environment.GetEnvironmentVariable("XRAY_DOTNET_SING_BOX_REALITY_SERVER_NAME")?.Trim() is { Length: > 0 } serverName
+            ? serverName
+            : "dl.google.com";
+    private const string SingBoxRealityPrivateKey = "UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc";
+    private const string SingBoxRealityPublicKey = "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0";
     private const string TrojanWebSocketHost = "trojan-ws.example.com";
     private const string TrojanWebSocketPath = "/trojan-ws";
     private const string TrojanHttpUpgradeHost = "edge.example.com";
@@ -694,6 +700,144 @@ public sealed class XrayCoreInteropTests
             if (xray is not null)
             {
                 await xray.DisposeAsync();
+            }
+
+            lifetimeCts.Cancel();
+            echoListener.Stop();
+            await AwaitCompletionAsync(echoTask);
+            TryDeleteDirectory(tempDirectory);
+        }
+    }
+
+    [Fact]
+    public async Task DefaultRuntime_vless_reality_outbound_can_connect_to_sing_box_vless_reality_inbound()
+    {
+        if (!TryGetGoExecutablePath(out var goExecutable))
+        {
+            return;
+        }
+
+        using var lifetimeCts = new CancellationTokenSource(GoHelperTestTimeout);
+        var tempDirectory = CreateInteropTempDirectory("dotnet-vless-reality-client-to-sing-box");
+        var (echoListener, echoTask, echoPort) = StartEchoServer(lifetimeCts.Token);
+        var singBoxPort = GetAvailableTcpPort();
+        var socksPort = GetAvailableTcpPort();
+        await using var runtime = new DefaultRuntime();
+        await using var runtimeEvents = new RuntimeEventCollector(runtime);
+        XrayProcessHandle? singBox = null;
+
+        try
+        {
+            singBox = await StartSingBoxAsync(
+                goExecutable,
+                tempDirectory,
+                "vless-reality-server.json",
+                CreateSingBoxVlessRealityServerConfig(singBoxPort),
+                singBoxPort,
+                lifetimeCts.Token);
+
+            await runtime.StartAsync(
+                CreateDotnetVlessClientPlan(
+                    revision: 1,
+                    localSocksPort: socksPort,
+                    serverPort: singBoxPort,
+                    transport: VlessOutboundTransports.Tcp,
+                    transportSecurity: RuntimeInternetSecurityTypes.Reality,
+                    serverName: SingBoxRealityServerName,
+                    realityOptions: CreateSingBoxRealityClientOptions()),
+                lifetimeCts.Token);
+
+            singBox.AssertStillRunning();
+
+            using var client = await ConnectViaSocks5Async(socksPort, echoPort, lifetimeCts.Token);
+            await using var stream = client.GetStream();
+            await AssertEchoAsync(stream, "hello-dotnet-vless-reality-client-to-sing-box", lifetimeCts.Token);
+
+            singBox.AssertStillRunning();
+        }
+        catch (Exception ex) when (singBox is not null)
+        {
+            throw CreateInteropFailure(
+                "Xray-dotnet VLESS REALITY client -> sing-box VLESS REALITY server interop failed.",
+                runtime,
+                singBox,
+                ex,
+                runtimeEvents);
+        }
+        finally
+        {
+            await StopRuntimeAsync(runtime);
+            if (singBox is not null)
+            {
+                await singBox.DisposeAsync();
+            }
+
+            lifetimeCts.Cancel();
+            echoListener.Stop();
+            await AwaitCompletionAsync(echoTask);
+            TryDeleteDirectory(tempDirectory);
+        }
+    }
+
+    [Fact]
+    public async Task Sing_box_vless_reality_outbound_can_connect_to_default_runtime_vless_reality_inbound()
+    {
+        if (!TryGetGoExecutablePath(out var goExecutable))
+        {
+            return;
+        }
+
+        using var lifetimeCts = new CancellationTokenSource(GoHelperTestTimeout);
+        var tempDirectory = CreateInteropTempDirectory("sing-box-vless-reality-client-to-dotnet");
+        var (echoListener, echoTask, echoPort) = StartEchoServer(lifetimeCts.Token);
+        var vlessPort = GetAvailableTcpPort();
+        var socksPort = GetAvailableTcpPort();
+        await using var runtime = new DefaultRuntime();
+        await using var runtimeEvents = new RuntimeEventCollector(runtime);
+        XrayProcessHandle? singBox = null;
+
+        try
+        {
+            await runtime.StartAsync(
+                CreateDotnetVlessServerPlan(
+                    revision: 1,
+                    inboundPort: vlessPort,
+                    transportProtocol: RuntimeInternetTransportProtocols.Tcp,
+                    transportSecurity: RuntimeInternetSecurityTypes.Reality,
+                    reality: CreateSingBoxRealityServerOptions()),
+                lifetimeCts.Token);
+
+            singBox = await StartSingBoxAsync(
+                goExecutable,
+                tempDirectory,
+                "socks-to-vless-reality.json",
+                CreateSingBoxSocksToVlessRealityClientConfig(socksPort, vlessPort),
+                socksPort,
+                lifetimeCts.Token);
+
+            singBox.AssertStillRunning();
+
+            using var client = await ConnectViaSocks5Async(socksPort, echoPort, lifetimeCts.Token);
+            await using var stream = client.GetStream();
+            await AssertEchoAsync(stream, "hello-sing-box-vless-reality-client-to-dotnet", lifetimeCts.Token);
+
+            singBox.AssertStillRunning();
+        }
+        catch (Exception ex) when (singBox is not null)
+        {
+            throw CreateInteropFailure(
+                "sing-box VLESS REALITY client -> Xray-dotnet VLESS REALITY server interop failed.",
+                runtime,
+                singBox,
+                ex,
+                runtimeEvents);
+        }
+        finally
+        {
+            await StopRuntimeAsync(runtime);
+            if (singBox is not null)
+            {
+                await singBox.DisposeAsync();
             }
 
             lifetimeCts.Cancel();
@@ -8333,6 +8477,147 @@ public sealed class XrayCoreInteropTests
             SpiderX = "/"
         };
 
+    private static RuntimeRealityServerOptions CreateSingBoxRealityServerOptions()
+        => new()
+        {
+            Show = true,
+            Dest = $"{SingBoxRealityServerName}:443",
+            Type = "tcp",
+            ServerNames = [SingBoxRealityServerName],
+            PrivateKey = SingBoxRealityPrivateKey,
+            ShortIds = [InteropRealityShortId]
+        };
+
+    private static RuntimeRealityOptions CreateSingBoxRealityClientOptions(string fingerprint = "chrome")
+        => new()
+        {
+            Show = true,
+            Fingerprint = fingerprint,
+            PublicKey = SingBoxRealityPublicKey,
+            ShortId = InteropRealityShortId,
+            SpiderX = "/"
+        };
+
+    private static object CreateSingBoxVlessRealityServerConfig(int vlessPort)
+        => new
+        {
+            log = new
+            {
+                level = "debug",
+                timestamp = false
+            },
+            inbounds = new object[]
+            {
+                new
+                {
+                    type = "vless",
+                    tag = "vless-in",
+                    listen = "127.0.0.1",
+                    listen_port = vlessPort,
+                    users = new object[]
+                    {
+                        new
+                        {
+                            uuid = UserUuid
+                        }
+                    },
+                    tls = new
+                    {
+                        enabled = true,
+                        server_name = SingBoxRealityServerName,
+                        reality = new
+                        {
+                            enabled = true,
+                            handshake = new
+                            {
+                                server = SingBoxRealityServerName,
+                                server_port = 443
+                            },
+                            private_key = SingBoxRealityPrivateKey,
+                            short_id = new[]
+                            {
+                                InteropRealityShortId
+                            }
+                        }
+                    }
+                }
+            },
+            outbounds = new object[]
+            {
+                new
+                {
+                    type = "direct",
+                    tag = "direct"
+                }
+            }
+        };
+
+    private static object CreateSingBoxSocksToVlessRealityClientConfig(int socksPort, int vlessPort)
+        => new
+        {
+            log = new
+            {
+                level = "debug",
+                timestamp = false
+            },
+            inbounds = new object[]
+            {
+                new
+                {
+                    type = "mixed",
+                    tag = "mixed-in",
+                    listen = "127.0.0.1",
+                    listen_port = socksPort
+                }
+            },
+            outbounds = new object[]
+            {
+                new
+                {
+                    type = "direct",
+                    tag = "direct"
+                },
+                new
+                {
+                    type = "vless",
+                    tag = "vless-out",
+                    server = "127.0.0.1",
+                    server_port = vlessPort,
+                    uuid = UserUuid,
+                    tls = new
+                    {
+                        enabled = true,
+                        server_name = SingBoxRealityServerName,
+                        reality = new
+                        {
+                            enabled = true,
+                            public_key = SingBoxRealityPublicKey,
+                            short_id = InteropRealityShortId
+                        },
+                        utls = new
+                        {
+                            enabled = true,
+                            fingerprint = "chrome"
+                        }
+                    }
+                }
+            },
+            route = new
+            {
+                rules = new object[]
+                {
+                    new
+                    {
+                        inbound = new[]
+                        {
+                            "mixed-in"
+                        },
+                        outbound = "vless-out"
+                    }
+                }
+            }
+        };
+
     private static object CreateXrayRealityServerSettings()
         => new
         {
@@ -8647,6 +8932,222 @@ public sealed class XrayCoreInteropTests
         }
     }
 
+    private static async Task<XrayProcessHandle> StartSingBoxAsync(
+        string goExecutable,
+        string tempDirectory,
+        string configFileName,
+        object config,
+        int listenPort,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(tempDirectory);
+
+        var configPath = Path.Combine(tempDirectory, configFileName);
+        await File.WriteAllTextAsync(
+            configPath,
+            JsonSerializer.Serialize(
+                config,
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                }),
+            cancellationToken);
+
+        var workspaceRoot = FindWorkspaceRoot();
+        var buildTags = GetSingBoxReleaseFileOrDefault(
+            workspaceRoot,
+            Path.Combine("release", GetSingBoxDefaultBuildTagsFileName()),
+            "with_utls");
+        var ldflags = BuildSingBoxLdFlags(GetSingBoxReleaseFileOrDefault(
+            workspaceRoot,
+            Path.Combine("release", "LDFLAGS"),
+            string.Empty));
+        var executablePath = Path.Combine(tempDirectory, OperatingSystem.IsWindows() ? "sing-box.exe" : "sing-box");
+        await BuildSingBoxAsync(goExecutable, workspaceRoot, buildTags, ldflags, executablePath, cancellationToken);
+
+        var process = new Process
+        {
+            StartInfo = CreateSingBoxCommandStartInfo(
+                executablePath,
+                Path.Combine(workspaceRoot, "sing-box"),
+                "run",
+                "-c",
+                configPath),
+            EnableRaisingEvents = true
+        };
+        var handle = new XrayProcessHandle(process, configPath, "sing-box");
+        if (!process.Start())
+        {
+            process.Dispose();
+            throw new InvalidOperationException("Failed to start sing-box process.");
+        }
+
+        handle.BeginCapture();
+
+        try
+        {
+            await WaitForTcpPortAsync(listenPort, handle, "sing-box", cancellationToken, GoHelperTestTimeout);
+            handle.AssertStillRunning();
+            return handle;
+        }
+        catch
+        {
+            await handle.DisposeAsync();
+            throw;
+        }
+    }
+
+    private static async Task BuildSingBoxAsync(
+        string goExecutable,
+        string workspaceRoot,
+        string buildTags,
+        string ldflags,
+        string executablePath,
+        CancellationToken cancellationToken)
+    {
+        var process = new Process
+        {
+            StartInfo = CreateGoModuleCommandStartInfo(
+                goExecutable,
+                workspaceRoot,
+                "sing-box",
+                "build",
+                "-v",
+                "-trimpath",
+                "-o",
+                executablePath,
+                "-tags",
+                buildTags,
+                "-ldflags",
+                ldflags,
+                "./cmd/sing-box")
+        };
+
+        if (!process.Start())
+        {
+            process.Dispose();
+            throw new InvalidOperationException("Failed to start sing-box build.");
+        }
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch
+        {
+            TryTerminateProcess(process);
+            process.Dispose();
+            throw;
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        var exitCode = process.ExitCode;
+        process.Dispose();
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Failed to build sing-box, exit code {exitCode}.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{FormatCapturedText(stdout)}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{FormatCapturedText(stderr)}");
+        }
+    }
+
+    private static ProcessStartInfo CreateSingBoxCommandStartInfo(
+        string executablePath,
+        string workingDirectory,
+        params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return startInfo;
+    }
+
+    private static string GetSingBoxReleaseFileOrDefault(string workspaceRoot, string relativePath, string fallback)
+    {
+        var path = Path.Combine(workspaceRoot, "sing-box", relativePath);
+        if (!File.Exists(path))
+        {
+            return fallback;
+        }
+
+        var value = File.ReadAllText(path).Trim();
+        return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private static string GetSingBoxDefaultBuildTagsFileName()
+        => OperatingSystem.IsWindows()
+            ? "DEFAULT_BUILD_TAGS_WINDOWS"
+            : "DEFAULT_BUILD_TAGS_OTHERS";
+
+    private static string BuildSingBoxLdFlags(string sharedLdFlags)
+    {
+        var builder = new StringBuilder("-X github.com/sagernet/sing-box/constant.Version=interop-test");
+        if (!string.IsNullOrWhiteSpace(sharedLdFlags))
+        {
+            builder.Append(' ');
+            builder.Append(sharedLdFlags.Trim());
+        }
+
+        builder.Append(" -s -w -buildid=");
+        return builder.ToString();
+    }
+
+    private static ProcessStartInfo CreateGoModuleCommandStartInfo(
+        string goExecutable,
+        string workspaceRoot,
+        string moduleDirectoryName,
+        params string[] arguments)
+    {
+        var codexBuildDirectory = Path.Combine(workspaceRoot, ".codex-build");
+        var goCacheDirectory = Path.Combine(codexBuildDirectory, "go-cache");
+        var goModuleCacheDirectory = Path.Combine(codexBuildDirectory, "go-mod");
+        var goRootDirectory = GetGoRootDirectory(goExecutable);
+        Directory.CreateDirectory(goCacheDirectory);
+        Directory.CreateDirectory(goModuleCacheDirectory);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = goExecutable,
+            WorkingDirectory = Path.Combine(workspaceRoot, moduleDirectoryName),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment["GOROOT"] = goRootDirectory;
+        startInfo.Environment["GOCACHE"] = goCacheDirectory;
+        startInfo.Environment["GOMODCACHE"] = goModuleCacheDirectory;
+        startInfo.Environment["GOTOOLCHAIN"] = "local";
+        startInfo.Environment["CGO_ENABLED"] = "0";
+        return startInfo;
+    }
+
     private static async Task<XrayProcessHandle> StartXrayRAsync(
         string xrayrExecutable,
         string tempDirectory,
@@ -8736,10 +9237,11 @@ public sealed class XrayCoreInteropTests
         int port,
         XrayProcessHandle handle,
         string processName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        waitCts.CancelAfter(TimeSpan.FromSeconds(10));
+        waitCts.CancelAfter(timeout ?? TimeSpan.FromSeconds(10));
 
         while (!waitCts.IsCancellationRequested)
         {

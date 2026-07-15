@@ -334,6 +334,13 @@ public sealed class DefaultRuntime : IRuntime
                     InboundConnectionError = OnInboundConnectionError,
                     InboundClientHelloRejected = OnInboundClientHelloRejected,
                     InboundUnknownServerNameRejected = OnInboundUnknownServerNameRejected,
+                    ProxyConnectionAccessed = (revision, context) => PublishConnectionAccessed(
+                        revision,
+                        context.Protocol,
+                        context.InboundTag,
+                        context.TargetHost,
+                        context.TargetPort,
+                        context.Network),
                     RuntimeTaskFaulted = ReportRuntimeFault
                 },
                 InboundLimits = plan.TransportLimits,
@@ -708,6 +715,27 @@ public sealed class DefaultRuntime : IRuntime
                 RemoteEndPoint = remoteEndPoint,
                 Message = message,
                 Exception = exception
+            });
+    }
+
+    private void PublishConnectionAccessed(
+        int revision,
+        string protocol,
+        string tag,
+        string targetHost,
+        int targetPort,
+        string network)
+    {
+        PublishEvent(
+            new RuntimeConnectionAccessedEvent
+            {
+                Revision = revision,
+                Protocol = protocol,
+                Tag = tag,
+                TargetHost = targetHost,
+                TargetPort = targetPort,
+                Network = network,
+                Message = $"[{network.ToUpperInvariant()}] {targetHost}:{targetPort} via {tag} (Inbound: {protocol})"
             });
     }
 

@@ -5,9 +5,9 @@ namespace NodePanel.Core.Runtime;
 
 internal static class RuntimeRealityProtocolVersion
 {
-    public const byte Major = 26;
-    public const byte Minor = 2;
-    public const byte Patch = 6;
+    public const byte Major = 1;
+    public const byte Minor = 8;
+    public const byte Patch = 1;
 }
 
 internal sealed record RuntimeRealityClientHelloExtension(

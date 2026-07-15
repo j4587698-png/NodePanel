@@ -146,6 +146,7 @@ public sealed class VlessInboundRuntimeCompiler : IInboundProtocolRuntimeCompile
         => inbounds
             .Where(static inbound => inbound.Enabled &&
                                      (NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vless, InboundTransports.Tls) ||
+                                      NodeServiceConfigInbounds.IsTcpRealityInbound(inbound, InboundProtocols.Vless) ||
                                       NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vless, InboundTransports.Wss) ||
                                       NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vless, RuntimeInternetTransportProtocols.HttpUpgrade) ||
                                       NodeServiceConfigInbounds.IsProtocolTransport(inbound, InboundProtocols.Vless, InboundTransports.Grpc) ||

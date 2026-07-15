@@ -42,7 +42,8 @@ internal sealed class RuntimeInstance : IAsyncDisposable
             context.Callbacks.ProxyInboundListenerStarted,
             context.Callbacks.InboundConnectionError,
             context.Callbacks.InboundClientHelloRejected,
-            context.Callbacks.InboundUnknownServerNameRejected);
+            context.Callbacks.InboundUnknownServerNameRejected,
+            context.Callbacks.ProxyConnectionAccessed);
         var inboundManager = inboundComposition.CreateManager(
             new RuntimeInboundHandlerContext
             {

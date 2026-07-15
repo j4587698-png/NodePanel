@@ -20,6 +20,8 @@ public sealed record NodeRuntimeSnapshot
 
     public DnsRuntimeSettings Dns { get; init; } = DnsRuntimeSettings.Default;
 
+    public RuntimeRealityServerOptions? Reality { get; init; }
+
     public ProxyInboundRuntimePlan ProxyInbounds { get; init; } = ProxyInboundRuntimePlan.Empty;
 
     public RuntimeOutboundSettingsCatalog OutboundSettings { get; init; } = RuntimeOutboundSettingsCatalog.Empty;
@@ -29,6 +31,8 @@ public sealed record NodeRuntimeSnapshot
     public InboundRuntimePlanCollection InboundPlans => Plan.Inbounds;
 
     public bool RequiresCertificate => Plan.Inbounds.RequiresCertificate;
+
+    public bool RequiresReality => Plan.Inbounds.RequiresReality;
 
     public TrojanInboundRuntimePlan TrojanPlan => Plan.Trojan;
 
@@ -50,6 +54,7 @@ public sealed record NodeRuntimeSnapshot
             TransportLimits = TransportLimits,
             SessionPolicies = SessionPolicies,
             Dns = Dns,
+            Reality = Reality,
             Tls = tls,
             UseCone = useCone,
             ProxyInbounds = ProxyInbounds,

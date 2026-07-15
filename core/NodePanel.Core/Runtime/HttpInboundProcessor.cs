@@ -44,7 +44,7 @@ internal static class HttpInboundProcessor
                 return;
             }
 
-            var userId = string.Empty;
+            var userId = options.UserId;
             if (authentication?.Enabled == true)
             {
                 if (!TryAuthenticate(request.Headers, authentication, out userId))
@@ -72,6 +72,15 @@ internal static class HttpInboundProcessor
             var connectInitialPayload = request.IsConnect
                 ? clientReader.DrainBufferedBytes()
                 : Array.Empty<byte>();
+
+            options.ConnectionAccessed?.Invoke(new ProxyInboundConnectionAccessedContext
+            {
+                Protocol = ProxyInboundProtocols.Http,
+                InboundTag = options.InboundTag,
+                TargetHost = request.Host,
+                TargetPort = request.Port,
+                Network = "tcp"
+            });
             if (connectInitialPayload.Length > 0)
             {
                 context = context with

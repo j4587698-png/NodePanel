@@ -2228,6 +2228,256 @@ public sealed class NodeRuntimeSnapshotBuilderTests
     }
 
     [Fact]
+    public void TryBuild_passes_reality_server_options_for_vless_tcp_reality_inbound()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new VlessInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            11,
+            new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "vless-reality",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Vless,
+                        Transport = RuntimeInternetTransportProtocols.Tcp,
+                        TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                        TransportSecurity = RuntimeInternetSecurityTypes.Reality,
+                        Users =
+                        [
+                            new TrojanUserConfig
+                            {
+                                UserId = "user-a",
+                                Uuid = "11111111-1111-1111-1111-111111111111"
+                            }
+                        ]
+                    }
+                ],
+                Certificate = new CertificateOptions
+                {
+                    Mode = CertificateModes.Disabled
+                },
+                Reality = new RuntimeRealityServerOptions
+                {
+                    ServerNames = [" download.microsoft.com "],
+                    Dest = " download.microsoft.com:443 ",
+                    Type = " TCP ",
+                    PrivateKey = " UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc ",
+                    ShortIds = [" 0123456789ABCDEF "],
+                    MaxTimeDiffMilliseconds = -1
+                },
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    }
+                ]
+            },
+            [OutboundProtocols.Freedom],
+            out var snapshot,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.False(snapshot.RequiresCertificate);
+        Assert.True(snapshot.RequiresReality);
+        Assert.NotNull(snapshot.Reality);
+        Assert.Equal(["download.microsoft.com"], snapshot.Reality.ServerNames);
+        Assert.Equal("download.microsoft.com:443", snapshot.Reality.Dest);
+        Assert.Equal("tcp", snapshot.Reality.Type);
+        Assert.Equal(["0123456789abcdef"], snapshot.Reality.ShortIds);
+        Assert.Equal(0, snapshot.Reality.MaxTimeDiffMilliseconds);
+        Assert.Single(snapshot.ActiveUsers);
+        Assert.Same(snapshot.Reality, snapshot.CreateRuntimePlan().Reality);
+    }
+
+    [Fact]
+    public void TryBuild_passes_reality_server_options_for_vmess_tcp_reality_inbound()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new VmessInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            14,
+            new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "vmess-reality",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Vmess,
+                        Transport = RuntimeInternetTransportProtocols.Tcp,
+                        TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                        TransportSecurity = RuntimeInternetSecurityTypes.Reality,
+                        Users =
+                        [
+                            new TrojanUserConfig
+                            {
+                                UserId = "user-a",
+                                Uuid = "11111111-1111-1111-1111-111111111111"
+                            }
+                        ]
+                    }
+                ],
+                Certificate = new CertificateOptions
+                {
+                    Mode = CertificateModes.Disabled
+                },
+                Reality = new RuntimeRealityServerOptions
+                {
+                    ServerNames = ["dl.google.com"],
+                    Dest = "dl.google.com:443",
+                    Type = "tcp",
+                    PrivateKey = "UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc",
+                    ShortIds = ["0123456789abcdef"]
+                },
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    }
+                ]
+            },
+            [OutboundProtocols.Freedom],
+            out var snapshot,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.False(snapshot.RequiresCertificate);
+        Assert.True(snapshot.RequiresReality);
+        Assert.NotNull(snapshot.Reality);
+        Assert.Single(snapshot.ActiveUsers);
+        var vmessPlan = snapshot.GetInboundPlanOrDefault(InboundProtocols.Vmess, VmessInboundRuntimePlan.Empty);
+        Assert.Single(vmessPlan.RealityListeners);
+    }
+
+    [Fact]
+    public void TryBuild_passes_reality_server_options_for_trojan_tcp_reality_inbound()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new TrojanInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            13,
+            new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "trojan-reality",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Trojan,
+                        Transport = RuntimeInternetTransportProtocols.Tcp,
+                        TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                        TransportSecurity = RuntimeInternetSecurityTypes.Reality,
+                        Users =
+                        [
+                            new TrojanUserConfig
+                            {
+                                UserId = "user-a",
+                                Password = "secret"
+                            }
+                        ]
+                    }
+                ],
+                Certificate = new CertificateOptions
+                {
+                    Mode = CertificateModes.Disabled
+                },
+                Reality = new RuntimeRealityServerOptions
+                {
+                    ServerNames = ["download.microsoft.com"],
+                    Dest = "download.microsoft.com:443",
+                    Type = "tcp",
+                    PrivateKey = "UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc",
+                    ShortIds = ["0123456789abcdef"]
+                },
+                Outbounds =
+                [
+                    new OutboundConfig
+                    {
+                        Tag = "direct",
+                        Enabled = true,
+                        Protocol = OutboundProtocols.Freedom
+                    }
+                ]
+            },
+            [OutboundProtocols.Freedom],
+            out var snapshot,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.False(snapshot.RequiresCertificate);
+        Assert.True(snapshot.RequiresReality);
+        Assert.NotNull(snapshot.Reality);
+        Assert.Single(snapshot.ActiveUsers);
+        Assert.Single(snapshot.TrojanPlan.RealityListeners);
+    }
+
+    [Fact]
+    public void TryBuild_rejects_reality_inbound_without_server_options()
+    {
+        var builder = new NodeRuntimeSnapshotBuilder(
+        [
+            new VlessInboundRuntimeCompiler()
+        ]);
+
+        var success = builder.TryBuild(
+            12,
+            new NodeServiceConfig
+            {
+                Inbounds =
+                [
+                    new InboundConfig
+                    {
+                        Tag = "vless-reality",
+                        Enabled = true,
+                        Protocol = InboundProtocols.Vless,
+                        Transport = RuntimeInternetTransportProtocols.Tcp,
+                        TransportProtocol = RuntimeInternetTransportProtocols.Tcp,
+                        TransportSecurity = RuntimeInternetSecurityTypes.Reality,
+                        Users =
+                        [
+                            new TrojanUserConfig
+                            {
+                                UserId = "user-a",
+                                Uuid = "11111111-1111-1111-1111-111111111111"
+                            }
+                        ]
+                    }
+                ],
+                Certificate = new CertificateOptions
+                {
+                    Mode = CertificateModes.Disabled
+                }
+            },
+            [OutboundProtocols.Freedom],
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Contains("REALITY server settings", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void TryBuild_rejects_vless_outbound_with_invalid_uuid()
     {
         var builder = new NodeRuntimeSnapshotBuilder(

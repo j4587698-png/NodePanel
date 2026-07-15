@@ -73,14 +73,21 @@ public static class NodeServiceConfigInbounds
 
         var normalizedProtocol = InboundProtocols.Normalize(protocol);
         var normalizedTransport = InboundTransports.Normalize(transport);
-        return GetProtocolInbounds(config, normalizedProtocol)
-                   .FirstOrDefault(item => IsProtocolTransport(item, normalizedProtocol, normalizedTransport))
+        var protocolInbounds = GetProtocolInbounds(config, normalizedProtocol);
+        return protocolInbounds.FirstOrDefault(item => IsProtocolTransport(item, normalizedProtocol, normalizedTransport))
+               ?? (string.Equals(normalizedTransport, InboundTransports.Tls, StringComparison.Ordinal)
+                   ? protocolInbounds.FirstOrDefault(item => IsTcpRealityInbound(item, normalizedProtocol))
+                   : null)
                ?? CreateDefaultInbound(normalizedProtocol, normalizedTransport);
     }
 
     public static bool RequiresCertificate(NodeServiceConfig config)
         => GetEffectiveInbounds(config)
             .Any(static inbound => inbound.Enabled && RequiresCertificate(inbound));
+
+    public static bool RequiresReality(NodeServiceConfig config)
+        => GetEffectiveInbounds(config)
+            .Any(static inbound => inbound.Enabled && RequiresReality(inbound));
 
     public static IReadOnlyList<InboundConfig> ReplaceTrojanUsers(
         IReadOnlyList<InboundConfig> inbounds,
@@ -236,6 +243,7 @@ public static class NodeServiceConfigInbounds
         ArgumentNullException.ThrowIfNull(inbound);
 
         return IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Tls) ||
+               IsTcpRealityInbound(inbound, InboundProtocols.Trojan) ||
                IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Wss) ||
                IsProtocolTransport(inbound, InboundProtocols.Trojan, RuntimeInternetTransportProtocols.HttpUpgrade) ||
                IsProtocolTransport(inbound, InboundProtocols.Trojan, InboundTransports.Grpc) ||
@@ -246,6 +254,23 @@ public static class NodeServiceConfigInbounds
         => string.Equals(InboundProtocols.Normalize(inbound.Protocol), InboundProtocols.Normalize(protocol), StringComparison.Ordinal) &&
            string.Equals(ResolveTransportAlias(inbound), InboundTransports.Normalize(transport), StringComparison.Ordinal);
 
+    public static bool IsTcpRealityInbound(InboundConfig inbound, string protocol)
+    {
+        if (!string.Equals(InboundProtocols.Normalize(inbound.Protocol), InboundProtocols.Normalize(protocol), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return InboundInternetStackResolver.TryResolve(
+                   inbound.Transport,
+                   inbound.TransportProtocol,
+                   inbound.TransportSecurity,
+                   out var stack,
+                   out _) &&
+               string.Equals(stack.TransportProtocol, RuntimeInternetTransportProtocols.Tcp, StringComparison.Ordinal) &&
+               string.Equals(stack.SecurityType, RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal);
+    }
+
     private static bool RequiresCertificate(InboundConfig inbound)
     {
         if (InboundInternetStackResolver.TryResolve(
@@ -255,12 +280,27 @@ public static class NodeServiceConfigInbounds
                 out var stack,
                 out _))
         {
-            return stack.UsesTlsLikeSecurity;
+            return string.Equals(stack.SecurityType, RuntimeInternetSecurityTypes.Tls, StringComparison.Ordinal);
         }
 
         return CertificateInboundTransports.Contains(
             InboundTransports.Normalize(inbound.Transport),
             StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool RequiresReality(InboundConfig inbound)
+    {
+        if (!InboundInternetStackResolver.TryResolve(
+                inbound.Transport,
+                inbound.TransportProtocol,
+                inbound.TransportSecurity,
+                out var stack,
+                out _))
+        {
+            return false;
+        }
+
+        return string.Equals(stack.SecurityType, RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal);
     }
 
     private static string ResolveTransportAlias(InboundConfig inbound)

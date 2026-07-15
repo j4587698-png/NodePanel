@@ -48,6 +48,21 @@ public record ProxyInboundServerCallbacks
     public Action<ProxyInboundListenerDefinition>? ListenerStarted { get; init; }
 
     public Action<ProxyInboundConnectionErrorContext>? ConnectionError { get; init; }
+
+    public Action<ProxyInboundConnectionAccessedContext>? ConnectionAccessed { get; init; }
+}
+
+public record ProxyInboundConnectionAccessedContext
+{
+    public required string Protocol { get; init; }
+
+    public required string InboundTag { get; init; }
+
+    public required string TargetHost { get; init; }
+
+    public int TargetPort { get; init; }
+
+    public string Network { get; init; } = string.Empty;
 }
 
 public record ProxyInboundConnectionErrorContext
@@ -169,4 +184,6 @@ internal record ProxyInboundConnectionOptions : IRuntimeInboundConnectionOptions
     public EndPoint? OriginalDestinationEndPoint => null;
 
     public IRuntimeSniffingDefinition Sniffing { get; init; } = RuntimeSniffingOptions.Disabled;
+
+    public Action<ProxyInboundConnectionAccessedContext>? ConnectionAccessed { get; init; }
 }

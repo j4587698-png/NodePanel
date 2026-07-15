@@ -138,8 +138,7 @@ public sealed class NodeConnectionRegistry
                 Connected = true,
                 AppliedRevision = Math.Max(runtime.AppliedRevision, payload.AppliedRevision),
                 LastSeenAt = payload.Status.Timestamp,
-                LastStatus = payload.Status,
-                TrafficTotals = MergeTraffic(runtime.TrafficTotals, payload.Traffic)
+                LastStatus = payload.Status
             });
     }
 
@@ -156,56 +155,6 @@ public sealed class NodeConnectionRegistry
                 update(current?.Runtime ?? new NodeRuntimeSnapshot()));
         }
     }
-
-    private static IReadOnlyList<PanelUserTrafficTotal> MergeTraffic(
-        IReadOnlyList<PanelUserTrafficTotal> current,
-        IReadOnlyList<UserTrafficDelta> delta)
-    {
-        var totals = current.ToDictionary(GetTrafficKey, StringComparer.Ordinal);
-        foreach (var item in delta)
-        {
-            var key = GetTrafficKey(item);
-            if (totals.TryGetValue(key, out var existing))
-            {
-                totals[key] = existing with
-                {
-                    RuntimeKey = string.IsNullOrWhiteSpace(item.RuntimeKey) ? existing.RuntimeKey : item.RuntimeKey,
-                    Protocol = string.IsNullOrWhiteSpace(item.Protocol) ? existing.Protocol : item.Protocol,
-                    InboundTag = string.IsNullOrWhiteSpace(item.InboundTag) ? existing.InboundTag : item.InboundTag,
-                    UserId = string.IsNullOrWhiteSpace(item.UserId) ? existing.UserId : item.UserId,
-                    UploadBytes = existing.UploadBytes + item.UploadBytes,
-                    DownloadBytes = existing.DownloadBytes + item.DownloadBytes
-                };
-            }
-            else
-            {
-                totals[key] = new PanelUserTrafficTotal
-                {
-                    RuntimeKey = item.RuntimeKey,
-                    Protocol = item.Protocol,
-                    InboundTag = item.InboundTag,
-                    UserId = item.UserId,
-                    UploadBytes = item.UploadBytes,
-                    DownloadBytes = item.DownloadBytes
-                };
-            }
-        }
-
-        return totals.Values
-            .OrderBy(static item => item.UserId, StringComparer.Ordinal)
-            .ThenBy(static item => item.RuntimeKey, StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static string GetTrafficKey(PanelUserTrafficTotal total)
-        => string.IsNullOrWhiteSpace(total.RuntimeKey)
-            ? total.UserId
-            : total.RuntimeKey;
-
-    private static string GetTrafficKey(UserTrafficDelta delta)
-        => string.IsNullOrWhiteSpace(delta.RuntimeKey)
-            ? delta.UserId
-            : delta.RuntimeKey;
 
     private sealed record ConnectionEntry(NodeControlPlaneSession? Session, NodeRuntimeSnapshot Runtime);
 }

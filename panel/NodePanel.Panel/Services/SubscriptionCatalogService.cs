@@ -72,6 +72,12 @@ public sealed class SubscriptionCatalogService
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(endpoint);
 
+        if (IsRealityEndpoint(endpoint) &&
+            !string.Equals(endpoint.Protocol, "vless", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
         return string.Equals(endpoint.Protocol, "vless", StringComparison.OrdinalIgnoreCase)
             ? BuildVlessUri(user, endpoint)
             : string.Equals(endpoint.Protocol, "vmess", StringComparison.OrdinalIgnoreCase)
@@ -83,7 +89,7 @@ public sealed class SubscriptionCatalogService
 
     private string BuildTrojanUri(PanelUserRecord user, SubscriptionEndpoint endpoint)
     {
-        var query = new List<string> { "security=tls" };
+        var query = new List<string> { $"security={Uri.EscapeDataString(NormalizeEndpointSecurity(endpoint.Security))}" };
         AppendTransportQuery(query, endpoint);
 
         if (!string.IsNullOrWhiteSpace(endpoint.Sni)) query.Add($"sni={Uri.EscapeDataString(endpoint.Sni)}");
@@ -94,10 +100,19 @@ public sealed class SubscriptionCatalogService
 
     private string BuildVlessUri(PanelUserRecord user, SubscriptionEndpoint endpoint)
     {
-        var query = new List<string> { "encryption=none", "security=tls" };
+        var security = NormalizeEndpointSecurity(endpoint.Security);
+        var query = new List<string> { "encryption=none", $"security={Uri.EscapeDataString(security)}" };
         AppendTransportQuery(query, endpoint);
 
         if (!string.IsNullOrWhiteSpace(endpoint.Sni)) query.Add($"sni={Uri.EscapeDataString(endpoint.Sni)}");
+        if (IsRealityEndpoint(endpoint))
+        {
+            if (!string.IsNullOrWhiteSpace(endpoint.RealityFingerprint)) query.Add($"fp={Uri.EscapeDataString(endpoint.RealityFingerprint)}");
+            if (!string.IsNullOrWhiteSpace(endpoint.RealityPublicKey)) query.Add($"pbk={Uri.EscapeDataString(endpoint.RealityPublicKey)}");
+            if (!string.IsNullOrWhiteSpace(endpoint.RealityShortId)) query.Add($"sid={Uri.EscapeDataString(endpoint.RealityShortId)}");
+            if (!string.IsNullOrWhiteSpace(endpoint.RealitySpiderX)) query.Add($"spx={Uri.EscapeDataString(endpoint.RealitySpiderX)}");
+        }
+
         if (endpoint.SkipCertificateVerification) query.Add("allowInsecure=1");
 
         var uuid = ResolveProtocolUuid(user);
@@ -122,7 +137,7 @@ public sealed class SubscriptionCatalogService
             path = string.Equals(transport, InboundTransports.Grpc, StringComparison.OrdinalIgnoreCase)
                 ? endpoint.GrpcServiceName
                 : endpoint.Path,
-            tls = "tls",
+            tls = NormalizeEndpointSecurity(endpoint.Security),
             sni = endpoint.Sni,
             alpn = ""
         };
@@ -151,17 +166,29 @@ public sealed class SubscriptionCatalogService
         if (string.IsNullOrWhiteSpace(host)) yield break;
 
         var displayName = ResolveSubscriptionDisplayName(node, host);
-        var sni = ResolveSubscriptionSni(node, host, normalizedProtocol);
+        var defaultSni = ResolveSubscriptionSni(node, host, normalizedProtocol);
 
         foreach (var inbound in NodeServiceConfigInbounds
                      .GetProtocolInbounds(node.Config, normalizedProtocol)
                      .Where(static inbound => inbound.Enabled))
         {
-            var transport = ResolveEndpointTransport(normalizedProtocol, inbound);
+            var transport = ResolveEndpointTransport(normalizedProtocol, inbound, out var security);
             if (string.IsNullOrWhiteSpace(transport))
             {
                 continue;
             }
+
+            var reality = string.Equals(security, RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal);
+            var sni = reality
+                ? ResolveRealityServerName(node.Config.Reality, defaultSni)
+                : defaultSni;
+            var realityPublicKey = reality && RuntimeRealityUtilities.TryDerivePublicKey(
+                    node.Config.Reality?.PrivateKey ?? string.Empty,
+                    out var derivedPublicKey,
+                    out _)
+                ? derivedPublicKey
+                : string.Empty;
+            var labelSuffix = BuildEndpointSuffix(normalizedProtocol, transport, security);
 
             yield return new SubscriptionEndpoint
             {
@@ -170,14 +197,19 @@ public sealed class SubscriptionCatalogService
                 Host = host,
                 Port = inbound.Port,
                 Sni = sni,
-                Label = $"{displayName}-{BuildEndpointSuffix(normalizedProtocol, transport)}",
+                Label = $"{displayName}-{labelSuffix}",
                 Protocol = normalizedProtocol,
+                Security = security,
                 Transport = transport,
                 Path = inbound.Path,
                 WsHost = string.IsNullOrWhiteSpace(inbound.Host)
                     ? sni
                     : inbound.Host,
                 GrpcServiceName = inbound.GrpcServiceName,
+                RealityPublicKey = realityPublicKey,
+                RealityShortId = reality ? ResolveRealityShortId(node.Config.Reality) : string.Empty,
+                RealityFingerprint = reality ? "chrome" : string.Empty,
+                RealitySpiderX = reality ? "/" : string.Empty,
                 SkipCertificateVerification = !string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal) &&
                                              node.SubscriptionAllowInsecure
             };
@@ -266,39 +298,29 @@ public sealed class SubscriptionCatalogService
         }
     }
 
-    private static string ResolveEndpointTransport(string protocol, InboundConfig inbound)
+    private static string ResolveEndpointTransport(string protocol, InboundConfig inbound, out string security)
     {
         if (string.Equals(protocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
         {
+            security = RuntimeInternetSecurityTypes.None;
             return InboundTransports.Tcp;
         }
 
-        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.Wss))
+        if (!InboundInternetStackResolver.TryResolve(
+                inbound.Transport,
+                inbound.TransportProtocol,
+                inbound.TransportSecurity,
+                out var stack,
+                out _))
         {
-            return "ws";
+            security = string.Empty;
+            return string.Empty;
         }
 
-        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.HttpUpgrade))
-        {
-            return InboundTransports.HttpUpgrade;
-        }
-
-        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.Grpc))
-        {
-            return InboundTransports.Grpc;
-        }
-
-        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.SplitHttp))
-        {
-            return InboundTransports.SplitHttp;
-        }
-
-        if (NodeServiceConfigInbounds.IsProtocolTransport(inbound, protocol, InboundTransports.Tls))
-        {
-            return "tcp";
-        }
-
-        return string.Empty;
+        security = stack.SecurityType;
+        return string.Equals(stack.TransportProtocol, RuntimeInternetTransportProtocols.Ws, StringComparison.Ordinal)
+            ? "ws"
+            : stack.TransportProtocol;
     }
 
     private static string NormalizeEndpointTransport(string? transport)
@@ -308,20 +330,37 @@ public sealed class SubscriptionCatalogService
                 ? "tcp"
                 : transport.Trim().ToLowerInvariant();
 
-    private static string BuildEndpointSuffix(string protocol, string transport)
+    private static string NormalizeEndpointSecurity(string? security)
+        => string.IsNullOrWhiteSpace(security)
+            ? RuntimeInternetSecurityTypes.Tls
+            : security.Trim().ToLowerInvariant();
+
+    private static string BuildEndpointSuffix(string protocol, string transport, string security)
     {
         if (string.Equals(protocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
         {
             return "ss";
         }
 
-        return NormalizeEndpointTransport(transport) switch
+        var transportSuffix = NormalizeEndpointTransport(transport) switch
         {
             "tcp" => "tcp",
             "ws" => "wss",
             _ => NormalizeEndpointTransport(transport)
         };
+        return string.Equals(security, RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal)
+            ? $"{transportSuffix}-reality"
+            : transportSuffix;
     }
+
+    private static string ResolveRealityServerName(RuntimeRealityServerOptions? options, string fallback)
+        => options?.ServerNames.FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item))?.Trim() ?? fallback;
+
+    private static string ResolveRealityShortId(RuntimeRealityServerOptions? options)
+        => options?.ShortIds.FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item))?.Trim() ?? string.Empty;
+
+    private static bool IsRealityEndpoint(SubscriptionEndpoint endpoint)
+        => string.Equals(NormalizeEndpointSecurity(endpoint.Security), RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal);
 
     private static bool IsUsableAddress(string address) => !string.IsNullOrWhiteSpace(address) && !string.Equals(address, "0.0.0.0", StringComparison.OrdinalIgnoreCase) && !string.Equals(address, "::", StringComparison.OrdinalIgnoreCase);
 }

@@ -144,6 +144,8 @@ public sealed class NodeFormInput
 
     public DnsFormInput Dns { get; set; } = new();
 
+    public RealityServerFormInput Reality { get; set; } = new();
+
     public List<OutboundFormInput> Outbounds { get; set; } = [];
 
     public List<RoutingRuleFormInput> RoutingRules { get; set; } = [];
@@ -156,6 +158,7 @@ public sealed class NodeFormInput
     {
         EnsureCollections();
         GetOrderedTrojanInbounds();
+        Reality.ApplyDefaults();
 
         foreach (var inbound in Inbounds)
         {
@@ -210,6 +213,13 @@ public sealed class NodeFormInput
             return false;
         }
 
+        var inbounds = BuildInbounds();
+        if (!TryBuildRealityOptions(inbounds, out var reality, out error))
+        {
+            request = new UpsertNodeRequest();
+            return false;
+        }
+
         var normalizedCertificateMode = CertificateModes.Normalize(CertificateMode);
         if (normalizedCertificateMode == CertificateModes.PanelDistributed &&
             string.IsNullOrWhiteSpace(PanelCertificateId))
@@ -222,7 +232,8 @@ public sealed class NodeFormInput
         var config = MergeAdvancedConfig(
             new NodeServiceConfig
             {
-                Inbounds = BuildInbounds(),
+                Inbounds = inbounds,
+                Reality = reality,
                 Outbounds = outbounds,
                 RoutingRules = BuildRoutingRules(),
                 Certificate = new CertificateOptions
@@ -355,6 +366,7 @@ public sealed class NodeFormInput
             CertificateEnvironmentVariables = NodeFormValueCodec.FormatEnvironmentVariables(record.Config.Certificate.EnvironmentVariables),
             CertificateRejectUnknownSni = record.Config.Certificate.RejectUnknownSni,
             CertificateClientHelloPolicy = ClientHelloPolicyFormInput.FromConfig(record.Config.Certificate.ClientHelloPolicy),
+            Reality = RealityServerFormInput.FromRuntimeOptions(record.Config.Reality),
             GlobalBytesPerSecond = Math.Max(0L, record.Config.Limits.GlobalBytesPerSecond),
             ConnectTimeoutSeconds = Math.Clamp(record.Config.Limits.ConnectTimeoutSeconds, 1, 600),
             ConnectionIdleSeconds = Math.Clamp(record.Config.Limits.ConnectionIdleSeconds, 1, 86400),
@@ -397,6 +409,8 @@ public sealed class NodeFormInput
     private void EnsureCollections()
     {
         CertificateClientHelloPolicy ??= new ClientHelloPolicyFormInput();
+        Reality ??= new RealityServerFormInput();
+        Reality.ApplyDefaults();
         Dns ??= new DnsFormInput();
         Dns.Servers ??= [];
         Outbounds ??= [];
@@ -509,6 +523,51 @@ public sealed class NodeFormInput
             .Where(static rule => !rule.IsEmpty())
             .Select(static rule => rule.ToConfig())
             .ToArray();
+
+    private bool TryBuildRealityOptions(
+        IReadOnlyList<InboundConfig> inbounds,
+        out RuntimeRealityServerOptions? reality,
+        out string error)
+    {
+        if (!inbounds.Any(UsesRealitySecurity))
+        {
+            reality = null;
+            error = string.Empty;
+            return true;
+        }
+
+        Reality.ApplyDefaults();
+        reality = Reality.ToRuntimeOptions();
+        if (string.IsNullOrWhiteSpace(reality.PrivateKey))
+        {
+            error = "REALITY 模式必须填写 Private Key。";
+            return false;
+        }
+
+        if (reality.ServerNames.Count == 0)
+        {
+            error = "REALITY 模式必须填写 Server Names。";
+            return false;
+        }
+
+        if (reality.ShortIds.Count == 0)
+        {
+            error = "REALITY 模式必须填写 Short ID。";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool UsesRealitySecurity(InboundConfig inbound)
+        => InboundInternetStackResolver.TryResolve(
+               inbound.Transport,
+               inbound.TransportProtocol,
+               inbound.TransportSecurity,
+               out var stack,
+               out _) &&
+           string.Equals(stack.SecurityType, RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal);
 
     private static IReadOnlyList<int> ParseGroupIds(string? value)
         => NodeFormValueCodec.ParseCsv(value)
@@ -997,6 +1056,8 @@ public sealed class TrojanInboundFormInput
 
     public string Transport { get; set; } = InboundTransports.Tls;
 
+    public string TransportSecurity { get; set; } = RuntimeInternetSecurityTypes.Tls;
+
     public bool Enabled { get; set; }
 
     public string ListenAddress { get; set; } = "0.0.0.0";
@@ -1049,6 +1110,7 @@ public sealed class TrojanInboundFormInput
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
                 Transport = normalizedTransport,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 8443,
                 HandshakeTimeoutSeconds = 10,
@@ -1059,6 +1121,7 @@ public sealed class TrojanInboundFormInput
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
                 Transport = normalizedTransport,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 8443,
                 HandshakeTimeoutSeconds = 10,
@@ -1069,6 +1132,7 @@ public sealed class TrojanInboundFormInput
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
                 Transport = normalizedTransport,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 443,
                 HandshakeTimeoutSeconds = 10,
@@ -1079,6 +1143,7 @@ public sealed class TrojanInboundFormInput
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
                 Transport = normalizedTransport,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 443,
                 HandshakeTimeoutSeconds = 10,
@@ -1089,6 +1154,7 @@ public sealed class TrojanInboundFormInput
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
                 Transport = normalizedTransport,
+                TransportSecurity = RuntimeInternetSecurityTypes.None,
                 ListenAddress = "0.0.0.0",
                 Port = 8388,
                 HandshakeTimeoutSeconds = 10
@@ -1098,6 +1164,7 @@ public sealed class TrojanInboundFormInput
                 Tag = GetDefaultTag(normalizedProtocol, normalizedTransport),
                 Protocol = normalizedProtocol,
                 Transport = InboundTransports.Tls,
+                TransportSecurity = RuntimeInternetSecurityTypes.Tls,
                 ListenAddress = "0.0.0.0",
                 Port = 443,
                 HandshakeTimeoutSeconds = 10
@@ -1121,6 +1188,7 @@ public sealed class TrojanInboundFormInput
             Enabled = inbound.Enabled,
             Protocol = normalizedProtocol,
             Transport = normalizedTransport,
+            TransportSecurity = ResolveEditableTransportSecurity(normalizedProtocol, inbound),
             ListenAddress = inbound.ListenAddress,
             Port = Math.Clamp(inbound.Port, 0, 65535),
             HandshakeTimeoutSeconds = Math.Clamp(inbound.HandshakeTimeoutSeconds, 1, 600),
@@ -1146,27 +1214,39 @@ public sealed class TrojanInboundFormInput
         var normalizedTransport = NormalizeTransportKey(normalizedProtocol, Transport);
         var isWebSocketTransport = string.Equals(normalizedTransport, InboundTransports.Wss, StringComparison.Ordinal);
         var isHttpUpgradeTransport = string.Equals(normalizedTransport, InboundTransports.HttpUpgrade, StringComparison.Ordinal);
+        var isTlsTransport = string.Equals(normalizedTransport, InboundTransports.Tls, StringComparison.Ordinal);
         var isGrpcTransport = string.Equals(normalizedTransport, InboundTransports.Grpc, StringComparison.Ordinal);
         var isSplitHttpTransport = string.Equals(normalizedTransport, InboundTransports.SplitHttp, StringComparison.Ordinal);
         var isShadowsocksTransport = string.Equals(normalizedProtocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal);
+        var useRealitySecurity = SupportsRealitySecurity(normalizedTransport) &&
+                                 string.Equals(
+                                     RuntimeInternetSecurityTypes.Normalize(TransportSecurity),
+                                     RuntimeInternetSecurityTypes.Reality,
+                                     StringComparison.Ordinal);
+        var transportProtocol = isHttpUpgradeTransport
+            ? RuntimeInternetTransportProtocols.HttpUpgrade
+            : isGrpcTransport
+                ? RuntimeInternetTransportProtocols.Grpc
+                : isSplitHttpTransport
+                    ? RuntimeInternetTransportProtocols.SplitHttp
+                    : isShadowsocksTransport || isTlsTransport || useRealitySecurity
+                        ? RuntimeInternetTransportProtocols.Tcp
+                        : string.Empty;
+        var transportSecurity = isHttpUpgradeTransport
+            ? RuntimeInternetSecurityTypes.Tls
+            : isTlsTransport || isGrpcTransport || isSplitHttpTransport || useRealitySecurity
+                ? useRealitySecurity ? RuntimeInternetSecurityTypes.Reality : RuntimeInternetSecurityTypes.Tls
+                : string.Empty;
         return new InboundConfig
         {
             Tag = string.IsNullOrWhiteSpace(Tag) ? GetDefaultTag(normalizedProtocol, normalizedTransport) : Tag.Trim(),
             Enabled = Enabled,
             Protocol = normalizedProtocol,
-            Transport = normalizedTransport,
-            TransportProtocol = isHttpUpgradeTransport
-                ? RuntimeInternetTransportProtocols.HttpUpgrade
-                : isGrpcTransport
-                    ? RuntimeInternetTransportProtocols.Grpc
-                    : isSplitHttpTransport
-                        ? RuntimeInternetTransportProtocols.SplitHttp
-                        : isShadowsocksTransport
-                            ? RuntimeInternetTransportProtocols.Tcp
-                            : string.Empty,
-            TransportSecurity = isHttpUpgradeTransport || isGrpcTransport || isSplitHttpTransport
-                ? RuntimeInternetSecurityTypes.Tls
-                : string.Empty,
+            Transport = useRealitySecurity && string.Equals(normalizedTransport, InboundTransports.Tls, StringComparison.Ordinal)
+                ? RuntimeInternetTransportProtocols.Tcp
+                : normalizedTransport,
+            TransportProtocol = transportProtocol,
+            TransportSecurity = transportSecurity,
             ListenAddress = NodeFormValueCodec.TrimOrEmpty(ListenAddress),
             Port = Port,
             HandshakeTimeoutSeconds = HandshakeTimeoutSeconds,
@@ -1245,6 +1325,12 @@ public sealed class TrojanInboundFormInput
         return normalizedTransport;
     }
 
+    public static bool SupportsRealitySecurity(string? transport)
+    {
+        var normalizedTransport = InboundTransports.Normalize(transport);
+        return normalizedTransport is InboundTransports.Tls or InboundTransports.Grpc or InboundTransports.SplitHttp;
+    }
+
     private static string ResolveEditableTransport(string protocol, InboundConfig inbound)
     {
         if (string.Equals(protocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
@@ -1273,6 +1359,27 @@ public sealed class TrojanInboundFormInput
         }
 
         return InboundTransports.Tls;
+    }
+
+    private static string ResolveEditableTransportSecurity(string protocol, InboundConfig inbound)
+    {
+        if (string.Equals(protocol, InboundProtocols.Shadowsocks, StringComparison.Ordinal))
+        {
+            return RuntimeInternetSecurityTypes.None;
+        }
+
+        if (InboundInternetStackResolver.TryResolve(
+                inbound.Transport,
+                inbound.TransportProtocol,
+                inbound.TransportSecurity,
+                out var stack,
+                out _) &&
+            string.Equals(stack.SecurityType, RuntimeInternetSecurityTypes.Reality, StringComparison.Ordinal))
+        {
+            return RuntimeInternetSecurityTypes.Reality;
+        }
+
+        return RuntimeInternetSecurityTypes.Tls;
     }
 
     public static string ResolveTransportKey(string protocol, InboundConfig inbound)

@@ -71,7 +71,11 @@ public sealed class SubscriptionRenderer
     }
 
     public string RenderRawList(SubscriptionCatalog catalog)
-        => string.Join("\n", catalog.Endpoints.Select(endpoint => _subscriptionCatalogService.BuildUri(catalog.User, endpoint)));
+        => string.Join(
+            "\n",
+            catalog.Endpoints
+                .Select(endpoint => _subscriptionCatalogService.BuildUri(catalog.User, endpoint))
+                .Where(static uri => !string.IsNullOrWhiteSpace(uri)));
 
     private RenderedSubscription RenderGeneral(SubscriptionCatalog catalog, string format, string appName, bool raw)
     {

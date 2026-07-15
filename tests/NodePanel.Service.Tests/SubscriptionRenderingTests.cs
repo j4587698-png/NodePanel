@@ -565,6 +565,65 @@ public sealed class SubscriptionRenderingTests
     }
 
     [Fact]
+    public void BuildUri_vless_reality_outputs_reality_query_fields()
+    {
+        var catalog = CreateRealityCatalog();
+        var endpoint = Assert.Single(catalog.Endpoints);
+        var service = new SubscriptionCatalogService(null!);
+
+        var uri = service.BuildUri(catalog.User, endpoint);
+
+        Assert.StartsWith("vless://11111111-1111-1111-1111-111111111111@edge.example.com:443?", uri, StringComparison.Ordinal);
+        Assert.Contains("security=reality", uri, StringComparison.Ordinal);
+        Assert.Contains("sni=dl.google.com", uri, StringComparison.Ordinal);
+        Assert.Contains("fp=chrome", uri, StringComparison.Ordinal);
+        Assert.Contains("pbk=reality-public-key", uri, StringComparison.Ordinal);
+        Assert.Contains("sid=0123456789abcdef", uri, StringComparison.Ordinal);
+        Assert.Contains("spx=%2F", uri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderClash_outputs_vless_reality_options()
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            SubscriptionFormats.Clash,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        var catalog = CreateRealityCatalog();
+        var plan = resolver.BuildPlan(catalog, request);
+
+        var rendered = SubscriptionFormatRenderer.Render(catalog, plan, "NodePanel");
+
+        Assert.Contains("  - name: 'Edge-reality'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("type: vless", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("servername: 'dl.google.com'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("client-fingerprint: 'chrome'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("reality-opts:", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("public-key: 'reality-public-key'", rendered.Content, StringComparison.Ordinal);
+        Assert.Contains("short-id: '0123456789abcdef'", rendered.Content, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(SubscriptionFormats.Surge)]
+    [InlineData(SubscriptionFormats.QuantumultX)]
+    public void BuildPlan_filters_reality_for_legacy_structured_formats(string format)
+    {
+        var resolver = new SubscriptionProfileResolver();
+        var request = resolver.ResolveRequest(
+            format,
+            SubscriptionProfileNames.Full,
+            null,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        var catalog = CreateRealityCatalog();
+
+        var plan = resolver.BuildPlan(catalog, request);
+
+        Assert.Empty(plan.Proxies);
+    }
+
+    [Fact]
     public void RenderSurge_includes_shadowsocks_proxy_definitions()
     {
         var resolver = new SubscriptionProfileResolver();
@@ -640,6 +699,31 @@ public sealed class SubscriptionRenderingTests
             AssignedNodes = [node],
             Endpoints = endpoints
         };
+
+    private static SubscriptionCatalog CreateRealityCatalog()
+        => CreateCatalogWithEndpoints(
+            new PanelNodeRecord
+            {
+                NodeId = "node-reality",
+                DisplayName = "Edge",
+                Protocol = InboundProtocols.Vless
+            },
+            new SubscriptionEndpoint
+            {
+                NodeId = "node-reality",
+                DisplayName = "Edge",
+                Host = "edge.example.com",
+                Port = 443,
+                Sni = "dl.google.com",
+                Label = "Edge-reality",
+                Protocol = InboundProtocols.Vless,
+                Security = RuntimeInternetSecurityTypes.Reality,
+                Transport = InboundTransports.Tcp,
+                RealityPublicKey = "reality-public-key",
+                RealityShortId = "0123456789abcdef",
+                RealityFingerprint = "chrome",
+                RealitySpiderX = "/"
+            });
 
     private static SubscriptionCatalog CreateShadowsocksCatalog()
         => CreateCatalogWithEndpoints(

@@ -69,7 +69,7 @@ public class HttpInboundServer
         await using var connectionLease = connection;
         try
         {
-            var proxyOptions = CreateConnectionOptions(listener.Definition, connection, options.Limits);
+            var proxyOptions = CreateConnectionOptions(listener.Definition, connection, options.Limits, options.Callbacks);
             await HttpInboundProcessor.HandleAsync(
                     connection.Stream,
                     _dispatcher,
@@ -95,20 +95,26 @@ public class HttpInboundServer
     private static ProxyInboundConnectionOptions CreateConnectionOptions(
         ProxyInboundListenerDefinition listener,
         AcceptedConnection connection,
-        ProxyInboundServerLimits limits)
+        ProxyInboundServerLimits limits,
+        ProxyInboundServerCallbacks callbacks)
         => new()
         {
             InboundTag = listener.Tag,
-            UserLevel = Math.Max(0, listener.UserLevel),
-            HandshakeTimeoutSeconds = listener.HandshakeTimeoutSeconds,
+            UserId = "proxy-user",
+            ScopedUserId = "proxy-user",
+            UserLevel = listener.UserLevel,
+            HandshakeTimeoutSeconds = listener.HandshakeTimeoutSeconds > 0
+                ? listener.HandshakeTimeoutSeconds
+                : limits.ConnectTimeoutSeconds,
             ConnectTimeoutSeconds = limits.ConnectTimeoutSeconds,
             ConnectionIdleSeconds = limits.ConnectionIdleSeconds,
             UplinkOnlySeconds = limits.UplinkOnlySeconds,
             DownlinkOnlySeconds = limits.DownlinkOnlySeconds,
-            Sniffing = listener.Sniffing ?? new RuntimeSniffingOptions(),
             AllowTransparent = listener.AllowTransparent,
-            RemoteEndPoint = connection.RemoteEndPoint,
-            LocalEndPoint = connection.LocalEndPoint
+            Sniffing = listener.Sniffing,
+            RemoteEndPoint = connection.LogRemoteEndPoint ?? connection.RemoteEndPoint,
+            LocalEndPoint = connection.LocalEndPoint,
+            ConnectionAccessed = callbacks.ConnectionAccessed
         };
 
     private static Socks5LocalAuthenticationOptions ResolveAuthentication(
