@@ -22,6 +22,10 @@
                 <p class="portal-version">@panelVersion</p>
             </div>
             <div style="display: flex; gap: 16px;">
+                @if (User.Identity?.IsAuthenticated == true && User.IsInRole("Admin"))
+                {
+                    <a href="/admin" class="button" style="border:none; background:rgba(255,255,255,0.05); color:#a78bfa;">管理后台</a>
+                }
                 <a href="/user" class="button" style="border:none; background:rgba(255,255,255,0.05);">仪表盘</a>
                 <a href="/user/store" class="button" style="border:none; background:rgba(255,255,255,0.05);">购买订阅</a>
                 <a href="/user/orders" class="button" style="border:none; background:rgba(255,255,255,0.05);">我的订单</a>
