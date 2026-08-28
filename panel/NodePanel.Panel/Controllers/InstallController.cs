@@ -1,6 +1,8 @@
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
@@ -15,12 +17,14 @@ public class InstallController : Controller
     private readonly DatabaseService _db;
     private readonly ILogger<InstallController> _logger;
     private readonly IWebHostEnvironment _env;
+    private readonly string _dataDirectory;
 
-    public InstallController(DatabaseService db, ILogger<InstallController> logger, IWebHostEnvironment env)
+    public InstallController(DatabaseService db, ILogger<InstallController> logger, IWebHostEnvironment env, IConfiguration configuration)
     {
         _db = db;
         _logger = logger;
         _env = env;
+        _dataDirectory = ResolveDataDirectory(configuration["Panel:DataFilePath"]);
     }
 
     [HttpGet]
@@ -32,6 +36,16 @@ public class InstallController : Controller
         }
 
         return View(new InstallRequest());
+    }
+
+    private static string ResolveDataDirectory(string? dataFilePath)
+    {
+        if (!string.IsNullOrWhiteSpace(dataFilePath) && Path.IsPathRooted(dataFilePath))
+        {
+            return Path.GetDirectoryName(dataFilePath) ?? AppContext.BaseDirectory;
+        }
+
+        return AppContext.BaseDirectory;
     }
 
     [HttpPost]
@@ -61,7 +75,7 @@ public class InstallController : Controller
             }
 
             var dataType = DataType.Sqlite;
-            var connectionString = $"Data Source={normalizedDbName}";
+            var connectionString = $"Data Source={Path.Combine(_dataDirectory, normalizedDbName)}";
 
             if (string.Equals(normalizedDbType, "mysql", StringComparison.OrdinalIgnoreCase))
             {
@@ -109,9 +123,16 @@ public class InstallController : Controller
                 await testFsql.Insert(admin).ExecuteAffrowsAsync();
             }
 
-            // 4. Save to appsettings.json
-            var appSettingsPath = Path.Combine(_env.ContentRootPath, "appsettings.json");
-            var json = System.IO.File.Exists(appSettingsPath) ? await System.IO.File.ReadAllTextAsync(appSettingsPath) : "{}";
+            // 4. Save runtime configuration to the mounted data volume so it
+            //    survives container restarts, instead of the immutable image appsettings.json.
+            var appSettingsPath = Path.Combine(_dataDirectory, "panel.settings.json");
+            var raw = System.IO.File.Exists(appSettingsPath) ? await System.IO.File.ReadAllTextAsync(appSettingsPath) : string.Empty;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                raw = "{}";
+            }
+
+            var json = raw;
             
             var jsonObj = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject ?? new JsonObject();
             if (jsonObj["Panel"] == null) jsonObj["Panel"] = new JsonObject();

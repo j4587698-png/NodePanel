@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -11,9 +12,13 @@ using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
-var builder = WebApplication.CreateSlimBuilder(args);
-builder.Configuration.AddEnvironmentVariables();
-builder.WebHost.UseKestrelHttpsConfiguration();
+    var builder = WebApplication.CreateSlimBuilder(args);
+    builder.Configuration.AddEnvironmentVariables();
+
+    var panelDataDirectory = ResolvePanelDataDirectory(builder.Configuration["Panel:DataFilePath"]);
+    builder.Configuration.AddJsonFile(Path.Combine(panelDataDirectory, "panel.settings.json"), optional: true, reloadOnChange: true);
+
+    builder.WebHost.UseKestrelHttpsConfiguration();
 
 var bootstrapPanelOptions = builder.Configuration.GetSection(PanelOptions.SectionName).Get<PanelOptions>() ?? new PanelOptions();
 var panelHttpsRuntime = new PanelHttpsRuntime(bootstrapPanelOptions);
@@ -445,4 +450,14 @@ static bool IsAdminAuthorized(HttpContext context, PanelOptions options)
     }
 
     return false;
+}
+
+static string ResolvePanelDataDirectory(string? dataFilePath)
+{
+    if (!string.IsNullOrWhiteSpace(dataFilePath) && Path.IsPathRooted(dataFilePath))
+    {
+        return Path.GetDirectoryName(dataFilePath) ?? AppContext.BaseDirectory;
+    }
+
+    return AppContext.BaseDirectory;
 }
