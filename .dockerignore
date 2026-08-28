@@ -1,0 +1,8 @@
+.git
+**/bin
+**/obj
+tests
+scripts
+**/*.user
+**/*.suo
+**/launchSettings.json
