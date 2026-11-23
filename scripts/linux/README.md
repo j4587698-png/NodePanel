@@ -202,6 +202,14 @@ Default paths:
 
 The service package is Native AOT. On Linux installs it runs the bundled native executable directly and does not depend on a system `dotnet` runtime.
 
+### Durable traffic reporting
+
+Upgrade the panel before the nodes. An upgraded node retains traffic locally until the panel advertises durable reporting support; with an older panel it sends status only, so traffic is not reported until the panel is upgraded. Older nodes still work with the upgraded panel but do not receive durable traffic acknowledgments.
+
+Keep the node's `NodePanel__CachedConfigPath` and its adjacent `.telemetry` directory on persistent storage. The default outbox is `/usr/local/nodepanel-service/data/node-runtime-config.json.telemetry`. Preserve it across restarts and upgrades; keep free disk space available, as it grows while the panel is unavailable. Reusing an outbox with a different node ID or panel URL is rejected.
+
+The node removes a batch only after the panel confirms that it has committed the batch to its database. The panel retains deduplication receipts for at least 10 minutes and until the batch is settled; after cleanup, a delayed retry can be counted again. Run only one panel process against a database for traffic accounting; concurrent panel processes are not coordinated for settlement. Traffic not yet sampled into the outbox can still be lost on a node process crash; storage or power failures also depend on the filesystem's durability guarantees.
+
 The install and update commands can write the runtime config directly into:
 
 ```text

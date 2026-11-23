@@ -497,6 +497,15 @@ label > small { margin-top: 0; line-height: 1.5; }
     background: rgba(255,255,255,0.03);
 }
 
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+}
+
 @media (max-width: 980px) {
     .shell { grid-template-columns: 1fr; }
     .shell__sidebar, .shell__content, .portal-shell { padding: 24px; }

@@ -18,6 +18,29 @@ public sealed class PanelSnapshotBuilder
     {
         if (!_db.IsConfigured) return (false, 0, new NodeServiceConfig());
 
+        var users = await LoadEnabledUsersAsync(cancellationToken).ConfigureAwait(false);
+        return await TryBuildAsync(nodeId, users, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<PanelUserRecord>> LoadEnabledUsersAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_db.IsConfigured) return Array.Empty<PanelUserRecord>();
+
+        var entities = await _db.FSql.Select<UserEntity>()
+            .Where(u => u.Enabled)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return entities.Select(static entity => entity.ToRecord()).ToArray();
+    }
+
+    public async Task<(bool Success, int Revision, NodeServiceConfig Config)> TryBuildAsync(
+        string nodeId,
+        IReadOnlyList<PanelUserRecord> enabledUsers,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_db.IsConfigured) return (false, 0, new NodeServiceConfig());
+
         var node = await _db.FSql.Select<NodeEntity>().Where(item => item.NodeId == nodeId).FirstAsync(cancellationToken);
         if (node is null)
         {
@@ -25,10 +48,7 @@ public sealed class PanelSnapshotBuilder
         }
 
         var revision = node.DesiredRevision;
-        var usersEntity = await _db.FSql.Select<UserEntity>().Where(u => u.Enabled).ToListAsync(cancellationToken);
-        
-        var users = usersEntity
-            .Select(u => u.ToRecord())
+        var users = enabledUsers
             .Where(user => user.Enabled && IsAssignedToNode(user, nodeId))
             .Select(user => CreateRuntimeUser(user, InboundProtocols.Normalize(node.Protocol)))
             .Where(static user => user is not null)

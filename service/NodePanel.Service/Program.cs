@@ -44,6 +44,8 @@ builder.Services.AddSingleton(
         sp.GetRequiredService<PersistedNodeConfigStore>(),
         sp.GetRequiredService<ILogger<ConfigOrchestrator>>()));
 builder.Services.AddSingleton<TelemetryDeltaTracker>();
+builder.Services.AddSingleton<TelemetryOutbox>();
+builder.Services.AddSingleton<TelemetryDeliveryState>();
 builder.Services.AddSingleton<ManagedAcmeCertificateService>();
 
 builder.Services.AddSingleton<ControlPlaneClientService>();

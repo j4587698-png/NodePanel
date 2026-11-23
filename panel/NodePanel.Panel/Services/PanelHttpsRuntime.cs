@@ -369,8 +369,12 @@ public sealed class PanelHttpsRuntime : IDisposable
             ? DataType.MySql
             : DataType.Sqlite;
 
+        var connectionString = dataType == DataType.Sqlite
+            ? DatabaseService.ApplySqliteDefaults(_options.DbConnectionString)
+            : _options.DbConnectionString;
+
         return new FreeSqlBuilder()
-            .UseConnectionString(dataType, _options.DbConnectionString)
+            .UseConnectionString(dataType, connectionString)
             .UseAutoSyncStructure(false)
             .Build();
     }

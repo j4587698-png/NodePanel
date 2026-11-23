@@ -18,6 +18,7 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
     private readonly string _nodeId;
     private readonly NodePanelOptions _options;
     private readonly AppliedRuntimeSnapshotStore _appliedRuntimeSnapshotStore;
+    private readonly TelemetryDeliveryState _telemetryDeliveryState;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private ClientWebSocket? _socket;
@@ -27,12 +28,14 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         CertificateRenewalSignal certificateRenewalSignal,
         ConfigOrchestrator configOrchestrator,
         AppliedRuntimeSnapshotStore appliedRuntimeSnapshotStore,
+        TelemetryDeliveryState telemetryDeliveryState,
         ILogger<ControlPlaneClientService> logger)
     {
         _options = options;
         _certificateRenewalSignal = certificateRenewalSignal;
         _configOrchestrator = configOrchestrator;
         _appliedRuntimeSnapshotStore = appliedRuntimeSnapshotStore;
+        _telemetryDeliveryState = telemetryDeliveryState;
         _logger = logger;
         _nodeId = string.IsNullOrWhiteSpace(options.Identity.NodeId) ? Environment.MachineName : options.Identity.NodeId;
     }
@@ -64,6 +67,8 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
                 connectCts.CancelAfter(TimeSpan.FromSeconds(_options.ControlPlane.ConnectTimeoutSeconds));
                 await socket.ConnectAsync(uri, connectCts.Token).ConfigureAwait(false);
 
+                var hello = JsonSerializer.SerializeToUtf8Bytes(CreateHelloEnvelope(), ControlPlaneJsonSerializerContext.Default.ControlPlaneEnvelope);
+                await socket.SendAsync(hello.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, connectCts.Token).ConfigureAwait(false);
                 Volatile.Write(ref _socket, socket);
                 await RunConnectionAsync(socket, uri, stoppingToken).ConfigureAwait(false);
             }
@@ -77,6 +82,7 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
             }
             finally
             {
+                _telemetryDeliveryState.Disconnect();
                 if (ReferenceEquals(Volatile.Read(ref _socket), socket))
                 {
                     Volatile.Write(ref _socket, null);
@@ -132,11 +138,6 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var connectionToken = connectionCts.Token;
 
-        if (!await SendAsync(CreateHelloEnvelope(), connectionToken).ConfigureAwait(false))
-        {
-            throw new InvalidOperationException("The control plane WebSocket connected, but node.hello could not be sent.");
-        }
-
         _logger.LogInformation("Connected to control plane {Url} as node {NodeId}.", uri, _nodeId);
 
         var receiveLoop = ReceiveLoopAsync(socket, connectionToken);
@@ -184,6 +185,15 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
                     break;
                 case ControlMessageTypes.CertificateRenew:
                     _certificateRenewalSignal.Request("panel");
+                    break;
+                case ControlMessageTypes.TelemetryReady:
+                    var ready = JsonSerializer.Deserialize(envelope.Payload.GetRawText(), ControlPlaneJsonSerializerContext.Default.TelemetryReadyPayload);
+                    if (ready?.Capability == ControlPlaneCapabilities.DurableTelemetry)
+                        _telemetryDeliveryState.SetReady();
+                    break;
+                case ControlMessageTypes.TelemetryAck:
+                    var ack = JsonSerializer.Deserialize(envelope.Payload.GetRawText(), ControlPlaneJsonSerializerContext.Default.TelemetryAckPayload);
+                    if (ack is not null) _telemetryDeliveryState.Acknowledge(ack.BatchId);
                     break;
             }
         }
@@ -279,7 +289,7 @@ public sealed class ControlPlaneClientService : BackgroundService, IControlPlane
         {
             NodeId = _nodeId,
             Version = NodePanel.Service.ApplicationVersion.Current,
-            Capabilities = new[] { "trojan", "vless", "vmess", "udp", "tls", "ws", "stats", "rate-limit", "certificate-renew" },
+            Capabilities = new[] { "trojan", "vless", "vmess", "udp", "tls", "ws", "stats", "rate-limit", "certificate-renew", ControlPlaneCapabilities.DurableTelemetry },
             AppliedRevision = appliedRevision
         };
 

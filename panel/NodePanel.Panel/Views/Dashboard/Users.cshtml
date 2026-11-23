@@ -26,7 +26,7 @@
             <p class="eyebrow">Users</p>
             <h3>所有用户</h3>
         </div>
-        <span class="metric">@Model.State.Users.Count</span>
+        <span class="metric">@Model.TotalCount</span>
     </div>
     <div class="table-wrap">
         <table>
@@ -95,4 +95,18 @@
             </tbody>
         </table>
     </div>
+    @if (Model.TotalPages > 1)
+    {
+        <nav class="pager">
+            @if (Model.HasPreviousPage)
+            {
+                <a class="button button--small" asp-action="Users" asp-route-page="@(Model.Page - 1)">上一页</a>
+            }
+            <span class="muted">第 @Model.Page / @Model.TotalPages 页 · 共 @Model.TotalCount 条</span>
+            @if (Model.HasNextPage)
+            {
+                <a class="button button--small" asp-action="Users" asp-route-page="@(Model.Page + 1)">下一页</a>
+            }
+        </nav>
+    }
 </section>

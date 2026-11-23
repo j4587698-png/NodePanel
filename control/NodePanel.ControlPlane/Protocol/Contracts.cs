@@ -12,6 +12,13 @@ public static class ControlMessageTypes
     public const string Heartbeat = "heartbeat";
     public const string NodeHello = "node.hello";
     public const string TelemetryBatch = "telemetry.batch";
+    public const string TelemetryReady = "telemetry.ready";
+    public const string TelemetryAck = "telemetry.ack";
+}
+
+public static class ControlPlaneCapabilities
+{
+    public const string DurableTelemetry = "telemetry-persist-ack-v1";
 }
 
 public sealed record ControlPlaneEnvelope
@@ -76,6 +83,18 @@ public sealed record TelemetryBatchPayload
     public required IReadOnlyList<UserTrafficDelta> Traffic { get; init; }
 
     public required NodeStatusPayload Status { get; init; }
+
+    public string? BatchId { get; init; }
+}
+
+public sealed record TelemetryAckPayload
+{
+    public required string BatchId { get; init; }
+}
+
+public sealed record TelemetryReadyPayload
+{
+    public string Capability { get; init; } = ControlPlaneCapabilities.DurableTelemetry;
 }
 
 public sealed record UserTrafficDelta

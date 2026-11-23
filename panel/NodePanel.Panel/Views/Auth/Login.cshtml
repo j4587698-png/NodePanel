@@ -1,9 +1,9 @@
 @model NodePanel.Panel.Models.LoginRequest
 @inject NodePanel.Panel.Services.PanelQueryService QueryService
 @{
-    Layout = null; 
-    var state = await QueryService.BuildStateViewAsync(Context.RequestAborted);
-    var siteName = state.Settings.GetValueOrDefault("site_name", "NodePanel");
+    Layout = null;
+    var settings = await QueryService.GetSettingsAsync(Context.RequestAborted);
+    var siteName = settings.GetValueOrDefault("site_name", "NodePanel");
     if (string.IsNullOrWhiteSpace(siteName)) siteName = "NodePanel";
 }
 <!DOCTYPE html>

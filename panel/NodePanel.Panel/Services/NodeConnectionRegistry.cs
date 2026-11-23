@@ -91,6 +91,14 @@ public sealed class NodeConnectionRegistry
         }
     }
 
+    public NodeRuntimeSnapshot GetRuntime(string nodeId)
+    {
+        lock (_sync)
+        {
+            return _entries.TryGetValue(nodeId, out var entry) ? entry.Runtime : new NodeRuntimeSnapshot();
+        }
+    }
+
     public void RecordHello(string nodeId, string version, int appliedRevision)
         => UpdateRuntime(
             nodeId,

@@ -57,37 +57,25 @@
         <div class="stats">
             <div>
                 <dt>证书资产</dt>
-                <dd><span class="@assetState.BadgeClass">@assetState.Label</span></dd>
-                @if (!string.IsNullOrWhiteSpace(assetState.Message))
-                {
-                    <div class="@GetAssetMessageClass(assetState)">@assetState.Message</div>
-                }
+                <dd><span data-cert-field="asset-badge" class="@assetState.BadgeClass">@assetState.Label</span></dd>
+                <div data-cert-field="asset-message" class="@GetAssetMessageClass(assetState)" @(string.IsNullOrWhiteSpace(assetState.Message) ? "hidden" : null)>@assetState.Message</div>
             </div>
             <div>
                 <dt>自动签发</dt>
-                <dd><span class="@runtimeStatus.BadgeClass">@runtimeStatus.Label</span></dd>
-                @if (!string.IsNullOrWhiteSpace(runtimeStatus.Message))
-                {
-                    <div class="@GetRuntimeMessageClass(runtimeStatus)">@runtimeStatus.Message</div>
-                }
-                @if (!string.IsNullOrWhiteSpace(runtimeStatus.Detail))
-                {
-                    <div class="muted">@runtimeStatus.Detail</div>
-                }
+                <dd><span data-cert-field="runtime-badge" class="@runtimeStatus.BadgeClass">@runtimeStatus.Label</span></dd>
+                <div data-cert-field="runtime-message" class="@GetRuntimeMessageClass(runtimeStatus)" @(string.IsNullOrWhiteSpace(runtimeStatus.Message) ? "hidden" : null)>@runtimeStatus.Message</div>
+                <div data-cert-field="runtime-detail" class="muted" @(string.IsNullOrWhiteSpace(runtimeStatus.Detail) ? "hidden" : null)>@runtimeStatus.Detail</div>
             </div>
-            <div><dt>最近尝试</dt><dd>@((certificate.Definition.LastAttemptAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
-            <div><dt>最近成功</dt><dd>@((certificate.Definition.LastSuccessAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
-            <div><dt>证书有效期</dt><dd>@((certificate.Definition.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
-            <div><dt>下次自动处理</dt><dd>@((runtimeStatus.NextAutomaticRunAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
-            <div><dt>资产版本</dt><dd>@certificate.Definition.AssetVersion</dd></div>
-            <div><dt>Thumbprint</dt><dd class="mono">@(!string.IsNullOrWhiteSpace(certificate.Definition.Thumbprint) ? certificate.Definition.Thumbprint : "-")</dd></div>
-            @if (!string.IsNullOrWhiteSpace(certificate.Definition.LastError))
-            {
-                <div>
-                    <dt>最近错误</dt>
-                    <dd>@certificate.Definition.LastError</dd>
-                </div>
-            }
+            <div><dt>最近尝试</dt><dd data-cert-field="last-attempt">@((certificate.Definition.LastAttemptAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>最近成功</dt><dd data-cert-field="last-success">@((certificate.Definition.LastSuccessAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>证书有效期</dt><dd data-cert-field="not-after">@((certificate.Definition.NotAfter?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>下次自动处理</dt><dd data-cert-field="next-run">@((runtimeStatus.NextAutomaticRunAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "-")</dd></div>
+            <div><dt>资产版本</dt><dd data-cert-field="asset-version">@certificate.Definition.AssetVersion</dd></div>
+            <div><dt>Thumbprint</dt><dd class="mono" data-cert-field="thumbprint">@(!string.IsNullOrWhiteSpace(certificate.Definition.Thumbprint) ? certificate.Definition.Thumbprint : "-")</dd></div>
+            <div data-cert-field="last-error-wrap" @(string.IsNullOrWhiteSpace(certificate.Definition.LastError) ? "hidden" : null)>
+                <dt>最近错误</dt>
+                <dd data-cert-field="last-error">@certificate.Definition.LastError</dd>
+            </div>
         </div>
     </section>
 }
@@ -279,8 +267,6 @@
     document.addEventListener('DOMContentLoaded', () => {
         const challengeTypeInput = document.getElementById('challengeTypeInput');
         const dnsProviderInput = document.getElementById('dnsProviderInput');
-        const certificateForm = document.getElementById('certificateForm');
-        let isDirty = false;
         if (challengeTypeInput) {
             challengeTypeInput.addEventListener('change', updateDnsProviderVisibility);
         }
@@ -291,20 +277,80 @@
 
         updateDnsProviderVisibility();
 
-        if (certificateForm) {
-            certificateForm.querySelectorAll('input, select, textarea').forEach((element) => {
-                element.addEventListener('input', () => { isDirty = true; });
-                element.addEventListener('change', () => { isDirty = true; });
-            });
-        }
-
         const shouldAutoRefresh = @Model.ShouldAutoRefresh.ToString().ToLowerInvariant();
-        if (shouldAutoRefresh) {
-            window.setInterval(() => {
-                if (!document.hidden && !isDirty) {
-                    window.location.reload();
+        const statusUrl = '@Url.Action("CertificateStatus", "Dashboard", new { certificateId = Model.Form.CertificateId })';
+        let timer = null;
+
+        const setBadge = (field, label, badgeClass) => {
+            const element = document.querySelector(`[data-cert-field="${field}"]`);
+            if (!element) return;
+            element.textContent = label || '-';
+            element.className = badgeClass || 'badge badge--idle';
+        };
+
+        const setMessage = (field, text, className) => {
+            const element = document.querySelector(`[data-cert-field="${field}"]`);
+            if (!element) return;
+            element.textContent = text || '';
+            element.className = className || 'muted';
+            element.hidden = !text;
+        };
+
+        const setText = (field, text) => {
+            const element = document.querySelector(`[data-cert-field="${field}"]`);
+            if (!element) return;
+            element.textContent = text === null || text === undefined || text === '' ? '-' : text;
+        };
+
+        const applyStatus = (item) => {
+            setBadge('asset-badge', item.assetLabel, item.assetBadgeClass);
+            setMessage('asset-message', item.assetMessage, item.assetMessageClass);
+            setBadge('runtime-badge', item.runtimeLabel, item.runtimeBadgeClass);
+            setMessage('runtime-message', item.runtimeMessage, item.runtimeMessageClass);
+            setMessage('runtime-detail', item.runtimeDetail, 'muted');
+            setText('last-attempt', item.lastAttemptAtText);
+            setText('last-success', item.lastSuccessAtText);
+            setText('not-after', item.notAfterText);
+            setText('next-run', item.nextAutomaticRunAtText);
+            setText('asset-version', item.assetVersion);
+            setText('thumbprint', item.thumbprint);
+
+            const errorWrap = document.querySelector('[data-cert-field="last-error-wrap"]');
+            if (errorWrap) {
+                setText('last-error', item.lastError);
+                errorWrap.hidden = !item.lastError;
+            }
+        };
+
+        const refresh = async () => {
+            if (document.hidden || !statusUrl) return;
+
+            try {
+                const response = await fetch(statusUrl, {
+                    method: 'GET',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                    cache: 'no-store',
+                    credentials: 'same-origin'
+                });
+
+                if (!response.ok) return;
+
+                const item = await response.json();
+                applyStatus(item);
+
+                if (!item.shouldAutoRefresh && timer) {
+                    window.clearInterval(timer);
+                    timer = null;
                 }
-            }, 3000);
+            }
+            catch (error) {
+                console.debug('Certificate status refresh skipped.', error);
+            }
+        };
+
+        if (shouldAutoRefresh) {
+            refresh();
+            timer = window.setInterval(refresh, 3000);
         }
     });
 </script>

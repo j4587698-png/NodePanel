@@ -4,6 +4,8 @@
     ViewData["Title"] = "订单管理";
     var currency = Model.State.Settings.GetValueOrDefault("currency_symbol", "¥");
     if (string.IsNullOrWhiteSpace(currency)) currency = "¥";
+    var usersById = Model.State.Users.ToDictionary(static user => user.UserId, StringComparer.Ordinal);
+    var plansById = Model.State.Plans.ToDictionary(static plan => plan.PlanId, StringComparer.Ordinal);
 }
 
 <section class="page-header">
@@ -25,7 +27,7 @@
             <p class="eyebrow">Orders</p>
             <h3>所有订单</h3>
         </div>
-        <span class="metric">@Model.State.Orders.Count</span>
+        <span class="metric">@Model.TotalCount</span>
     </div>
     <div class="table-wrap">
         <table>
@@ -52,8 +54,8 @@
             }
             @foreach (var order in Model.State.Orders)
             {
-                var user = Model.State.Users.FirstOrDefault(u => u.UserId == order.UserId);
-                var plan = Model.State.Plans.FirstOrDefault(p => p.PlanId == order.PlanId);
+                var user = usersById.GetValueOrDefault(order.UserId);
+                var plan = plansById.GetValueOrDefault(order.PlanId);
                 <tr>
                     <td class="mono">@order.OrderId</td>
                     <td>
@@ -90,4 +92,18 @@
             </tbody>
         </table>
     </div>
+    @if (Model.TotalPages > 1)
+    {
+        <nav class="pager">
+            @if (Model.HasPreviousPage)
+            {
+                <a class="button button--small" asp-action="Orders" asp-route-page="@(Model.Page - 1)">上一页</a>
+            }
+            <span class="muted">第 @Model.Page / @Model.TotalPages 页 · 共 @Model.TotalCount 条</span>
+            @if (Model.HasNextPage)
+            {
+                <a class="button button--small" asp-action="Orders" asp-route-page="@(Model.Page + 1)">下一页</a>
+            }
+        </nav>
+    }
 </section>

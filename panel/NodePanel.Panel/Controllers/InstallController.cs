@@ -75,7 +75,8 @@ public class InstallController : Controller
             }
 
             var dataType = DataType.Sqlite;
-            var connectionString = $"Data Source={Path.Combine(_dataDirectory, normalizedDbName)}";
+            var connectionString = DatabaseService.ApplySqliteDefaults(
+                $"Data Source={Path.Combine(_dataDirectory, normalizedDbName)}");
 
             if (string.Equals(normalizedDbType, "mysql", StringComparison.OrdinalIgnoreCase))
             {

@@ -54,14 +54,19 @@ public sealed class UserPortalService
     {
         var buildResult = await _subscriptionCatalogService.TryBuildByUserIdAsync(userId, cancellationToken);
         var title = buildResult.Success ? (string.IsNullOrWhiteSpace(buildResult.Catalog.User.DisplayName) ? userId : buildResult.Catalog.User.DisplayName) : userId;
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        
+        var plansTask = _panelQueryService.GetPlansAsync(cancellationToken);
+        var settingsTask = _panelQueryService.GetSettingsAsync(cancellationToken);
+        await Task.WhenAll(plansTask, settingsTask).ConfigureAwait(false);
+
+        var plans = await plansTask.ConfigureAwait(false);
+        var settings = await settingsTask.ConfigureAwait(false);
+
         return new PortalStoreViewModel
         {
             AppName = ResolveAppName(),
             DisplayName = title,
-            Plans = state.Plans.Where(PlanPresentation.HasAvailableCycles).ToArray(),
-            CurrencySymbol = state.Settings.GetValueOrDefault("currency_symbol", "¥") ?? "¥",
+            Plans = plans.Where(PlanPresentation.HasAvailableCycles).ToArray(),
+            CurrencySymbol = settings.GetValueOrDefault("currency_symbol", "¥") ?? "¥",
             StatusMessage = string.Empty
         };
     }
@@ -70,15 +75,22 @@ public sealed class UserPortalService
     {
         var buildResult = await _subscriptionCatalogService.TryBuildByUserIdAsync(userId, cancellationToken);
         var title = buildResult.Success ? (string.IsNullOrWhiteSpace(buildResult.Catalog.User.DisplayName) ? userId : buildResult.Catalog.User.DisplayName) : userId;
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        
+        var ordersTask = _panelQueryService.GetOrdersForUserAsync(userId, cancellationToken);
+        var plansTask = _panelQueryService.GetPlansAsync(cancellationToken);
+        var settingsTask = _panelQueryService.GetSettingsAsync(cancellationToken);
+        await Task.WhenAll(ordersTask, plansTask, settingsTask).ConfigureAwait(false);
+
+        var orders = await ordersTask.ConfigureAwait(false);
+        var plans = await plansTask.ConfigureAwait(false);
+        var settings = await settingsTask.ConfigureAwait(false);
+
         return new PortalOrdersViewModel
         {
             AppName = ResolveAppName(),
             DisplayName = title,
-            Orders = state.Orders.Where(o => string.Equals(o.UserId, userId, StringComparison.Ordinal)).ToList(),
-            Plans = state.Plans,
-            CurrencySymbol = state.Settings.GetValueOrDefault("currency_symbol", "¥") ?? "¥",
+            Orders = orders.ToList(),
+            Plans = plans,
+            CurrencySymbol = settings.GetValueOrDefault("currency_symbol", "¥") ?? "¥",
             StatusMessage = string.Empty
         };
     }
@@ -98,13 +110,13 @@ public sealed class UserPortalService
 
         var catalog = buildResult.Catalog;
         var trafficTask = _panelQueryService.BuildUserTrafficSummaryAsync(catalog.User.UserId, cancellationToken);
-        var referralTask = _panelQueryService.BuildUserReferralCenterAsync(catalog.User.UserId, cancellationToken);
+        var referralTask = _panelQueryService.BuildUserReferralCenterAsync(catalog.User, cancellationToken);
         var settingsTask = _panelQueryService.GetSettingsAsync(cancellationToken);
         await Task.WhenAll(trafficTask, referralTask, settingsTask).ConfigureAwait(false);
 
-        var traffic = trafficTask.Result ?? new PanelUserTrafficSummary { UserId = catalog.User.UserId };
-        var referral = referralTask.Result;
-        var settings = settingsTask.Result;
+        var traffic = (await trafficTask.ConfigureAwait(false)) ?? new PanelUserTrafficSummary { UserId = catalog.User.UserId };
+        var referral = await referralTask.ConfigureAwait(false);
+        var settings = await settingsTask.ConfigureAwait(false);
         var subscription = catalog.User.Subscription;
         var totalTraffic = Math.Max(0, subscription.TransferEnableBytes);
         var remainingTraffic = totalTraffic > 0 ? Math.Max(0, totalTraffic - traffic.TotalBytes) : 0;

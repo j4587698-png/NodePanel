@@ -676,6 +676,95 @@ public sealed class CertificateEditorViewModel
     public bool ShouldAutoRefresh => Certificate?.ShouldAutoRefresh == true;
 }
 
+/// <summary>
+/// Lightweight payload for certificate auto-refresh polling so the browser does not
+/// have to reload the whole page while an issuance task is running.
+/// </summary>
+public sealed record CertificateStatusResponse
+{
+    public string CertificateId { get; init; } = string.Empty;
+
+    public string AssetLabel { get; init; } = string.Empty;
+
+    public string AssetBadgeClass { get; init; } = string.Empty;
+
+    public string AssetMessage { get; init; } = string.Empty;
+
+    public string AssetMessageClass { get; init; } = string.Empty;
+
+    public int BoundNodeCount { get; init; }
+
+    public bool UsedByPanelHttps { get; init; }
+
+    public string RuntimeLabel { get; init; } = string.Empty;
+
+    public string RuntimeBadgeClass { get; init; } = string.Empty;
+
+    public string RuntimeMessage { get; init; } = string.Empty;
+
+    public string RuntimeMessageClass { get; init; } = string.Empty;
+
+    public string RuntimeDetail { get; init; } = string.Empty;
+
+    public string NotAfterText { get; init; } = "-";
+
+    public string LastAttemptAtText { get; init; } = "-";
+
+    public string LastSuccessAtText { get; init; } = "-";
+
+    public string NextAutomaticRunAtText { get; init; } = "-";
+
+    public string Thumbprint { get; init; } = string.Empty;
+
+    public string LastError { get; init; } = string.Empty;
+
+    public int AssetVersion { get; init; }
+
+    public bool ShouldAutoRefresh { get; init; }
+
+    public static CertificateStatusResponse FromView(PanelCertificateView view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+
+        var definition = view.Definition;
+        var assetState = view.AssetState;
+        var runtimeStatus = view.RuntimeStatus;
+
+        return new CertificateStatusResponse
+        {
+            CertificateId = definition.CertificateId,
+            AssetLabel = assetState.Label,
+            AssetBadgeClass = assetState.BadgeClass,
+            AssetMessage = assetState.Message,
+            AssetMessageClass = assetState.HasUsableAsset
+                ? "inline-alert inline-alert--warn"
+                : "inline-alert inline-alert--error",
+            BoundNodeCount = view.BoundNodeCount,
+            UsedByPanelHttps = view.UsedByPanelHttps,
+            RuntimeLabel = runtimeStatus.Label,
+            RuntimeBadgeClass = runtimeStatus.BadgeClass,
+            RuntimeMessage = runtimeStatus.Message,
+            RuntimeMessageClass = runtimeStatus.IsRunning || runtimeStatus.BadgeClass == "badge badge--warn"
+                ? "inline-alert inline-alert--warn"
+                : runtimeStatus.BadgeClass == "badge badge--error"
+                    ? "inline-alert inline-alert--error"
+                    : "muted",
+            RuntimeDetail = runtimeStatus.Detail,
+            NotAfterText = FormatCertificateTimestamp(definition.NotAfter),
+            LastAttemptAtText = FormatCertificateTimestamp(definition.LastAttemptAt),
+            LastSuccessAtText = FormatCertificateTimestamp(definition.LastSuccessAt),
+            NextAutomaticRunAtText = FormatCertificateTimestamp(runtimeStatus.NextAutomaticRunAt),
+            Thumbprint = definition.Thumbprint,
+            LastError = definition.LastError,
+            AssetVersion = definition.AssetVersion,
+            ShouldAutoRefresh = view.ShouldAutoRefresh
+        };
+    }
+
+    private static string FormatCertificateTimestamp(DateTimeOffset? value)
+        => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+}
+
 public sealed class PanelRestartingViewModel
 {
     public string Title { get; init; } = "正在重启面板";

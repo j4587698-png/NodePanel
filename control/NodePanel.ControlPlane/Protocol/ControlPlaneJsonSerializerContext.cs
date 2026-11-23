@@ -15,6 +15,8 @@ namespace NodePanel.ControlPlane.Protocol;
 [JsonSerializable(typeof(NodeHelloPayload))]
 [JsonSerializable(typeof(HeartbeatPayload))]
 [JsonSerializable(typeof(TelemetryBatchPayload))]
+[JsonSerializable(typeof(TelemetryAckPayload))]
+[JsonSerializable(typeof(TelemetryReadyPayload))]
 [JsonSerializable(typeof(NodeStatusPayload))]
 [JsonSerializable(typeof(NodeInboundStatusPayload))]
 [JsonSerializable(typeof(CertificateStatusPayload))]

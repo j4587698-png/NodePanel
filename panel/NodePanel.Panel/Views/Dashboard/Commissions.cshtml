@@ -1,4 +1,4 @@
-@model IReadOnlyList<NodePanel.Panel.Models.CommissionLogViewModel>
+@model NodePanel.Panel.Models.PagedListViewModel<NodePanel.Panel.Models.CommissionLogViewModel>
 @{
     ViewData["Title"] = "返利流水 (Commission Logs)";
 }
@@ -23,11 +23,11 @@
             </tr>
         </thead>
         <tbody>
-            @if (Model.Count == 0)
+            @if (Model.Items.Count == 0)
             {
                 <tr><td colspan="5" class="muted" style="text-align: center; padding: 24px;">暂无返利记录</td></tr>
             }
-            @foreach (var log in Model)
+            @foreach (var log in Model.Items)
             {
                 <tr>
                     <td style="text-align: left;"><span class="mono">@(log.OrderId.Length > 12 ? log.OrderId[..12] + "..." : log.OrderId)</span></td>
@@ -39,4 +39,12 @@
             }
         </tbody>
     </table>
+    @if (Model.TotalPages > 1)
+    {
+        <nav class="pager">
+            @if (Model.HasPreviousPage) { <a class="button button--small" asp-action="Commissions" asp-route-page="@(Model.Page - 1)">上一页</a> }
+            <span class="muted">第 @Model.Page / @Model.TotalPages 页 · 共 @Model.TotalCount 条</span>
+            @if (Model.HasNextPage) { <a class="button button--small" asp-action="Commissions" asp-route-page="@(Model.Page + 1)">下一页</a> }
+        </nav>
+    }
 </section>
