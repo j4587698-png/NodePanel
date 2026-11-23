@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NodePanel.Panel.Configuration;
 using NodePanel.Panel.Models;
@@ -102,6 +104,102 @@ public sealed class AuthSettingsTests
         Assert.True(await service.VerifyCodeAsync("user@example.com", EmailVerificationPurposes.PasswordReset, secondCode, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Password_reset_updates_only_the_selected_users_password()
+    {
+        using var harness = new EmailVerificationHarness();
+        var db = harness.DatabaseService.FSql;
+        var user = new UserEntity { UserId = "admin", Email = "admin@example.com", IsAdmin = true, DisplayName = "Admin", PasswordHash = "old" };
+        var other = new UserEntity { UserId = "other", Email = "other@example.com", PasswordHash = "other-hash" };
+        await db.Insert(user).ExecuteAffrowsAsync();
+        await db.Insert(other).ExecuteAffrowsAsync();
+        var passwords = new Queue<string>(["new password", "new password"]);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var result = await PanelPasswordResetCommand.RunAsync(
+            db, new StringReader(" admin@example.com "), output, error, passwords.Dequeue);
+
+        var updated = await db.Select<UserEntity>().Where(item => item.UserId == user.UserId).FirstAsync();
+        var unchanged = await db.Select<UserEntity>().Where(item => item.UserId == other.UserId).FirstAsync();
+        Assert.Equal(0, result);
+        Assert.Equal(PasswordVerificationResult.Success,
+            new PasswordHasher<UserEntity>().VerifyHashedPassword(updated, updated.PasswordHash, "new password"));
+        Assert.True(updated.IsAdmin);
+        Assert.Equal("Admin", updated.DisplayName);
+        Assert.Equal("other-hash", unchanged.PasswordHash);
+        Assert.DoesNotContain("new password", output.ToString());
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task Password_reset_rejects_mismatched_passwords_without_updating()
+    {
+        using var harness = new EmailVerificationHarness();
+        var db = harness.DatabaseService.FSql;
+        await db.Insert(new UserEntity { UserId = "admin", Email = "admin@example.com", PasswordHash = "old" }).ExecuteAffrowsAsync();
+        var passwords = new Queue<string>(["first", "second"]);
+
+        var result = await PanelPasswordResetCommand.RunAsync(
+            db, new StringReader("admin@example.com"), TextWriter.Null, TextWriter.Null, passwords.Dequeue);
+
+        Assert.Equal(1, result);
+        Assert.Equal("old", (await db.Select<UserEntity>().Where(item => item.UserId == "admin").FirstAsync()).PasswordHash);
+    }
+
+    [Fact]
+    public async Task Password_reset_rejects_missing_or_ambiguous_email_without_prompting_for_password()
+    {
+        using var harness = new EmailVerificationHarness();
+        var db = harness.DatabaseService.FSql;
+        await db.Insert(new UserEntity { UserId = "one", Email = "duplicate@example.com", PasswordHash = "one" }).ExecuteAffrowsAsync();
+        await db.Insert(new UserEntity { UserId = "two", Email = "duplicate@example.com", PasswordHash = "two" }).ExecuteAffrowsAsync();
+        static string UnexpectedPasswordPrompt() => throw new InvalidOperationException("Password should not be requested.");
+
+        Assert.Equal(1, await PanelPasswordResetCommand.RunAsync(
+            db, new StringReader("missing@example.com"), TextWriter.Null, TextWriter.Null, UnexpectedPasswordPrompt));
+        Assert.Equal(1, await PanelPasswordResetCommand.RunAsync(
+            db, new StringReader("duplicate@example.com"), TextWriter.Null, TextWriter.Null, UnexpectedPasswordPrompt));
+    }
+
+    [Fact]
+    public async Task Password_reset_uses_configured_sqlite_database()
+    {
+        using var harness = new EmailVerificationHarness();
+        await harness.DatabaseService.FSql.Insert(
+            new UserEntity { UserId = "admin", Email = "admin@example.com", PasswordHash = "old" }).ExecuteAffrowsAsync();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Panel:DbType"] = "sqlite",
+            ["Panel:DbConnectionString"] = $"Data Source={harness.DatabasePath}"
+        }).Build();
+        var passwords = new Queue<string>(["new password", "new password"]);
+
+        var result = await PanelPasswordResetCommand.RunConfiguredAsync(
+            config, new StringReader("admin@example.com"), TextWriter.Null, TextWriter.Null, passwords.Dequeue);
+
+        var updated = await harness.DatabaseService.FSql.Select<UserEntity>().Where(item => item.UserId == "admin").FirstAsync();
+        Assert.Equal(0, result);
+        Assert.Equal(PasswordVerificationResult.Success,
+            new PasswordHasher<UserEntity>().VerifyHashedPassword(updated, updated.PasswordHash, "new password"));
+    }
+
+    [Fact]
+    public async Task Password_reset_does_not_create_missing_sqlite_database()
+    {
+        using var harness = new EmailVerificationHarness();
+        var missingPath = Path.Combine(Path.GetDirectoryName(harness.DatabasePath)!, "missing.db");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Panel:DbType"] = "sqlite",
+            ["Panel:DbConnectionString"] = $"Data Source={missingPath}"
+        }).Build();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => PanelPasswordResetCommand.RunConfiguredAsync(
+            config, new StringReader("admin@example.com"), TextWriter.Null, TextWriter.Null, () => "unused"));
+        Assert.False(File.Exists(missingPath));
+    }
+
     private sealed class EmailVerificationHarness : IDisposable
     {
         private readonly string _rootPath;
@@ -111,17 +209,18 @@ public sealed class AuthSettingsTests
             _rootPath = Path.Combine(Path.GetTempPath(), "np-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_rootPath);
 
-            var dbPath = Path.Combine(_rootPath, "panel.db");
+            DatabasePath = Path.Combine(_rootPath, "panel.db");
             DatabaseService = new DatabaseService(
                 new StaticOptionsMonitor<PanelOptions>(
                     new PanelOptions
                     {
                         DbType = "sqlite",
-                        DbConnectionString = $"Data Source={dbPath}"
+                        DbConnectionString = $"Data Source={DatabasePath}"
                     }));
         }
 
         public DatabaseService DatabaseService { get; }
+        public string DatabasePath { get; }
 
         public void Dispose()
         {

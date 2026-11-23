@@ -12,11 +12,25 @@ using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
-    var builder = WebApplication.CreateSlimBuilder(args);
+    var resetPassword = args.Length > 0 && args[0] == "--reset-password";
+    if (resetPassword && args.Length != 1)
+    {
+        Console.Error.WriteLine("用法：NodePanel.Panel --reset-password");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    var builder = WebApplication.CreateSlimBuilder(resetPassword ? Array.Empty<string>() : args);
     builder.Configuration.AddEnvironmentVariables();
 
     var panelDataDirectory = ResolvePanelDataDirectory(builder.Configuration["Panel:DataFilePath"]);
     builder.Configuration.AddJsonFile(Path.Combine(panelDataDirectory, "panel.settings.json"), optional: true, reloadOnChange: true);
+
+    if (resetPassword)
+    {
+        Environment.ExitCode = await PanelPasswordResetCommand.RunFromConsoleAsync(builder.Configuration);
+        return;
+    }
 
     builder.WebHost.UseKestrelHttpsConfiguration();
 
