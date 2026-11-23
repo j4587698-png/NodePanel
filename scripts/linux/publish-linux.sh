@@ -6,6 +6,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 OUTPUT_ROOT="${REPO_ROOT}/artifacts/linux"
 CONFIGURATION="Release"
 SELF_CONTAINED="true"
+SATORI_RUNTIME=""
 COMPONENTS=("service" "panel")
 RIDS=("linux-x64")
 GITHUB_REPO=""
@@ -21,6 +22,7 @@ Options:
   --rid RID                       Runtime identifier. Can be repeated. Default: linux-x64
   --configuration Release|Debug   Build configuration. Default: Release
   --self-contained true|false     Publish self-contained panel packages. Default: true
+  --satori-runtime RELATIVE_PATH  Satori .NET installation relative to the panel executable
   --output-root PATH              Package output directory
   --github-repo OWNER/REPO        Persist GitHub release repo metadata into PACKAGE_INFO
   --version SEMVER                Override .NET/package version metadata
@@ -31,11 +33,12 @@ Examples:
   ./publish-linux.sh --component service --rid linux-arm64
   ./publish-linux.sh --github-repo owner/repo --rid linux-x64 --rid linux-arm64
   ./publish-linux.sh --github-repo owner/repo --version 0.1.0 --rid linux-x64
-  ./publish-linux.sh --rid linux-x64 --rid linux-arm64 --self-contained false
+  ./publish-linux.sh --component panel --self-contained false --satori-runtime ../satori-dotnet
 
 Notes:
   service packages are always published as Native AOT self-contained binaries.
   --self-contained only changes panel packaging.
+  Framework-dependent panel packages require --satori-runtime.
 EOF
 }
 
@@ -151,6 +154,9 @@ package_component() {
                 -p:PublishSingleFile=false
                 -p:PublishReadyToRun=false
             )
+            if [[ "$SELF_CONTAINED" == "false" ]]; then
+                publish_args+=("-p:AppHostRelativeDotNet=$SATORI_RUNTIME")
+            fi
             ;;
     esac
 
@@ -212,6 +218,11 @@ main() {
                 SELF_CONTAINED="$2"
                 shift 2
                 ;;
+            --satori-runtime)
+                [[ $# -ge 2 ]] || { printf 'Missing value for --satori-runtime\n' >&2; exit 1; }
+                SATORI_RUNTIME="$2"
+                shift 2
+                ;;
             --output-root)
                 [[ $# -ge 2 ]] || { printf 'Missing value for --output-root\n' >&2; exit 1; }
                 OUTPUT_ROOT="$2"
@@ -243,12 +254,30 @@ main() {
         RIDS=("${raw_rids[@]}")
     fi
 
+    local rid
+    for rid in "${RIDS[@]}"; do
+        case "$rid" in
+            linux-x64|linux-arm64|linux-musl-x64|linux-musl-arm64) ;;
+            *) printf 'Satori GC does not support Linux RID: %s\n' "$rid" >&2; exit 1 ;;
+        esac
+    done
+
+    if [[ "$SELF_CONTAINED" != "true" && "$SELF_CONTAINED" != "false" ]]; then
+        printf '%s\n' '--self-contained must be true or false' >&2
+        exit 1
+    fi
+    if [[ "$SELF_CONTAINED" == "false" && " ${COMPONENTS[*]} " == *" panel "* ]]; then
+        if [[ -z "$SATORI_RUNTIME" || "$SATORI_RUNTIME" == /* ]]; then
+            printf '%s\n' 'A relative --satori-runtime path is required for a framework-dependent panel' >&2
+            exit 1
+        fi
+    fi
+
     require_dotnet
     resolve_package_version
     mkdir -p "$OUTPUT_ROOT"
 
     local component
-    local rid
     for component in "${COMPONENTS[@]}"; do
         for rid in "${RIDS[@]}"; do
             package_component "$component" "$rid"

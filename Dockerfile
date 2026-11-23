@@ -1,15 +1,20 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Build ----------
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY . .
 WORKDIR /src/panel/NodePanel.Panel
-RUN dotnet restore NodePanel.Panel.csproj
-RUN dotnet publish NodePanel.Panel.csproj -c Release -o /app/publish --no-restore
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) rid=linux-x64 ;; \
+      arm64) rid=linux-arm64 ;; \
+      *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && dotnet publish NodePanel.Panel.csproj -c Release -r "$rid" --self-contained true -o /app/publish
 
 # ---------- Runtime ----------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS final
 WORKDIR /app
 
 # FreeSql SQLite provider relies on a native sqlite library.
@@ -32,4 +37,4 @@ RUN sed -i 's/"DbType": "sqlite"/"DbType": ""/' /app/appsettings.json \
 VOLUME ["/app/data"]
 EXPOSE 80 443
 
-ENTRYPOINT ["dotnet", "NodePanel.Panel.dll"]
+ENTRYPOINT ["./NodePanel.Panel"]
