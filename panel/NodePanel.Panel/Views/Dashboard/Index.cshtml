@@ -51,7 +51,7 @@
     <div class="card" style="margin-bottom: 0;">
         <div class="card__body" style="padding: 1.5rem; text-align: center;">
             <p class="eyebrow">Users</p>
-            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@Model.State.Users.Count</h2>
+            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@(Model.TotalUsers ?? Model.State.Users.Count)</h2>
             <a asp-action="Users" class="muted" style="text-decoration: none;">管理用户 &rarr;</a>
         </div>
     </div>
@@ -65,7 +65,7 @@
     <div class="card" style="margin-bottom: 0;">
         <div class="card__body" style="padding: 1.5rem; text-align: center;">
             <p class="eyebrow">Plans</p>
-            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@Model.State.Plans.Count</h2>
+            <h2 style="margin: 0.5rem 0; font-size: 2.5rem;">@(Model.TotalPlans ?? Model.State.Plans.Count)</h2>
             <a asp-action="Plans" class="muted" style="text-decoration: none;">管理套餐 &rarr;</a>
         </div>
     </div>

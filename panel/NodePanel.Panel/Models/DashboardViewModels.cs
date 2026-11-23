@@ -12,6 +12,40 @@ public sealed class DashboardPageViewModel
     public required PanelStateView State { get; init; }
 
     public string StatusMessage { get; init; } = string.Empty;
+
+    /// <summary>Total user count when only an aggregate is needed (avoids loading the user list).</summary>
+    public long? TotalUsers { get; init; }
+
+    /// <summary>Total plan count when only an aggregate is needed (avoids loading the plan list).</summary>
+    public long? TotalPlans { get; init; }
+
+    /// <summary>Current 1-based page for paged lists (user/order management).</summary>
+    public int Page { get; init; } = 1;
+
+    /// <summary>Page size used for paged lists; 0 means the list is not paged.</summary>
+    public int PageSize { get; init; }
+
+    /// <summary>Total row count across all pages.</summary>
+    public long TotalCount { get; init; }
+
+    public int TotalPages => PageSize <= 0
+        ? 0
+        : (int)Math.Ceiling(TotalCount / (double)PageSize);
+
+    public bool HasPreviousPage => Page > 1;
+
+    public bool HasNextPage => Page < TotalPages;
+}
+
+public sealed class PagedListViewModel<T>
+{
+    public required IReadOnlyList<T> Items { get; init; }
+    public int Page { get; init; }
+    public int PageSize { get; init; }
+    public long TotalCount { get; init; }
+    public long TotalPages => (TotalCount + PageSize - 1) / PageSize;
+    public bool HasPreviousPage => Page > 1;
+    public bool HasNextPage => Page < TotalPages;
 }
 
 public sealed class NodeEditorViewModel

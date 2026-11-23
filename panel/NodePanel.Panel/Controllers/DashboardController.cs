@@ -11,6 +11,13 @@ namespace NodePanel.Panel.Controllers;
 [Route("admin")]
 public sealed class DashboardController : Controller
 {
+    private static readonly IReadOnlyDictionary<string, string> EmptySettings =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, PanelUserTrafficSummary> EmptyTrafficSummaries =
+        new Dictionary<string, PanelUserTrafficSummary>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<PanelScopedTrafficRecord>> EmptyScopedTraffic =
+        new Dictionary<string, IReadOnlyList<PanelScopedTrafficRecord>>(StringComparer.Ordinal);
+
     private readonly PanelCertificateService _panelCertificateService;
     private readonly PanelMutationService _panelMutationService;
     private readonly PanelPublicUrlBuilder _publicUrlBuilder;
@@ -30,57 +37,148 @@ public sealed class DashboardController : Controller
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken cancellationToken)
-        => View(
+    {
+        var nodeViewsTask = _panelQueryService.GetNodeViewsAsync(cancellationToken);
+        var usersCountTask = _panelQueryService.CountUsersAsync(cancellationToken);
+        var plansCountTask = _panelQueryService.CountPlansAsync(cancellationToken);
+        await Task.WhenAll(nodeViewsTask, usersCountTask, plansCountTask).ConfigureAwait(false);
+
+        return View(
             new DashboardPageViewModel
             {
-                State = await _panelQueryService.BuildStateViewAsync(cancellationToken),
+                State = new PanelStateView
+                {
+                    Nodes = await nodeViewsTask.ConfigureAwait(false),
+                    Users = Array.Empty<PanelUserRecord>(),
+                    Plans = Array.Empty<PanelPlanRecord>(),
+                    Orders = Array.Empty<PanelOrderRecord>(),
+                    Settings = EmptySettings,
+                    TrafficSummaries = EmptyTrafficSummaries,
+                    ScopedTrafficRecordsByUser = EmptyScopedTraffic
+                },
+                TotalUsers = await usersCountTask.ConfigureAwait(false),
+                TotalPlans = await plansCountTask.ConfigureAwait(false),
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+    }
+
+    private const int ListPageSize = 50;
 
     [HttpGet("orders")]
-    public async Task<IActionResult> Orders(CancellationToken cancellationToken)
-        => View(
+    public async Task<IActionResult> Orders(int page, CancellationToken cancellationToken)
+    {
+        page = Math.Max(1, page);
+        var data = await _panelQueryService.GetOrdersPageDataAsync(page, ListPageSize, cancellationToken);
+        return View(
             new DashboardPageViewModel
             {
-                State = await _panelQueryService.BuildStateViewAsync(cancellationToken),
+                State = new PanelStateView
+                {
+                    Nodes = Array.Empty<PanelNodeView>(),
+                    Users = data.Users,
+                    Plans = data.Plans,
+                    Orders = data.Orders,
+                    Settings = data.Settings,
+                    TrafficSummaries = EmptyTrafficSummaries,
+                    ScopedTrafficRecordsByUser = EmptyScopedTraffic
+                },
+                Page = page,
+                PageSize = ListPageSize,
+                TotalCount = data.TotalCount,
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+    }
 
     [HttpGet("users")]
-    public async Task<IActionResult> Users(CancellationToken cancellationToken)
-        => View(
+    public async Task<IActionResult> Users(int page, CancellationToken cancellationToken)
+    {
+        page = Math.Max(1, page);
+        var data = await _panelQueryService.GetUsersWithTrafficAsync(page, ListPageSize, cancellationToken);
+        return View(
             new DashboardPageViewModel
             {
-                State = await _panelQueryService.BuildStateViewAsync(cancellationToken),
+                State = new PanelStateView
+                {
+                    Nodes = Array.Empty<PanelNodeView>(),
+                    Users = data.Users,
+                    Plans = Array.Empty<PanelPlanRecord>(),
+                    Orders = Array.Empty<PanelOrderRecord>(),
+                    Settings = EmptySettings,
+                    TrafficSummaries = data.TrafficSummaries,
+                    ScopedTrafficRecordsByUser = EmptyScopedTraffic
+                },
+                Page = page,
+                PageSize = ListPageSize,
+                TotalCount = data.TotalCount,
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+    }
 
     [HttpGet("nodes")]
     public async Task<IActionResult> Nodes(CancellationToken cancellationToken)
-        => View(
+    {
+        var nodes = await _panelQueryService.GetNodeViewsAsync(cancellationToken);
+        return View(
             new DashboardPageViewModel
             {
-                State = await _panelQueryService.BuildStateViewAsync(cancellationToken),
+                State = new PanelStateView
+                {
+                    Nodes = nodes,
+                    Users = Array.Empty<PanelUserRecord>(),
+                    Plans = Array.Empty<PanelPlanRecord>(),
+                    Orders = Array.Empty<PanelOrderRecord>(),
+                    Settings = EmptySettings,
+                    TrafficSummaries = EmptyTrafficSummaries,
+                    ScopedTrafficRecordsByUser = EmptyScopedTraffic
+                },
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+    }
 
     [HttpGet("plans")]
     public async Task<IActionResult> Plans(CancellationToken cancellationToken)
-        => View(
+    {
+        var plansTask = _panelQueryService.GetPlansAsync(cancellationToken);
+        var settingsTask = _panelQueryService.GetSettingsAsync(cancellationToken);
+        await Task.WhenAll(plansTask, settingsTask).ConfigureAwait(false);
+
+        return View(
             new DashboardPageViewModel
             {
-                State = await _panelQueryService.BuildStateViewAsync(cancellationToken),
+                State = new PanelStateView
+                {
+                    Nodes = Array.Empty<PanelNodeView>(),
+                    Users = Array.Empty<PanelUserRecord>(),
+                    Plans = await plansTask.ConfigureAwait(false),
+                    Orders = Array.Empty<PanelOrderRecord>(),
+                    Settings = await settingsTask.ConfigureAwait(false),
+                    TrafficSummaries = EmptyTrafficSummaries,
+                    ScopedTrafficRecordsByUser = EmptyScopedTraffic
+                },
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+    }
 
     [HttpGet("settings")]
     public async Task<IActionResult> Settings(CancellationToken cancellationToken)
-        => View(
+    {
+        var settings = await _panelQueryService.GetSettingsAsync(cancellationToken);
+        return View(
             new DashboardPageViewModel
             {
-                State = await _panelQueryService.BuildStateViewAsync(cancellationToken),
+                State = new PanelStateView
+                {
+                    Settings = settings,
+                    Nodes = Array.Empty<PanelNodeView>(),
+                    Users = Array.Empty<PanelUserRecord>(),
+                    Plans = Array.Empty<PanelPlanRecord>(),
+                    Orders = Array.Empty<PanelOrderRecord>(),
+                    TrafficSummaries = EmptyTrafficSummaries,
+                    ScopedTrafficRecordsByUser = EmptyScopedTraffic
+                },
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+    }
 
     [HttpGet("certificates")]
     public async Task<IActionResult> Certificates(CancellationToken cancellationToken)
@@ -91,6 +189,22 @@ public sealed class DashboardController : Controller
                 PanelHttps = await _panelQueryService.GetPanelHttpsSettingsAsync(cancellationToken),
                 StatusMessage = TempData["StatusMessage"]?.ToString() ?? string.Empty
             });
+
+    [HttpGet("certificates/status")]
+    public async Task<IActionResult> CertificateStatuses(CancellationToken cancellationToken)
+    {
+        var certificates = await _panelQueryService.GetCertificateViewsAsync(cancellationToken);
+        return Json(certificates.Select(CertificateStatusResponse.FromView).ToArray());
+    }
+
+    [HttpGet("certificates/{certificateId}/status")]
+    public async Task<IActionResult> CertificateStatus(string certificateId, CancellationToken cancellationToken)
+    {
+        var certificate = await _panelQueryService.FindCertificateViewAsync(certificateId, cancellationToken);
+        return certificate is null
+            ? NotFound()
+            : Json(CertificateStatusResponse.FromView(certificate));
+    }
 
     [HttpGet("certificates/new")]
     public IActionResult NewCertificate()
@@ -249,8 +363,8 @@ public sealed class DashboardController : Controller
                 ModelState.AddModelError(string.Empty, error);
             }
 
-            var state = await _panelQueryService.BuildStateViewAsync(cancellationToken).ConfigureAwait(false);
-            var mergedSettings = new Dictionary<string, string>(state.Settings, StringComparer.Ordinal);
+            var currentSettings = await _panelQueryService.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+            var mergedSettings = new Dictionary<string, string>(currentSettings, StringComparer.Ordinal);
             foreach (var (key, value) in validSettings)
             {
                 mergedSettings[key] = value;
@@ -260,9 +374,15 @@ public sealed class DashboardController : Controller
                 "Settings",
                 new DashboardPageViewModel
                 {
-                    State = state with
+                    State = new PanelStateView
                     {
-                        Settings = mergedSettings
+                        Settings = mergedSettings,
+                        Nodes = Array.Empty<PanelNodeView>(),
+                        Users = Array.Empty<PanelUserRecord>(),
+                        Plans = Array.Empty<PanelPlanRecord>(),
+                        Orders = Array.Empty<PanelOrderRecord>(),
+                        TrafficSummaries = EmptyTrafficSummaries,
+                        ScopedTrafficRecordsByUser = EmptyScopedTraffic
                     },
                     StatusMessage = BuildValidationStatusMessage("系统设置校验失败")
                 });
@@ -299,7 +419,7 @@ public sealed class DashboardController : Controller
     }
 
     [HttpGet("nodes/{nodeId}")]
-    public async Task<IActionResult> Node(string nodeId, CancellationToken cancellationToken)
+    public async Task<IActionResult> Node(string nodeId, bool partial, CancellationToken cancellationToken)
     {
         var model = await BuildExistingNodeEditorViewModelAsync(
             nodeId,
@@ -312,7 +432,11 @@ public sealed class DashboardController : Controller
             return RedirectToAction(nameof(Nodes));
         }
 
-        return View("NodeDetails", model);
+        // Auto-refresh polls this action; return only the runtime fragment so the
+        // layout, navigation and script blocks are not re-rendered every cycle.
+        return partial
+            ? PartialView("_NodeDetailsRuntime", model)
+            : View("NodeDetails", model);
     }
 
     [HttpGet("nodes/{nodeId}/edit")]
@@ -353,8 +477,8 @@ public sealed class DashboardController : Controller
                     Form = form,
                     IsEditMode = true,
                     StatusMessage = BuildValidationStatusMessage("节点配置校验失败", configError),
-                    AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
-                    AvailableCertificates = await _panelQueryService.GetCertificatesAsync(cancellationToken)
+                            AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
+                            AvailableCertificates = await _panelQueryService.GetCertificatesAsync(cancellationToken)
                 });
         }
 
@@ -531,7 +655,6 @@ public sealed class DashboardController : Controller
 
         if (!ModelState.IsValid)
         {
-            var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
             return View(
                 "User",
                 new UserEditorViewModel
@@ -542,7 +665,7 @@ public sealed class DashboardController : Controller
                     PortalUrl = BuildPortalUrl(currentUser?.SubscriptionToken ?? form.SubscriptionToken),
                     SubscriptionUrl = BuildSubscriptionUrl(currentUser?.SubscriptionToken ?? form.SubscriptionToken),
                     StatusMessage = BuildValidationStatusMessage("用户配置校验失败"),
-                    Plans = state.Plans,
+                    Plans = await _panelQueryService.GetPlansAsync(cancellationToken),
                     AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
                 });
         }
@@ -565,8 +688,7 @@ public sealed class DashboardController : Controller
         var normalizedCycle = cycle?.Trim() ?? string.Empty;
 
         var user = await _panelQueryService.FindUserAsync(normalizedUserId, cancellationToken);
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        var plan = state.Plans.FirstOrDefault(p => string.Equals(p.PlanId, normalizedPlanId, StringComparison.Ordinal));
+        var plan = await _panelQueryService.FindPlanAsync(normalizedPlanId, cancellationToken);
 
         if (user is null || plan is null)
         {
@@ -687,8 +809,7 @@ public sealed class DashboardController : Controller
     [HttpGet("plans/{planId}")]
     public async Task<IActionResult> Plan(string planId, CancellationToken cancellationToken)
     {
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        var plan = state.Plans.FirstOrDefault(item => string.Equals(item.PlanId, planId, StringComparison.Ordinal));
+        var plan = await _panelQueryService.FindPlanAsync(planId, cancellationToken);
         if (plan is null)
         {
             TempData["StatusMessage"] = $"套餐 {planId} 不存在。";
@@ -795,7 +916,9 @@ public sealed class DashboardController : Controller
             resolvedUser = await _panelQueryService.FindUserAsync(form.UserId, cancellationToken);
         }
 
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
+        var plansTask = _panelQueryService.GetPlansAsync(cancellationToken);
+        var groupsTask = _panelQueryService.GetServerGroupsAsync(cancellationToken);
+        await Task.WhenAll(plansTask, groupsTask).ConfigureAwait(false);
 
         return new UserEditorViewModel
         {
@@ -805,8 +928,8 @@ public sealed class DashboardController : Controller
             PortalUrl = BuildPortalUrl(resolvedUser?.SubscriptionToken ?? form.SubscriptionToken),
             SubscriptionUrl = BuildSubscriptionUrl(resolvedUser?.SubscriptionToken ?? form.SubscriptionToken),
             StatusMessage = statusMessage,
-            Plans = state.Plans,
-            AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken)
+            Plans = await plansTask.ConfigureAwait(false),
+            AvailableGroups = await groupsTask.ConfigureAwait(false)
         };
     }
 
@@ -816,8 +939,7 @@ public sealed class DashboardController : Controller
         bool showRuntimeDetails,
         CancellationToken cancellationToken)
     {
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        var node = state.Nodes.FirstOrDefault(item => string.Equals(item.Definition.NodeId, nodeId, StringComparison.Ordinal));
+        var node = await _panelQueryService.FindNodeViewAsync(nodeId, cancellationToken);
         if (node is null)
         {
             return null;
@@ -833,8 +955,12 @@ public sealed class DashboardController : Controller
             ShowRuntimeDetails = showRuntimeDetails,
             Runtime = node.Runtime,
             StatusMessage = statusMessage,
-            AvailableGroups = await _panelQueryService.GetServerGroupsAsync(cancellationToken),
-            AvailableCertificates = await _panelQueryService.GetCertificatesAsync(cancellationToken)
+            AvailableGroups = showRuntimeDetails
+                ? await _panelQueryService.GetNodeGroupsAsync(node.Definition.GroupIds, cancellationToken)
+                : await _panelQueryService.GetServerGroupsAsync(cancellationToken),
+            AvailableCertificates = showRuntimeDetails
+                ? Array.Empty<PanelCertificateRecord>()
+                : await _panelQueryService.GetCertificatesAsync(cancellationToken)
         };
     }
 
@@ -866,16 +992,16 @@ public sealed class DashboardController : Controller
     }
 
     [HttpGet("tickets")]
-    public async Task<IActionResult> Tickets(CancellationToken cancellationToken)
+    public async Task<IActionResult> Tickets(int page, CancellationToken cancellationToken)
     {
-        var model = await _panelQueryService.GetTicketsAsync(cancellationToken);
+        var model = await _panelQueryService.GetTicketsAsync(page, ListPageSize, cancellationToken);
         return View(model);
     }
     
     [HttpGet("commissions")]
-    public async Task<IActionResult> Commissions(CancellationToken cancellationToken)
+    public async Task<IActionResult> Commissions(int page, CancellationToken cancellationToken)
     {
-        var model = await _panelQueryService.GetCommissionLogsAsync(cancellationToken);
+        var model = await _panelQueryService.GetCommissionLogsAsync(page, ListPageSize, cancellationToken);
         return View(model);
     }
 
@@ -968,11 +1094,7 @@ public sealed class DashboardController : Controller
 
     private async Task<IReadOnlyList<PanelNodeRecord>> GetAvailableNodeRecordsAsync(CancellationToken cancellationToken)
     {
-        var state = await _panelQueryService.BuildStateViewAsync(cancellationToken);
-        return state.Nodes
-            .Select(static node => node.Definition)
-            .OrderBy(static node => node.NodeId, StringComparer.Ordinal)
-            .ToArray();
+        return await _panelQueryService.GetNodesAsync(cancellationToken);
     }
 
     [HttpPost("groups/{groupId:int}/delete")]

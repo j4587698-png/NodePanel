@@ -8,6 +8,7 @@ namespace NodePanel.Service.Runtime;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     WriteIndented = false)]
 [JsonSerializable(typeof(PersistedNodeConfigDocument))]
+[JsonSerializable(typeof(PendingTelemetryBatch))]
 [JsonSerializable(typeof(NodeServiceConfig))]
 [JsonSerializable(typeof(InboundConfig))]
 [JsonSerializable(typeof(InboundSniffingConfig))]

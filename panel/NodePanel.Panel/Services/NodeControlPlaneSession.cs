@@ -70,15 +70,21 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
     {
         var buffer = JsonSerializer.SerializeToUtf8Bytes(envelope, ControlPlaneJsonSerializerContext.Default.ControlPlaneEnvelope);
 
-        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        var lockTaken = false;
         try
         {
+            await _sendLock.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            lockTaken = true;
+
             if (_socket.State != WebSocketState.Open)
             {
                 return false;
             }
 
-            await _socket.SendAsync(buffer.AsMemory(0, buffer.Length), WebSocketMessageType.Text, endOfMessage: true, cancellationToken).ConfigureAwait(false);
+            await _socket.SendAsync(buffer.AsMemory(0, buffer.Length), WebSocketMessageType.Text, endOfMessage: true, timeoutCts.Token).ConfigureAwait(false);
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -88,6 +94,11 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
         catch (OperationCanceledException ex) when (ex.InnerException is ObjectDisposedException || _socket.State != WebSocketState.Open)
         {
             _logger.LogDebug(ex, "Control plane socket send was canceled after the connection started shutting down.");
+            return false;
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogWarning(ex, "Timed out pushing control plane message {Type}.", envelope.Type);
             return false;
         }
         catch (ObjectDisposedException)
@@ -101,7 +112,10 @@ public sealed class NodeControlPlaneSession : IAsyncDisposable
         }
         finally
         {
-            _sendLock.Release();
+            if (lockTaken)
+            {
+                _sendLock.Release();
+            }
         }
     }
 

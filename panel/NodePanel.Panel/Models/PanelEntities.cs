@@ -9,6 +9,9 @@ using TableAttribute = FreeSql.DataAnnotations.TableAttribute;
 namespace NodePanel.Panel.Models;
 
 [Table(Name = "np_users")]
+[Index("idx_np_users_email", nameof(Email))]
+[Index("idx_np_users_subscription_token", nameof(SubscriptionToken))]
+[Index("idx_np_users_invite_user", nameof(InviteUserId))]
 public class UserEntity
 {
     [Column(IsPrimary = true)]
@@ -341,6 +344,35 @@ public class TrafficRecordEntity
     };
 }
 
+[Table(Name = "np_pending_traffic_batches")]
+[Index("idx_np_pending_traffic_created", nameof(CreatedAtUnixMilliseconds))]
+public class PendingTrafficBatchEntity
+{
+    [Column(IsPrimary = true)]
+    public string BatchId { get; set; } = string.Empty;
+
+    public string NodeId { get; set; } = string.Empty;
+
+    [Column(StringLength = -1)]
+    public string PayloadJson { get; set; } = string.Empty;
+
+    public long CreatedAtUnixMilliseconds { get; set; }
+}
+
+[Table(Name = "np_received_traffic_batches")]
+[Index("idx_np_received_traffic_received", nameof(ReceivedAtUnixMilliseconds))]
+public class ReceivedTrafficBatchEntity
+{
+    [Column(IsPrimary = true)]
+    public string BatchId { get; set; } = string.Empty;
+
+    public string NodeId { get; set; } = string.Empty;
+
+    public string PayloadHash { get; set; } = string.Empty;
+
+    public long? ReceivedAtUnixMilliseconds { get; set; }
+}
+
 [Table(Name = "np_scoped_traffic_records")]
 public class ScopedTrafficRecordEntity
 {
@@ -380,6 +412,8 @@ public class ScopedTrafficRecordEntity
 }
 
 [Table(Name = "np_orders")]
+[Index("idx_np_orders_user", nameof(UserId))]
+[Index("idx_np_orders_created_unix", nameof(CreatedAtUnixMilliseconds))]
 public class OrderEntity
 {
     [Column(IsPrimary = true)]
@@ -397,7 +431,17 @@ public class OrderEntity
 
     public int Status { get; set; } // 0: Pending, 1: Paid, 2: Cancelled
 
-    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    [Column(Name = "CreatedAt")]
+    public DateTimeOffset LegacyCreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public long? CreatedAtUnixMilliseconds { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    [NotMapped]
+    public DateTimeOffset CreatedAt
+    {
+        get => CreatedAtUnixMilliseconds.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtUnixMilliseconds.Value) : LegacyCreatedAt;
+        set { CreatedAtUnixMilliseconds = value.ToUnixTimeMilliseconds(); LegacyCreatedAt = value; }
+    }
 
     public DateTimeOffset? PaidAt { get; set; }
 
@@ -426,6 +470,8 @@ public class SettingEntity
 }
 
 [Table(Name = "np_tickets")]
+[Index("idx_np_tickets_user", nameof(UserId))]
+[Index("idx_np_tickets_created_unix", nameof(CreatedAtUnixMilliseconds))]
 public class TicketEntity
 {
     [Column(IsPrimary = true)]
@@ -439,10 +485,21 @@ public class TicketEntity
 
     public int Status { get; set; } // 0: Open, 1: Closed
 
-    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    [Column(Name = "CreatedAt")]
+    public DateTimeOffset LegacyCreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public long? CreatedAtUnixMilliseconds { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    [NotMapped]
+    public DateTimeOffset CreatedAt
+    {
+        get => CreatedAtUnixMilliseconds.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtUnixMilliseconds.Value) : LegacyCreatedAt;
+        set { CreatedAtUnixMilliseconds = value.ToUnixTimeMilliseconds(); LegacyCreatedAt = value; }
+    }
 }
 
 [Table(Name = "np_ticket_messages")]
+[Index("idx_np_ticket_messages_ticket", nameof(TicketId))]
 public class TicketMessageEntity
 {
     [Column(IsPrimary = true)]
@@ -459,6 +516,7 @@ public class TicketMessageEntity
 }
 
 [Table(Name = "np_invite_codes")]
+[Index("idx_np_invite_codes_user", nameof(UserId))]
 public class InviteCodeEntity
 {
     [Column(IsPrimary = true)]
@@ -470,6 +528,7 @@ public class InviteCodeEntity
 }
 
 [Table(Name = "np_email_verification_codes")]
+[Index("idx_np_email_codes_email", nameof(Email))]
 public class EmailVerificationCodeEntity
 {
     [Column(IsPrimary = true)]
@@ -512,6 +571,8 @@ public class EmailVerificationCodeEntity
 }
 
 [Table(Name = "np_commission_logs")]
+[Index("idx_np_commission_logs_inviter", nameof(InviteUserId))]
+[Index("idx_np_commission_logs_created_unix", nameof(CreatedAtUnixMilliseconds))]
 public class CommissionLogEntity
 {
     [Column(IsPrimary = true)]
@@ -525,7 +586,17 @@ public class CommissionLogEntity
 
     public decimal CommissionAmount { get; set; }
 
-    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    [Column(Name = "CreatedAt")]
+    public DateTimeOffset LegacyCreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public long? CreatedAtUnixMilliseconds { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    [NotMapped]
+    public DateTimeOffset CreatedAt
+    {
+        get => CreatedAtUnixMilliseconds.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtUnixMilliseconds.Value) : LegacyCreatedAt;
+        set { CreatedAtUnixMilliseconds = value.ToUnixTimeMilliseconds(); LegacyCreatedAt = value; }
+    }
 }
 
 [Table(Name = "np_server_groups")]

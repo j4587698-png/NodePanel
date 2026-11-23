@@ -53,7 +53,10 @@ public sealed class SmtpEmailService
         using var client = new SmtpClient(settings.SmtpHost, settings.SmtpPort)
         {
             DeliveryMethod = SmtpDeliveryMethod.Network,
-            EnableSsl = settings.SmtpEnableSsl
+            EnableSsl = settings.SmtpEnableSsl,
+            // SmtpClient defaults to 100 seconds; a dead SMTP host would otherwise
+            // block register / forgot-password POSTs for over a minute.
+            Timeout = (int)TimeSpan.FromSeconds(20).TotalMilliseconds
         };
 
         if (!string.IsNullOrWhiteSpace(settings.SmtpUsername))

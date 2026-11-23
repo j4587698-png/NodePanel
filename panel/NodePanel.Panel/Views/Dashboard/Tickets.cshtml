@@ -1,4 +1,4 @@
-@model IReadOnlyList<NodePanel.Panel.Models.TicketViewModel>
+@model NodePanel.Panel.Models.PagedListViewModel<NodePanel.Panel.Models.TicketViewModel>
 @{
     ViewData["Title"] = "工单管理";
 }
@@ -24,11 +24,11 @@
             </tr>
         </thead>
         <tbody>
-            @if (Model.Count == 0)
+            @if (Model.Items.Count == 0)
             {
                 <tr><td colspan="6" class="muted" style="text-align: center; padding: 24px;">暂无工单记录</td></tr>
             }
-            @foreach (var ticket in Model)
+            @foreach (var ticket in Model.Items)
             {
                 <tr>
                     <td style="text-align: center;">
@@ -47,4 +47,12 @@
             }
         </tbody>
     </table>
+    @if (Model.TotalPages > 1)
+    {
+        <nav class="pager">
+            @if (Model.HasPreviousPage) { <a class="button button--small" asp-action="Tickets" asp-route-page="@(Model.Page - 1)">上一页</a> }
+            <span class="muted">第 @Model.Page / @Model.TotalPages 页 · 共 @Model.TotalCount 条</span>
+            @if (Model.HasNextPage) { <a class="button button--small" asp-action="Tickets" asp-route-page="@(Model.Page + 1)">下一页</a> }
+        </nav>
+    }
 </section>

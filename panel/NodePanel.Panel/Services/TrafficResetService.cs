@@ -40,6 +40,7 @@ public sealed class TrafficResetService : BackgroundService
     {
         var users = await _db.FSql.Select<UserEntity>().ToListAsync(cancellationToken);
         var tRecords = await _db.FSql.Select<TrafficRecordEntity>().ToListAsync(cancellationToken);
+        var tRecordsByUser = tRecords.ToDictionary(static record => record.UserId, StringComparer.Ordinal);
         
         foreach (var user in users)
         {
@@ -49,7 +50,7 @@ public sealed class TrafficResetService : BackgroundService
                 continue;
             }
 
-            var tRecord = tRecords.FirstOrDefault(t => t.UserId == user.UserId);
+            var tRecord = tRecordsByUser.GetValueOrDefault(user.UserId);
             bool shouldReset = false;
 
             if (tRecord != null && tRecord.LastResetAt.HasValue)

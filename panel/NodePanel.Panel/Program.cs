@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NodePanel.ControlPlane.Configuration;
@@ -63,11 +64,26 @@ builder.Services.AddControllersWithViews(options =>
     messageProvider.SetValueMustNotBeNullAccessor(fieldName => $"字段“{fieldName}”不能为空。");
 });
 builder.Services.AddHttpClient();
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(new[]
+    {
+        "application/json",
+        "text/html",
+        "text/css",
+        "text/plain",
+        "application/javascript",
+        "text/javascript",
+        "image/svg+xml"
+    });
+});
 builder.Services.AddSingleton(panelHttpsRuntime);
 builder.Services.AddSingleton<DatabaseService>();
 builder.Services.AddSingleton<PanelSnapshotBuilder>();
 builder.Services.AddSingleton<NodeConnectionRegistry>();
 builder.Services.AddSingleton<ControlPlanePushService>();
+builder.Services.AddHostedService<ControlPlanePushBackgroundService>();
 builder.Services.AddSingleton<PanelAcmeHttpChallengeStore>();
 builder.Services.AddSingleton<PanelMutationService>();
 builder.Services.AddSingleton<PanelQueryService>();
@@ -144,7 +160,15 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.UseStaticFiles();
+app.UseResponseCompression();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        // Static assets are referenced with asp-append-version, so long-lived caching is safe.
+        context.Context.Response.Headers.CacheControl = "public,max-age=604800";
+    }
+});
 app.UseWebSockets();
 
 app.UseAuthentication();
@@ -354,10 +378,21 @@ app.Map(
         }
 
         nodeConnectionRegistry.RecordHello(nodeId, hello.Version, hello.AppliedRevision);
-        await controlPlanePushService.PushSnapshotAsync(nodeId, context.RequestAborted).ConfigureAwait(false);
-
+        var supportsDurableTelemetry = hello.Capabilities?.Contains(ControlPlaneCapabilities.DurableTelemetry, StringComparer.Ordinal) == true;
         try
         {
+            if (supportsDurableTelemetry &&
+                !await session.SendAsync(new ControlPlaneEnvelope
+                {
+                    Type = ControlMessageTypes.TelemetryReady,
+                    NodeId = nodeId,
+                    Payload = JsonSerializer.SerializeToElement(new TelemetryReadyPayload(), ControlPlaneJsonSerializerContext.Default.TelemetryReadyPayload)
+                }, context.RequestAborted).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException("Failed to negotiate durable telemetry.");
+            }
+            await controlPlanePushService.PushSnapshotAsync(nodeId, context.RequestAborted).ConfigureAwait(false);
+
             while (!context.RequestAborted.IsCancellationRequested)
             {
                 var message = await session.ReceiveAsync(context.RequestAborted).ConfigureAwait(false);
@@ -389,7 +424,19 @@ app.Map(
                         {
                             nodeConnectionRegistry.RecordTelemetry(nodeId, payload);
                             var acc = context.RequestServices.GetRequiredService<NetworkAccountingService>();
-                            acc.EnqueueTrafficDelta(nodeId, payload.Traffic);
+                            if (payload.BatchId is not null && !supportsDurableTelemetry)
+                                throw new InvalidOperationException("Telemetry acknowledgments were not negotiated.");
+                            await acc.EnqueueTrafficDeltaAsync(nodeId, payload.Traffic, context.RequestAborted, payload.BatchId).ConfigureAwait(false);
+                            if (payload.BatchId is not null &&
+                                !await session.SendAsync(new ControlPlaneEnvelope
+                                {
+                                    Type = ControlMessageTypes.TelemetryAck,
+                                    NodeId = nodeId,
+                                    Payload = JsonSerializer.SerializeToElement(
+                                        new TelemetryAckPayload { BatchId = payload.BatchId },
+                                        ControlPlaneJsonSerializerContext.Default.TelemetryAckPayload)
+                                }, context.RequestAborted).ConfigureAwait(false))
+                                throw new InvalidOperationException("Failed to acknowledge telemetry batch.");
                         }
 
                         break;

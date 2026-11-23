@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using NodePanel.ControlPlane.Configuration;
 using NodePanel.ControlPlane.Protocol;
 using NodePanel.Core.Runtime;
@@ -15,9 +16,14 @@ public sealed class TelemetryFlushService : BackgroundService
     private readonly IControlPlaneConnection _controlPlaneConnection;
     private readonly HostResourceTelemetryProvider _hostResourceTelemetryProvider;
     private readonly string _nodeId;
+    private readonly bool _controlPlaneEnabled;
     private readonly RuntimeConfigStore _runtimeConfigStore;
     private readonly TelemetryDeltaTracker _telemetryDeltaTracker;
+    private readonly TelemetryOutbox _telemetryOutbox;
+    private readonly TelemetryDeliveryState _telemetryDeliveryState;
+    private readonly ILogger<TelemetryFlushService> _logger;
     private readonly IRuntime _runtime;
+    private bool _warnedMissingCapability;
 
     public TelemetryFlushService(
         AppliedRuntimeSnapshotStore appliedRuntimeSnapshotStore,
@@ -27,6 +33,9 @@ public sealed class TelemetryFlushService : BackgroundService
         NodePanelOptions options,
         RuntimeConfigStore runtimeConfigStore,
         TelemetryDeltaTracker telemetryDeltaTracker,
+        TelemetryOutbox telemetryOutbox,
+        TelemetryDeliveryState telemetryDeliveryState,
+        ILogger<TelemetryFlushService> logger,
         IRuntime runtime)
     {
         _appliedRuntimeSnapshotStore = appliedRuntimeSnapshotStore;
@@ -34,8 +43,12 @@ public sealed class TelemetryFlushService : BackgroundService
         _controlPlaneConnection = controlPlaneConnection;
         _hostResourceTelemetryProvider = hostResourceTelemetryProvider;
         _nodeId = string.IsNullOrWhiteSpace(options.Identity.NodeId) ? Environment.MachineName : options.Identity.NodeId;
+        _controlPlaneEnabled = options.ControlPlane.Enabled && !string.IsNullOrWhiteSpace(options.ControlPlane.Url);
         _runtimeConfigStore = runtimeConfigStore;
         _telemetryDeltaTracker = telemetryDeltaTracker;
+        _telemetryOutbox = telemetryOutbox;
+        _telemetryDeliveryState = telemetryDeliveryState;
+        _logger = logger;
         _runtime = runtime;
     }
 
@@ -50,12 +63,15 @@ public sealed class TelemetryFlushService : BackgroundService
         }
     }
 
-    private async Task FlushAsync(CancellationToken cancellationToken)
+    internal async Task FlushAsync(CancellationToken cancellationToken)
     {
+        if (!_controlPlaneEnabled) return;
         var appliedSnapshot = _appliedRuntimeSnapshotStore.GetSnapshot();
         var runtimeStatus = _runtime.GetStatus();
         var trafficSnapshot = _runtime.GetTrafficSnapshot();
         var traffic = _telemetryDeltaTracker.CreateDelta(trafficSnapshot);
+        await _telemetryOutbox.AppendAsync(traffic, cancellationToken).ConfigureAwait(false);
+        _telemetryDeltaTracker.Commit(trafficSnapshot);
         var inboundStatuses = NodeServiceConfigInbounds.GetEffectiveInbounds(appliedSnapshot.Config)
             .Where(static inbound => inbound.Enabled)
             .Select(static inbound => new NodeInboundStatusPayload
@@ -85,26 +101,69 @@ public sealed class TelemetryFlushService : BackgroundService
             Host = _hostResourceTelemetryProvider.Capture()
         };
 
+        if (!_telemetryDeliveryState.IsReady)
+        {
+            if (_controlPlaneConnection.IsConnected && !_warnedMissingCapability)
+            {
+                _logger.LogWarning("Panel has not negotiated durable telemetry; traffic will remain in the local outbox until a compatible panel is available.");
+                _warnedMissingCapability = true;
+            }
+            await SendTelemetryAsync(appliedSnapshot.Revision, status, null, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        _warnedMissingCapability = false;
+
+        var sent = 0;
+        while (_telemetryDeliveryState.IsReady && sent < 100)
+        {
+            var batch = _telemetryOutbox.Pending.FirstOrDefault();
+            if (batch is null) break;
+            var ack = _telemetryDeliveryState.BeginWait(batch.BatchId);
+            try
+            {
+                if (!await SendTelemetryAsync(appliedSnapshot.Revision, status, batch, cancellationToken).ConfigureAwait(false))
+                    return;
+                bool acknowledged;
+                try
+                {
+                    acknowledged = await ack.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    _logger.LogWarning("Timed out waiting for acknowledgment of telemetry batch {BatchId}; it will be retried.", batch.BatchId);
+                    return;
+                }
+                if (!acknowledged) return;
+                _telemetryOutbox.RemoveAcknowledged(batch.BatchId);
+                sent++;
+            }
+            finally
+            {
+                _telemetryDeliveryState.EndWait(batch.BatchId);
+            }
+        }
+
+        if (sent == 0)
+            await SendTelemetryAsync(appliedSnapshot.Revision, status, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task<bool> SendTelemetryAsync(int revision, NodeStatusPayload status, PendingTelemetryBatch? batch, CancellationToken cancellationToken)
+    {
         var payload = new TelemetryBatchPayload
         {
             NodeId = _nodeId,
-            AppliedRevision = appliedSnapshot.Revision,
-            Traffic = traffic,
-            Status = status
+            AppliedRevision = revision,
+            Traffic = batch is null ? Array.Empty<UserTrafficDelta>() : batch.Traffic,
+            Status = status,
+            BatchId = batch?.BatchId
         };
-
-        var envelope = new ControlPlaneEnvelope
+        return _controlPlaneConnection.SendAsync(new ControlPlaneEnvelope
         {
             Type = ControlMessageTypes.TelemetryBatch,
             NodeId = _nodeId,
-            Revision = appliedSnapshot.Revision,
+            Revision = revision,
             Payload = JsonSerializer.SerializeToElement(payload, ControlPlaneJsonSerializerContext.Default.TelemetryBatchPayload)
-        };
-
-        if (await _controlPlaneConnection.SendAsync(envelope, cancellationToken).ConfigureAwait(false))
-        {
-            _telemetryDeltaTracker.Commit(trafficSnapshot);
-        }
+        }, cancellationToken);
     }
 
     private static IReadOnlyList<NodeProxyInboundStatusPayload> CreateProxyInboundStatuses(

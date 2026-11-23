@@ -4,22 +4,16 @@ namespace NodePanel.Panel.Services;
 
 public sealed class PanelAuthSettingsService
 {
-    private readonly DatabaseService _db;
+    private readonly PanelQueryService _panelQueryService;
 
-    public PanelAuthSettingsService(DatabaseService db)
+    public PanelAuthSettingsService(PanelQueryService panelQueryService)
     {
-        _db = db;
+        _panelQueryService = panelQueryService;
     }
 
     public async Task<PanelAuthSettings> GetAsync(CancellationToken cancellationToken = default)
     {
-        if (!_db.IsConfigured)
-        {
-            return new PanelAuthSettings();
-        }
-
-        var settings = await _db.FSql.Select<SettingEntity>().ToListAsync(cancellationToken).ConfigureAwait(false);
-        return PanelAuthSettings.FromSettings(
-            settings.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal));
+        var settings = await _panelQueryService.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+        return PanelAuthSettings.FromSettings(settings);
     }
 }

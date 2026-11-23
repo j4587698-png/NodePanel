@@ -11,17 +11,20 @@ public sealed class PanelMutationService
     private readonly DatabaseService _db;
     private readonly NodeConnectionRegistry _nodeConnectionRegistry;
     private readonly PanelHttpsRuntime _panelHttpsRuntime;
+    private readonly PanelQueryService _panelQueryService;
 
     public PanelMutationService(
         DatabaseService db,
         ControlPlanePushService controlPlanePushService,
         NodeConnectionRegistry nodeConnectionRegistry,
-        PanelHttpsRuntime panelHttpsRuntime)
+        PanelHttpsRuntime panelHttpsRuntime,
+        PanelQueryService panelQueryService)
     {
         _db = db;
         _controlPlanePushService = controlPlanePushService;
         _nodeConnectionRegistry = nodeConnectionRegistry;
         _panelHttpsRuntime = panelHttpsRuntime;
+        _panelQueryService = panelQueryService;
     }
 
     public async Task SaveServerGroupAsync(int groupId, string name, CancellationToken cancellationToken)
@@ -115,7 +118,7 @@ public sealed class PanelMutationService
         
         await _db.FSql.InsertOrUpdate<NodeEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
 
-        await _controlPlanePushService.PushSnapshotsAsync(new[] { nodeId }, cancellationToken).ConfigureAwait(false);
+        _controlPlanePushService.EnqueueSnapshots(new[] { nodeId });
         return entity.ToRecord();
     }
 
@@ -158,53 +161,105 @@ public sealed class PanelMutationService
     public async Task<PanelUserRecord> SaveUserAsync(string userId, UpsertUserRequest request, CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
-        var existing = await _db.FSql.Select<UserEntity>().Where(x => x.UserId == userId).FirstAsync(cancellationToken);
-        var entity = existing ?? new UserEntity { UserId = userId };
-        var originalNodeIds = existing?.NodeIds.ToArray();
-
-        entity.Email = NodeFormValueCodec.TrimOrEmpty(request.Email);
-        entity.DisplayName = request.DisplayName;
-        entity.SubscriptionToken = NormalizeSecret(request.SubscriptionToken, existing?.SubscriptionToken);
-        entity.TrojanPassword = NormalizeSecret(request.TrojanPassword, existing?.TrojanPassword);
-        entity.V2rayUuid = NormalizeUuid(request.V2rayUuid, existing?.V2rayUuid);
-        entity.ShadowsocksCipher = NormalizeShadowsocksCipher(request.ShadowsocksCipher, existing?.ShadowsocksCipher);
-        entity.ShadowsocksPassword = NormalizeSecret(request.ShadowsocksPassword, existing?.ShadowsocksPassword);
-        entity.InviteUserId = NodeFormValueCodec.TrimOrEmpty(request.InviteUserId);
-        entity.CommissionBalance = request.CommissionBalance;
-        entity.CommissionRate = Math.Clamp(request.CommissionRate, 0, 100);
-        entity.GroupId = request.GroupId;
-        entity.Enabled = request.Enabled;
-        entity.BytesPerSecond = request.BytesPerSecond;
-        entity.DeviceLimit = Math.Max(0, request.DeviceLimit);
-        entity.NodeIds = request.NodeIds;
-        entity.PlanName = request.Subscription.PlanName;
-        entity.Cycle = string.IsNullOrWhiteSpace(request.Subscription.Cycle)
-            ? existing?.Cycle ?? string.Empty
-            : request.Subscription.Cycle;
-        entity.TransferEnableBytes = request.Subscription.TransferEnableBytes;
-        entity.ExpiresAt = request.Subscription.ExpiresAt;
-        entity.PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(request.Subscription.PurchaseUrl);
-        entity.PortalNotice = request.Subscription.PortalNotice ?? string.Empty;
-
-        var normalizedLoginPassword = NodeFormValueCodec.TrimOrEmpty(request.LoginPassword);
-        if (!string.IsNullOrWhiteSpace(normalizedLoginPassword))
+        await _db.TrafficWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var passwordHasher = new PasswordHasher<UserEntity>();
-            entity.PasswordHash = passwordHasher.HashPassword(entity, normalizedLoginPassword);
+            var existing = await _db.FSql.Select<UserEntity>().Where(x => x.UserId == userId).FirstAsync(cancellationToken);
+            var entity = existing ?? new UserEntity { UserId = userId };
+            var originalNodeIds = existing?.NodeIds.ToArray();
+
+            entity.Email = NodeFormValueCodec.TrimOrEmpty(request.Email);
+            entity.DisplayName = request.DisplayName;
+            entity.SubscriptionToken = NormalizeSecret(request.SubscriptionToken, existing?.SubscriptionToken);
+            entity.TrojanPassword = NormalizeSecret(request.TrojanPassword, existing?.TrojanPassword);
+            entity.V2rayUuid = NormalizeUuid(request.V2rayUuid, existing?.V2rayUuid);
+            entity.ShadowsocksCipher = NormalizeShadowsocksCipher(request.ShadowsocksCipher, existing?.ShadowsocksCipher);
+            entity.ShadowsocksPassword = NormalizeSecret(request.ShadowsocksPassword, existing?.ShadowsocksPassword);
+            entity.InviteUserId = NodeFormValueCodec.TrimOrEmpty(request.InviteUserId);
+            entity.CommissionBalance = request.CommissionBalance;
+            entity.CommissionRate = Math.Clamp(request.CommissionRate, 0, 100);
+            entity.GroupId = request.GroupId;
+            entity.Enabled = request.Enabled;
+            entity.BytesPerSecond = request.BytesPerSecond;
+            entity.DeviceLimit = Math.Max(0, request.DeviceLimit);
+            entity.NodeIds = request.NodeIds;
+            entity.PlanName = request.Subscription.PlanName;
+            entity.Cycle = string.IsNullOrWhiteSpace(request.Subscription.Cycle)
+                ? existing?.Cycle ?? string.Empty
+                : request.Subscription.Cycle;
+            entity.TransferEnableBytes = request.Subscription.TransferEnableBytes;
+            entity.ExpiresAt = request.Subscription.ExpiresAt;
+            entity.PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(request.Subscription.PurchaseUrl);
+            entity.PortalNotice = request.Subscription.PortalNotice ?? string.Empty;
+
+            var normalizedLoginPassword = NodeFormValueCodec.TrimOrEmpty(request.LoginPassword);
+            if (!string.IsNullOrWhiteSpace(normalizedLoginPassword))
+            {
+                var passwordHasher = new PasswordHasher<UserEntity>();
+                entity.PasswordHash = passwordHasher.HashPassword(entity, normalizedLoginPassword);
+            }
+
+            await _db.FSql.InsertOrUpdate<UserEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
+
+            var allNodeIds = await _db.FSql.Select<NodeEntity>().ToListAsync(n => n.NodeId, cancellationToken);
+            var affectedNodes = ResolveAffectedNodeIds(
+                allNodeIds,
+                originalNodeIds,
+                entity.NodeIds);
+
+            await IncrementNodeRevisionsAsync(affectedNodes, cancellationToken).ConfigureAwait(false);
+
+            _controlPlanePushService.EnqueueSnapshots(affectedNodes);
+            return entity.ToRecord();
+        }
+        finally
+        {
+            _db.TrafficWriteLock.Release();
+        }
+    }
+
+    internal async Task DisableUsersForAccountingAsync(IReadOnlyList<UserEntity> users, CancellationToken cancellationToken)
+    {
+        if (users.Count == 0) return;
+
+        _db.FSql.CodeFirst.SyncStructure<NodeEntity>();
+        _db.FSql.CodeFirst.SyncStructure<UserEntity>();
+        using var connection = await _db.FSql.Ado.MasterPool.GetAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.Value.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var allNodeIds = await _db.FSql.Select<NodeEntity>().WithTransaction(transaction)
+            .ToListAsync(node => node.NodeId, cancellationToken).ConfigureAwait(false);
+        var affectedNodes = users.Any(user => user.NodeIds.Count == 0)
+            ? allNodeIds.ToArray()
+            : users.SelectMany(user => user.NodeIds).Distinct(StringComparer.Ordinal).ToArray();
+
+        foreach (var userIds in users.Select(user => user.UserId).Chunk(500))
+        {
+            await _db.FSql.Update<UserEntity>().WithTransaction(transaction)
+                .Set(user => user.Enabled, false)
+                .Where(user => user.Enabled && userIds.Contains(user.UserId))
+                .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await _db.FSql.InsertOrUpdate<UserEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
+        foreach (var nodeIds in affectedNodes.Chunk(500))
+        {
+            await _db.FSql.Update<NodeEntity>().WithTransaction(transaction)
+                .Set(node => node.DesiredRevision + 1)
+                .Where(node => nodeIds.Contains(node.NodeId) && node.DesiredRevision > 0)
+                .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+            await _db.FSql.Update<NodeEntity>().WithTransaction(transaction)
+                .Set(node => node.DesiredRevision, 1)
+                .Where(node => nodeIds.Contains(node.NodeId) && node.DesiredRevision <= 0)
+                .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+        }
 
-        var allNodeIds = await _db.FSql.Select<NodeEntity>().ToListAsync(n => n.NodeId, cancellationToken);
-        var affectedNodes = ResolveAffectedNodeIds(
-            allNodeIds,
-            originalNodeIds,
-            entity.NodeIds);
-
-        await IncrementNodeRevisionsAsync(affectedNodes, cancellationToken).ConfigureAwait(false);
-
-        await _controlPlanePushService.PushSnapshotsAsync(affectedNodes, cancellationToken).ConfigureAwait(false);
-        return entity.ToRecord();
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _controlPlanePushService.EnqueueSnapshots(affectedNodes);
+        }
     }
 
     public async Task<PanelUserRecord> ResetUserSubscriptionTokenAsync(string userId, CancellationToken cancellationToken)
@@ -273,26 +328,49 @@ public sealed class PanelMutationService
     public async Task ResetUserTrafficAsync(string userId, CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
-        var lastResetAt = DateTimeOffset.UtcNow;
-        var entity = await _db.FSql.Select<TrafficRecordEntity>().Where(x => x.UserId == userId).FirstAsync(cancellationToken)
-                     ?? new TrafficRecordEntity { UserId = userId };
-        
-        entity.UploadBytes = 0;
-        entity.DownloadBytes = 0;
-        entity.LastResetAt = lastResetAt;
-        
-        await _db.FSql.InsertOrUpdate<TrafficRecordEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
-
-        var scopedEntities = await _db.FSql.Select<ScopedTrafficRecordEntity>()
-            .Where(x => x.UserId == userId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var scopedEntity in scopedEntities)
+        await _db.TrafficWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            scopedEntity.UploadBytes = 0;
-            scopedEntity.DownloadBytes = 0;
-            scopedEntity.LastResetAt = lastResetAt;
-            await _db.FSql.InsertOrUpdate<ScopedTrafficRecordEntity>().SetSource(scopedEntity).ExecuteAffrowsAsync(cancellationToken);
+            _db.FSql.CodeFirst.SyncStructure<TrafficRecordEntity>();
+            _db.FSql.CodeFirst.SyncStructure<ScopedTrafficRecordEntity>();
+            using var connection = await _db.FSql.Ado.MasterPool.GetAsync(cancellationToken).ConfigureAwait(false);
+            await using var transaction = await connection.Value.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            var lastResetAt = DateTimeOffset.UtcNow;
+            var entity = await _db.FSql.Select<TrafficRecordEntity>().WithTransaction(transaction).Where(x => x.UserId == userId).FirstAsync(cancellationToken)
+                         ?? new TrafficRecordEntity { UserId = userId };
+        
+            entity.UploadBytes = 0;
+            entity.DownloadBytes = 0;
+            entity.LastResetAt = lastResetAt;
+        
+            await _db.FSql.InsertOrUpdate<TrafficRecordEntity>().WithTransaction(transaction).SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
+
+            var scopedEntities = await _db.FSql.Select<ScopedTrafficRecordEntity>()
+                .WithTransaction(transaction)
+                .Where(x => x.UserId == userId)
+                .ToListAsync(cancellationToken);
+
+            foreach (var scopedEntity in scopedEntities)
+            {
+                scopedEntity.UploadBytes = 0;
+                scopedEntity.DownloadBytes = 0;
+                scopedEntity.LastResetAt = lastResetAt;
+            }
+
+            if (scopedEntities.Count > 0)
+            {
+                await _db.FSql.Update<ScopedTrafficRecordEntity>()
+                    .WithTransaction(transaction)
+                    .SetSource(scopedEntities)
+                    .UpdateColumns(static entity => new { entity.UploadBytes, entity.DownloadBytes, entity.LastResetAtUnixMilliseconds })
+                    .ExecuteAffrowsAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _db.TrafficWriteLock.Release();
         }
     }
 
@@ -427,15 +505,18 @@ public sealed class PanelMutationService
     public async Task SaveSettingsAsync(Dictionary<string, string> settings, CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
-        
-        foreach (var (key, value) in settings)
-        {
-            var entity = await _db.FSql.Select<SettingEntity>().Where(x => x.Key == key).FirstAsync(cancellationToken)
-                         ?? new SettingEntity { Key = key };
-            
-            entity.Value = value;
-            await _db.FSql.InsertOrUpdate<SettingEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
-        }
+        if (settings.Count == 0) return;
+
+        var entities = settings
+            .Select(static item => new SettingEntity { Key = item.Key, Value = item.Value })
+            .ToArray();
+
+        await _db.FSql.InsertOrUpdate<SettingEntity>()
+            .SetSource(entities)
+            .ExecuteAffrowsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        _panelQueryService.InvalidateSettingsCache();
     }
 
     public async Task<PanelCertificateRecord> SaveCertificateAsync(string certificateId, UpsertPanelCertificateRequest request, CancellationToken cancellationToken)
@@ -502,7 +583,7 @@ public sealed class PanelMutationService
             .ToArray();
 
         await IncrementNodeRevisionsAsync(affectedNodeIds, cancellationToken).ConfigureAwait(false);
-        await _controlPlanePushService.PushSnapshotsAsync(affectedNodeIds, cancellationToken).ConfigureAwait(false);
+        _controlPlanePushService.EnqueueSnapshots(affectedNodeIds);
         return affectedNodeIds;
     }
 
@@ -511,17 +592,30 @@ public sealed class PanelMutationService
 
     private async Task IncrementNodeRevisionsAsync(IReadOnlyList<string> nodeIds, CancellationToken cancellationToken)
     {
-        foreach (var nodeId in nodeIds)
-        {
-            var entity = await _db.FSql.Select<NodeEntity>().Where(x => x.NodeId == nodeId).FirstAsync(cancellationToken);
-            if (entity is null)
-            {
-                continue;
-            }
+        if (nodeIds.Count == 0) return;
 
+        var normalizedNodeIds = nodeIds
+            .Where(static nodeId => !string.IsNullOrWhiteSpace(nodeId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (normalizedNodeIds.Length == 0) return;
+
+        var entities = await _db.FSql.Select<NodeEntity>()
+            .Where(x => normalizedNodeIds.Contains(x.NodeId))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (entities.Count == 0) return;
+
+        foreach (var entity in entities)
+        {
             entity.DesiredRevision = NextDesiredRevision(entity.DesiredRevision);
-            await _db.FSql.InsertOrUpdate<NodeEntity>().SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
         }
+
+        await _db.FSql.Update<NodeEntity>()
+            .SetSource(entities)
+            .UpdateColumns(static entity => entity.DesiredRevision)
+            .ExecuteAffrowsAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task RemoveDeletedNodeFromExplicitUserBindingsAsync(string nodeId, CancellationToken cancellationToken)

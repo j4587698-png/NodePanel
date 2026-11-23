@@ -52,6 +52,7 @@ public sealed class ControlPlaneClientServiceTests
             new CertificateRenewalSignal(),
             orchestrator,
             new AppliedRuntimeSnapshotStore(),
+            new TelemetryDeliveryState(),
             NullLogger<ControlPlaneClientService>.Instance);
 
         await service.StartAsync(CancellationToken.None);

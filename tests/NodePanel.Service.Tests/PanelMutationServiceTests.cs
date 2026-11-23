@@ -8,15 +8,508 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NodePanel.ControlPlane.Configuration;
 using NodePanel.ControlPlane.Protocol;
+using NodePanel.ControlPlane.Runtime;
 using NodePanel.Core.Runtime;
 using NodePanel.Panel.Configuration;
 using NodePanel.Panel.Models;
 using NodePanel.Panel.Services;
+using NodePanel.Service.Configuration;
+using NodePanel.Service.Runtime;
+using NodePanel.Service.Services;
+using System.Text.Json;
+using System.Net;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace NodePanel.Service.Tests;
 
 public sealed class PanelMutationServiceTests
 {
+    [Fact]
+    public async Task Paged_admin_lists_return_stable_pages()
+    {
+        using var harness = new PanelMutationHarness();
+        var timestamp = DateTimeOffset.UtcNow;
+        await harness.DatabaseService.FSql.Insert(Enumerable.Range(0, 7).Select(i => new TicketEntity
+        {
+            TicketId = $"ticket-{i}", Subject = $"subject-{i}", CreatedAt = timestamp
+        }).ToArray()).ExecuteAffrowsAsync();
+        await harness.DatabaseService.FSql.Insert(Enumerable.Range(0, 7).Select(i => new CommissionLogEntity
+        {
+            LogId = $"log-{i}", CreatedAt = timestamp
+        }).ToArray()).ExecuteAffrowsAsync();
+        await harness.DatabaseService.FSql.Insert(Enumerable.Range(0, 7).Select(i => new OrderEntity
+        {
+            OrderId = $"order-{i}", CreatedAt = timestamp
+        }).ToArray()).ExecuteAffrowsAsync();
+
+        var query = harness.CreateQueryService();
+        var tickets = await query.GetTicketsAsync(2, 3);
+        var commissions = await query.GetCommissionLogsAsync(2, 3);
+        var orders = await query.GetOrdersPageDataAsync(2, 3);
+
+        Assert.Equal(7, tickets.TotalCount);
+        Assert.Equal(new[] { "ticket-3", "ticket-4", "ticket-5" }, tickets.Items.Select(item => item.TicketId));
+        Assert.True(tickets.HasPreviousPage && tickets.HasNextPage);
+        Assert.Equal(7, commissions.TotalCount);
+        Assert.Equal(new[] { "log-3", "log-4", "log-5" }, commissions.Items.Select(item => item.LogId));
+        Assert.Equal(7, orders.TotalCount);
+        Assert.Equal(new[] { "order-3", "order-4", "order-5" }, orders.Orders.Select(item => item.OrderId));
+    }
+
+    [Fact]
+    public async Task Paged_admin_lists_accept_legacy_rows_without_unix_timestamps()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.DatabaseService.FSql.Insert(new TicketEntity
+        {
+            TicketId = "legacy", CreatedAtUnixMilliseconds = null
+        }).ExecuteAffrowsAsync();
+        await harness.DatabaseService.FSql.Insert(new CommissionLogEntity
+        {
+            LogId = "legacy", CreatedAtUnixMilliseconds = null
+        }).ExecuteAffrowsAsync();
+        await harness.DatabaseService.FSql.Insert(new OrderEntity
+        {
+            OrderId = "legacy", CreatedAtUnixMilliseconds = null
+        }).ExecuteAffrowsAsync();
+        var query = harness.CreateQueryService();
+        Assert.Equal("legacy", Assert.Single((await query.GetTicketsAsync(1, 50)).Items).TicketId);
+        Assert.Equal("legacy", Assert.Single((await query.GetCommissionLogsAsync(1, 50)).Items).LogId);
+        Assert.Equal("legacy", Assert.Single((await query.GetOrdersPageDataAsync(1, 50)).Orders).OrderId);
+    }
+
+    [Fact]
+    public async Task Failed_traffic_batch_is_rolled_back_and_retried()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        db.CodeFirst.SyncStructure<TrafficRecordEntity>();
+        db.CodeFirst.SyncStructure<ScopedTrafficRecordEntity>();
+        db.Ado.ExecuteNonQuery("CREATE TRIGGER fail_scoped BEFORE INSERT ON np_scoped_traffic_records BEGIN SELECT RAISE(FAIL, 'test failure'); END");
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await accounting.EnqueueTrafficDeltaAsync("node", [new UserTrafficDelta
+        {
+            UserId = "user", Protocol = "trojan", InboundTag = "in", UploadBytes = 10, DownloadBytes = 20
+        }], CancellationToken.None);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => accounting.ProcessTrafficAsync(CancellationToken.None));
+        Assert.Equal(0, await db.Select<TrafficRecordEntity>().CountAsync());
+        Assert.Equal(1, await db.Select<PendingTrafficBatchEntity>().CountAsync());
+        db.Ado.ExecuteNonQuery("DROP TRIGGER fail_scoped");
+        using var reopened = harness.OpenDatabase();
+        accounting = new NetworkAccountingService(reopened, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+
+        var total = await db.Select<TrafficRecordEntity>().FirstAsync();
+        var scoped = await db.Select<ScopedTrafficRecordEntity>().FirstAsync();
+        Assert.Equal(10, total.UploadBytes);
+        Assert.Equal(20, total.DownloadBytes);
+        Assert.Equal(10, scoped.UploadBytes);
+        Assert.Equal(20, scoped.DownloadBytes);
+    }
+
+    [Fact]
+    public async Task Failed_traffic_reset_does_not_partially_reset_totals()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        await db.Insert(new TrafficRecordEntity { UserId = "user", UploadBytes = 10, DownloadBytes = 20 }).ExecuteAffrowsAsync();
+        await db.Insert(new ScopedTrafficRecordEntity { UserId = "user", Protocol = "trojan", InboundTag = "in", UploadBytes = 10, DownloadBytes = 20 }).ExecuteAffrowsAsync();
+        db.Ado.ExecuteNonQuery("CREATE TRIGGER fail_reset BEFORE UPDATE ON np_scoped_traffic_records BEGIN SELECT RAISE(FAIL, 'test failure'); END");
+
+        await Assert.ThrowsAnyAsync<Exception>(() => harness.MutationService.ResetUserTrafficAsync("user", CancellationToken.None));
+        var total = await db.Select<TrafficRecordEntity>().FirstAsync();
+        var scoped = await db.Select<ScopedTrafficRecordEntity>().FirstAsync();
+        Assert.Equal(10, total.UploadBytes);
+        Assert.Equal(20, total.DownloadBytes);
+        Assert.Equal(10, scoped.UploadBytes);
+        Assert.Equal(20, scoped.DownloadBytes);
+    }
+
+    [Fact]
+    public async Task Durable_traffic_batch_is_applied_once_after_reopening_database()
+    {
+        using var harness = new PanelMutationHarness();
+        var first = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await first.EnqueueTrafficDeltaAsync("node", [new UserTrafficDelta
+        {
+            UserId = "user", UploadBytes = 10, DownloadBytes = 20
+        }], CancellationToken.None);
+        using var reopened = harness.OpenDatabase();
+        var second = new NetworkAccountingService(reopened, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+
+        await second.ProcessTrafficAsync(CancellationToken.None);
+        await first.ProcessTrafficAsync(CancellationToken.None);
+
+        var total = await reopened.FSql.Select<TrafficRecordEntity>().FirstAsync();
+        Assert.Equal(10, total.UploadBytes);
+        Assert.Equal(20, total.DownloadBytes);
+        Assert.Equal(0, await reopened.FSql.Select<PendingTrafficBatchEntity>().CountAsync());
+    }
+
+    [Fact]
+    public async Task Acknowledged_traffic_retry_is_deduplicated_after_settlement()
+    {
+        using var harness = new PanelMutationHarness();
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        var id = Guid.NewGuid().ToString("N");
+        UserTrafficDelta[] traffic = [new UserTrafficDelta { UserId = "user", UploadBytes = 10, DownloadBytes = 20 }];
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, id);
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, id);
+        Assert.Equal(1, await harness.DatabaseService.FSql.Select<PendingTrafficBatchEntity>().CountAsync());
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, id);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+
+        var total = await harness.DatabaseService.FSql.Select<TrafficRecordEntity>().FirstAsync();
+        Assert.Equal(10, total.UploadBytes);
+        Assert.Equal(20, total.DownloadBytes);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            accounting.EnqueueTrafficDeltaAsync("different-node", traffic, CancellationToken.None, id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            accounting.EnqueueTrafficDeltaAsync("node", [traffic[0] with { UploadBytes = 11 }], CancellationToken.None, id));
+    }
+
+    [Fact]
+    public async Task Receipt_cleanup_retains_recent_pending_and_legacy_batches()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        var now = DateTimeOffset.UtcNow;
+        var expiredId = Guid.NewGuid().ToString("N");
+        var recentId = Guid.NewGuid().ToString("N");
+        var pendingId = Guid.NewGuid().ToString("N");
+        var legacyId = Guid.NewGuid().ToString("N");
+        UserTrafficDelta[] traffic = [new UserTrafficDelta { UserId = "user", UploadBytes = 10, DownloadBytes = 20 }];
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, expiredId);
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, recentId);
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, legacyId);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, pendingId);
+        await db.Update<ReceivedTrafficBatchEntity>()
+            .Set(receipt => receipt.ReceivedAtUnixMilliseconds, now.AddMinutes(-10).ToUnixTimeMilliseconds())
+            .Where(receipt => receipt.BatchId == expiredId || receipt.BatchId == pendingId).ExecuteAffrowsAsync();
+        await db.Update<ReceivedTrafficBatchEntity>()
+            .Set(receipt => receipt.ReceivedAtUnixMilliseconds, now.AddMinutes(-10).ToUnixTimeMilliseconds() + 1)
+            .Where(receipt => receipt.BatchId == recentId).ExecuteAffrowsAsync();
+        await db.Update<ReceivedTrafficBatchEntity>()
+            .Set(receipt => receipt.ReceivedAtUnixMilliseconds, (long?)null)
+            .Where(receipt => receipt.BatchId == legacyId).ExecuteAffrowsAsync();
+
+        await accounting.PruneTrafficReceiptsAsync(now, CancellationToken.None);
+        var remaining = await db.Select<ReceivedTrafficBatchEntity>().ToListAsync();
+        Assert.DoesNotContain(remaining, receipt => receipt.BatchId == expiredId);
+        Assert.Contains(remaining, receipt => receipt.BatchId == recentId);
+        Assert.Contains(remaining, receipt => receipt.BatchId == pendingId);
+        Assert.Equal(now.ToUnixTimeMilliseconds(), remaining.Single(receipt => receipt.BatchId == legacyId).ReceivedAtUnixMilliseconds);
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, pendingId);
+        Assert.Equal(1, await db.Select<PendingTrafficBatchEntity>().CountAsync());
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+        await accounting.PruneTrafficReceiptsAsync(now, CancellationToken.None);
+        Assert.False(await db.Select<ReceivedTrafficBatchEntity>().Where(receipt => receipt.BatchId == pendingId).AnyAsync());
+    }
+
+    [Fact]
+    public async Task Receipt_cleanup_migrates_existing_receipt_table()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        var id = Guid.NewGuid().ToString("N");
+        db.Ado.ExecuteNonQuery("CREATE TABLE np_received_traffic_batches (BatchId TEXT PRIMARY KEY NOT NULL, NodeId TEXT NOT NULL, PayloadHash TEXT NOT NULL)");
+        db.Ado.ExecuteNonQuery($"INSERT INTO np_received_traffic_batches (BatchId, NodeId, PayloadHash) VALUES ('{id}', 'node', 'hash')");
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        var now = DateTimeOffset.UtcNow;
+
+        await accounting.PruneTrafficReceiptsAsync(now, CancellationToken.None);
+        var receipt = await db.Select<ReceivedTrafficBatchEntity>().Where(item => item.BatchId == id).FirstAsync();
+        Assert.NotNull(receipt);
+        Assert.Equal(now.ToUnixTimeMilliseconds(), receipt.ReceivedAtUnixMilliseconds);
+    }
+
+    [Fact]
+    public async Task Lost_ack_retries_persisted_batch_without_double_counting()
+    {
+        using var harness = new PanelMutationHarness();
+        var root = Path.Combine(Path.GetTempPath(), "np-telemetry-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var options = new NodePanelOptions
+            {
+                CachedConfigPath = Path.Combine(root, "config.json"),
+                Identity = new NodeIdentityOptions { NodeId = "node" },
+                ControlPlane = new ControlPlaneOptions { Url = "ws://localhost/control/ws" }
+            };
+            TelemetryOutbox CreateOutbox() => new(options, new PersistedNodeConfigStore(options, NullLogger<PersistedNodeConfigStore>.Instance));
+            var outbox = CreateOutbox();
+            await outbox.AppendAsync([new UserTrafficDelta { UserId = "user", UploadBytes = 10, DownloadBytes = 20 }], CancellationToken.None);
+            var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+            var state = new TelemetryDeliveryState();
+            var sends = 0;
+            var connection = new TestTelemetryConnection(async envelope =>
+            {
+                var payload = JsonSerializer.Deserialize(envelope.Payload, ControlPlaneJsonSerializerContext.Default.TelemetryBatchPayload)!;
+                if (payload.BatchId is null)
+                {
+                    Assert.Empty(payload.Traffic);
+                    return;
+                }
+                await accounting.EnqueueTrafficDeltaAsync("node", payload.Traffic, CancellationToken.None, payload.BatchId);
+                if (++sends == 1) state.Disconnect();
+                else state.Acknowledge(payload.BatchId!);
+            });
+            await using var runtime = new DefaultRuntime();
+            TelemetryFlushService CreateService(TelemetryOutbox box) => new(
+                new AppliedRuntimeSnapshotStore(), new CertificateStateStore(), connection, new HostResourceTelemetryProvider(),
+                options, new RuntimeConfigStore(), new TelemetryDeltaTracker(), box, state,
+                NullLogger<TelemetryFlushService>.Instance, runtime);
+
+            await CreateService(outbox).FlushAsync(CancellationToken.None);
+            Assert.Single(CreateOutbox().Pending);
+            Assert.Equal(0, sends);
+            state.SetReady();
+            await CreateService(outbox).FlushAsync(CancellationToken.None);
+            Assert.Single(CreateOutbox().Pending);
+            await accounting.ProcessTrafficAsync(CancellationToken.None);
+            state.SetReady();
+            var reopened = CreateOutbox();
+            await CreateService(reopened).FlushAsync(CancellationToken.None);
+            Assert.Empty(CreateOutbox().Pending);
+            await accounting.ProcessTrafficAsync(CancellationToken.None);
+            var total = await harness.DatabaseService.FSql.Select<TrafficRecordEntity>().FirstAsync();
+            Assert.Equal(10, total.UploadBytes);
+            Assert.Equal(20, total.DownloadBytes);
+            Assert.Equal(2, sends);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Durable_telemetry_is_acknowledged_over_websocket_after_panel_persistence()
+    {
+        using var harness = new PanelMutationHarness();
+        var root = Path.Combine(Path.GetTempPath(), "np-telemetry-tests", Guid.NewGuid().ToString("N"));
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        var serverCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, 0));
+        await using var app = builder.Build();
+        app.UseWebSockets();
+        app.Map("/control/ws", async context =>
+        {
+            try
+            {
+                using var socket = await context.WebSockets.AcceptWebSocketAsync();
+                await using var session = new NodeControlPlaneSession(socket, NullLogger<NodeControlPlaneSession>.Instance);
+                var helloEnvelope = await session.ReceiveAsync(context.RequestAborted);
+                Assert.Equal(ControlMessageTypes.NodeHello, helloEnvelope!.Type);
+                var hello = JsonSerializer.Deserialize(helloEnvelope.Payload, ControlPlaneJsonSerializerContext.Default.NodeHelloPayload)!;
+                Assert.Contains(ControlPlaneCapabilities.DurableTelemetry, hello.Capabilities!);
+                await session.SendAsync(new ControlPlaneEnvelope
+                {
+                    Type = ControlMessageTypes.TelemetryReady,
+                    NodeId = "node",
+                    Payload = JsonSerializer.SerializeToElement(new TelemetryReadyPayload(), ControlPlaneJsonSerializerContext.Default.TelemetryReadyPayload)
+                }, context.RequestAborted);
+                var message = await session.ReceiveAsync(context.RequestAborted);
+                Assert.Equal(ControlMessageTypes.TelemetryBatch, message!.Type);
+                var payload = JsonSerializer.Deserialize(message.Payload, ControlPlaneJsonSerializerContext.Default.TelemetryBatchPayload)!;
+                await accounting.EnqueueTrafficDeltaAsync("node", payload.Traffic, context.RequestAborted, payload.BatchId);
+                Assert.Equal(1, await harness.DatabaseService.FSql.Select<PendingTrafficBatchEntity>().CountAsync());
+                await session.SendAsync(new ControlPlaneEnvelope
+                {
+                    Type = ControlMessageTypes.TelemetryAck,
+                    NodeId = "node",
+                    Payload = JsonSerializer.SerializeToElement(new TelemetryAckPayload { BatchId = payload.BatchId! }, ControlPlaneJsonSerializerContext.Default.TelemetryAckPayload)
+                }, context.RequestAborted);
+                serverCompleted.SetResult();
+            }
+            catch (Exception ex)
+            {
+                serverCompleted.TrySetException(ex);
+                throw;
+            }
+        });
+        await app.StartAsync();
+        try
+        {
+            var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            var options = new NodePanelOptions
+            {
+                CachedConfigPath = Path.Combine(root, "config.json"),
+                Identity = new NodeIdentityOptions { NodeId = "node" },
+                ControlPlane = new ControlPlaneOptions { Url = address.Replace("http://", "ws://") + "/control/ws" }
+            };
+            var store = new PersistedNodeConfigStore(options, NullLogger<PersistedNodeConfigStore>.Instance);
+            var runtimeConfig = new RuntimeConfigStore();
+            var orchestrator = new ConfigOrchestrator(runtimeConfig, Array.Empty<string>(), Array.Empty<IInboundProtocolRuntimeCompiler>(), store, NullLogger<ConfigOrchestrator>.Instance);
+            var state = new TelemetryDeliveryState();
+            using var client = new ControlPlaneClientService(options, new CertificateRenewalSignal(), orchestrator,
+                new AppliedRuntimeSnapshotStore(), state, NullLogger<ControlPlaneClientService>.Instance);
+            var outbox = new TelemetryOutbox(options, store);
+            await outbox.AppendAsync([new UserTrafficDelta { UserId = "user", UploadBytes = 10, DownloadBytes = 20 }], CancellationToken.None);
+            await using var runtime = new DefaultRuntime();
+            var flush = new TelemetryFlushService(new AppliedRuntimeSnapshotStore(), new CertificateStateStore(), client,
+                new HostResourceTelemetryProvider(), options, runtimeConfig, new TelemetryDeltaTracker(), outbox,
+                state, NullLogger<TelemetryFlushService>.Instance, runtime);
+            await client.StartAsync(CancellationToken.None);
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                while (!state.IsReady) await Task.Delay(20, timeout.Token);
+                await flush.FlushAsync(timeout.Token);
+                await serverCompleted.Task.WaitAsync(timeout.Token);
+                Assert.Empty(outbox.Pending);
+                await accounting.ProcessTrafficAsync(timeout.Token);
+                var total = await harness.DatabaseService.FSql.Select<TrafficRecordEntity>().FirstAsync();
+                Assert.Equal(10, total.UploadBytes);
+                Assert.Equal(20, total.DownloadBytes);
+            }
+            finally
+            {
+                await client.StopAsync(CancellationToken.None);
+            }
+        }
+        finally
+        {
+            await app.StopAsync();
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class TestTelemetryConnection(Func<ControlPlaneEnvelope, Task> send) : IControlPlaneConnection
+    {
+        public bool IsConnected => true;
+        public async Task<bool> SendAsync(ControlPlaneEnvelope envelope, CancellationToken cancellationToken)
+        {
+            await send(envelope);
+            return true;
+        }
+    }
+
+    [Fact]
+    public async Task Failed_enqueue_does_not_create_receipt()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        db.CodeFirst.SyncStructure<PendingTrafficBatchEntity>();
+        db.Ado.ExecuteNonQuery("CREATE TRIGGER fail_enqueue BEFORE INSERT ON np_pending_traffic_batches BEGIN SELECT RAISE(FAIL, 'test failure'); END");
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        var id = Guid.NewGuid().ToString("N");
+        UserTrafficDelta[] traffic = [new UserTrafficDelta { UserId = "user", UploadBytes = 10, DownloadBytes = 20 }];
+
+        await Assert.ThrowsAnyAsync<Exception>(() => accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, id));
+        Assert.Equal(0, await db.Select<ReceivedTrafficBatchEntity>().CountAsync());
+        db.Ado.ExecuteNonQuery("DROP TRIGGER fail_enqueue");
+        await accounting.EnqueueTrafficDeltaAsync("node", traffic, CancellationToken.None, id);
+        Assert.Equal(1, await db.Select<PendingTrafficBatchEntity>().CountAsync());
+    }
+
+    [Fact]
+    public async Task Durable_traffic_batch_handles_more_than_one_query_chunk()
+    {
+        using var harness = new PanelMutationHarness();
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        var deltas = Enumerable.Range(0, 501).Select(i => new UserTrafficDelta
+        {
+            UserId = $"user-{i}", Protocol = "trojan", InboundTag = "in", UploadBytes = 1, DownloadBytes = 2
+        }).ToArray();
+        await accounting.EnqueueTrafficDeltaAsync("node", deltas, CancellationToken.None);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+
+        Assert.Equal(501, await harness.DatabaseService.FSql.Select<TrafficRecordEntity>().CountAsync());
+        Assert.Equal(501, await harness.DatabaseService.FSql.Select<ScopedTrafficRecordEntity>().CountAsync());
+    }
+
+    [Fact]
+    public async Task Accounting_disables_users_and_updates_each_affected_node_once()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node-a");
+        await harness.CreateNodeAsync("node-b");
+        await harness.MutationService.SaveUserAsync("user-a", CreateUserRequest(["node-a"]), CancellationToken.None);
+        await harness.MutationService.SaveUserAsync("user-b", CreateUserRequest(["node-a"]), CancellationToken.None);
+        await harness.MutationService.SaveUserAsync("user-c", CreateUserRequest(["node-b"]), CancellationToken.None);
+        var oldA = (await harness.GetNodeAsync("node-a")).DesiredRevision;
+        var oldB = (await harness.GetNodeAsync("node-b")).DesiredRevision;
+        await harness.DatabaseService.FSql.Insert(new[]
+        {
+            new TrafficRecordEntity { UserId = "user-a", UploadBytes = 1024 },
+            new TrafficRecordEntity { UserId = "user-b", DownloadBytes = 1024 },
+            new TrafficRecordEntity { UserId = "user-c", UploadBytes = 5 }
+        }).ExecuteAffrowsAsync();
+
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+
+        Assert.False((await harness.GetUserAsync("user-a")).Enabled);
+        Assert.False((await harness.GetUserAsync("user-b")).Enabled);
+        Assert.True((await harness.GetUserAsync("user-c")).Enabled);
+        Assert.Equal(oldA + 1, (await harness.GetNodeAsync("node-a")).DesiredRevision);
+        Assert.Equal(oldB, (await harness.GetNodeAsync("node-b")).DesiredRevision);
+    }
+
+    [Fact]
+    public async Task Failed_accounting_disable_rolls_back_users_and_node_revisions()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node-a");
+        await harness.MutationService.SaveUserAsync("user-a", CreateUserRequest(["node-a"]), CancellationToken.None);
+        var revision = (await harness.GetNodeAsync("node-a")).DesiredRevision;
+        await harness.DatabaseService.FSql.Insert(new TrafficRecordEntity { UserId = "user-a", UploadBytes = 1024 }).ExecuteAffrowsAsync();
+        harness.DatabaseService.FSql.Ado.ExecuteNonQuery("CREATE TRIGGER fail_revision BEFORE UPDATE ON np_nodes BEGIN SELECT RAISE(FAIL, 'test failure'); END");
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => accounting.ProcessTrafficAsync(CancellationToken.None));
+        Assert.True((await harness.GetUserAsync("user-a")).Enabled);
+        Assert.Equal(revision, (await harness.GetNodeAsync("node-a")).DesiredRevision);
+    }
+
+    [Fact]
+    public async Task Accounting_disabling_global_user_updates_all_nodes()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node-a");
+        await harness.CreateNodeAsync("node-b");
+        await harness.MutationService.SaveUserAsync("user", CreateUserRequest(Array.Empty<string>()), CancellationToken.None);
+        var oldA = (await harness.GetNodeAsync("node-a")).DesiredRevision;
+        var oldB = (await harness.GetNodeAsync("node-b")).DesiredRevision;
+        await harness.DatabaseService.FSql.Insert(new TrafficRecordEntity { UserId = "user", UploadBytes = 1024 }).ExecuteAffrowsAsync();
+
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+
+        Assert.False((await harness.GetUserAsync("user")).Enabled);
+        Assert.Equal(oldA + 1, (await harness.GetNodeAsync("node-a")).DesiredRevision);
+        Assert.Equal(oldB + 1, (await harness.GetNodeAsync("node-b")).DesiredRevision);
+    }
+
+    [Fact]
+    public async Task User_save_waits_for_accounting_lock()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.DatabaseService.TrafficWriteLock.WaitAsync();
+        Task<PanelUserRecord> save;
+        try
+        {
+            save = harness.MutationService.SaveUserAsync("user", CreateUserRequest(Array.Empty<string>()), CancellationToken.None);
+            Assert.False(save.IsCompleted);
+        }
+        finally
+        {
+            harness.DatabaseService.TrafficWriteLock.Release();
+        }
+        Assert.True((await save).Enabled);
+    }
+
     [Fact]
     public async Task PanelCertificateEntity_roundtrip_preserves_thumbprint_and_timestamps()
     {
@@ -839,7 +1332,7 @@ public sealed class PanelMutationServiceTests
             harness.MutationService,
             NullLogger<NetworkAccountingService>.Instance);
 
-        service.EnqueueTrafficDelta(
+        await service.EnqueueTrafficDeltaAsync(
             "node-a",
             [
                 new UserTrafficDelta
@@ -869,7 +1362,7 @@ public sealed class PanelMutationServiceTests
                     UploadBytes = 40,
                     DownloadBytes = 10
                 }
-            ]);
+            ], CancellationToken.None);
 
         await InvokeProcessTrafficAsync(service);
 
@@ -1459,10 +1952,25 @@ public sealed class PanelMutationServiceTests
                 NodeConnectionRegistry,
                 NullLogger<ControlPlanePushService>.Instance);
 
-            MutationService = new PanelMutationService(DatabaseService, pushService, NodeConnectionRegistry, _panelHttpsRuntime);
+            MutationService = new PanelMutationService(
+                DatabaseService,
+                pushService,
+                NodeConnectionRegistry,
+                _panelHttpsRuntime,
+                new PanelQueryService(
+                    DatabaseService,
+                    NodeConnectionRegistry,
+                    new PanelCertificateProgressTracker()));
         }
 
         public DatabaseService DatabaseService { get; }
+
+        public DatabaseService OpenDatabase()
+            => new(new StaticOptionsMonitor<PanelOptions>(new PanelOptions
+            {
+                DbType = "sqlite",
+                DbConnectionString = $"Data Source={Path.Combine(_rootPath, "panel.db")}"
+            }));
 
         public NodeConnectionRegistry NodeConnectionRegistry { get; }
 
