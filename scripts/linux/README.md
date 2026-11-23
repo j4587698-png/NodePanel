@@ -167,6 +167,24 @@ http://<server-ip>/install
 
 The panel runs directly on Kestrel. No `nginx` reverse proxy is required.
 
+To reset a panel user's login password, run the panel executable with an
+interactive terminal and follow the prompts:
+
+```bash
+cd /usr/local/nodepanel-panel/app
+sudo env Panel__DataFilePath=/usr/local/nodepanel-panel/data/panel-state.json ./NodePanel.Panel --reset-password
+```
+
+For Docker, use the container name:
+
+```bash
+docker exec -it <container-name> /app/NodePanel.Panel --reset-password
+```
+
+The password is entered without echo and is not passed on the command line.
+The database must already be configured and accessible to the panel.
+Existing signed-in sessions are not revoked.
+
 - HTTP entrypoint: `80`
 - HTTPS entrypoint: configured in `/admin/certificates`, then the panel listens directly on `443`
 - ACME `http-01`: keep `80` open so the panel can answer `/.well-known/acme-challenge/*`
