@@ -16,6 +16,11 @@ This directory contains Linux deployment helpers for both components:
 
 ## Build Packages
 
+Building requires the .NET 11 SDK. The panel and service publish with the
+experimental Satori GC by default.
+Supported Linux RIDs are `linux-x64`, `linux-arm64`, `linux-musl-x64`, and
+`linux-musl-arm64`.
+
 Run from `Xray-dotnet`:
 
 ```bash
@@ -29,8 +34,20 @@ Default outputs:
 
 Package mode summary:
 
-- `panel`: regular `dotnet publish`, keeps the multi-file app layout
+- `panel`: self-contained `dotnet publish`, keeps the multi-file app layout
 - `service`: Native AOT self-contained binary, no host `dotnet` runtime required
+
+For a framework-dependent panel, provide a compatible Satori .NET installation
+on the target host (including `host/fxr`, `shared/Microsoft.NETCore.App`, and
+the .NET 11 ASP.NET Core runtime). Specify its path relative to the installed
+panel executable:
+
+```bash
+./scripts/linux/publish-linux.sh --component panel --self-contained false --satori-runtime ../satori-dotnet
+```
+
+Launch the panel executable, not `dotnet NodePanel.Panel.dll`, so the configured
+runtime path is used.
 
 Custom runtime example:
 
