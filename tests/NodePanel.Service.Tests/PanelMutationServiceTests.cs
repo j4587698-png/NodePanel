@@ -29,6 +29,170 @@ namespace NodePanel.Service.Tests;
 public sealed class PanelMutationServiceTests
 {
     [Fact]
+    public async Task Legacy_users_without_timestamps_are_not_assigned_a_fabricated_start()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        db.Ado.ExecuteNonQuery("CREATE TABLE np_users (UserId TEXT PRIMARY KEY, Cycle TEXT)");
+        db.Ado.ExecuteNonQuery("INSERT INTO np_users (UserId, Cycle) VALUES ('legacy', 'year')");
+        await harness.MutationService.ResetScheduledUserTrafficAsync("legacy", DateTimeOffset.UtcNow, CancellationToken.None);
+        var user = await harness.GetUserAsync("legacy");
+        Assert.Null(user.CreatedAtUnixMilliseconds);
+        Assert.Null(user.SubscriptionStartedAtUnixMilliseconds);
+        Assert.Equal(0, await db.Select<TrafficRecordEntity>().CountAsync());
+    }
+
+    [Fact]
+    public async Task Monthly_reset_uses_subscription_anniversary_without_a_previous_reset()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        var start = new DateTimeOffset(2026, 1, 31, 12, 0, 0, TimeSpan.Zero);
+        await db.Insert(new UserEntity
+        {
+            UserId = "user", Cycle = "year", CreatedAt = start,
+            SubscriptionStartedAtUnixMilliseconds = start.ToUnixTimeMilliseconds()
+        }).ExecuteAffrowsAsync();
+        await db.Insert(new TrafficRecordEntity { UserId = "user", UploadBytes = 123 }).ExecuteAffrowsAsync();
+
+        await harness.MutationService.ResetScheduledUserTrafficAsync("user", start.AddMonths(1).AddSeconds(-1), CancellationToken.None);
+        Assert.Equal(123, (await db.Select<TrafficRecordEntity>().FirstAsync()).UploadBytes);
+        await harness.MutationService.ResetScheduledUserTrafficAsync("user", start.AddMonths(1), CancellationToken.None);
+        Assert.Equal(0, (await db.Select<TrafficRecordEntity>().FirstAsync()).UploadBytes);
+        await db.Update<TrafficRecordEntity>().Set(x => x.UploadBytes, 50).Where(x => x.UserId == "user").ExecuteAffrowsAsync();
+        await harness.MutationService.ResetScheduledUserTrafficAsync("user", start.AddMonths(1).AddDays(1), CancellationToken.None);
+        Assert.Equal(50, (await db.Select<TrafficRecordEntity>().FirstAsync()).UploadBytes);
+        await harness.MutationService.ResetScheduledUserTrafficAsync("user", start.AddMonths(2), CancellationToken.None);
+        Assert.Equal(0, (await db.Select<TrafficRecordEntity>().FirstAsync()).UploadBytes);
+    }
+
+    [Fact]
+    public async Task Legacy_subscription_start_uses_paid_plan_order_or_creation_time()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        var created = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var paid = created.AddDays(10);
+        await db.Insert(new[]
+        {
+            new UserEntity { UserId = "ordered", Cycle = "year", CreatedAt = created },
+            new UserEntity { UserId = "no-order", Cycle = "year", CreatedAt = created }
+        }).ExecuteAffrowsAsync();
+        await db.Insert(new[]
+        {
+            new OrderEntity { OrderId = "plan", UserId = "ordered", Cycle = "year", Status = 1, PaidAt = paid },
+            new OrderEntity { OrderId = "reset", UserId = "ordered", Cycle = "reset_price", Status = 1, PaidAt = paid.AddDays(5) }
+        }).ExecuteAffrowsAsync();
+        await db.Insert(new[]
+        {
+            new TrafficRecordEntity { UserId = "ordered", UploadBytes = 5 },
+            new TrafficRecordEntity { UserId = "no-order", UploadBytes = 5 }
+        }).ExecuteAffrowsAsync();
+
+        var now = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+        await harness.MutationService.ResetScheduledUserTrafficAsync("ordered", now, CancellationToken.None);
+        await harness.MutationService.ResetScheduledUserTrafficAsync("no-order", now, CancellationToken.None);
+        Assert.Equal(paid.ToUnixTimeMilliseconds(), (await harness.GetUserAsync("ordered")).SubscriptionStartedAtUnixMilliseconds);
+        Assert.Equal(created.ToUnixTimeMilliseconds(), (await harness.GetUserAsync("no-order")).SubscriptionStartedAtUnixMilliseconds);
+        Assert.Equal(5, (await db.Select<TrafficRecordEntity>().Where(x => x.UserId == "ordered").FirstAsync()).UploadBytes);
+        Assert.Equal(0, (await db.Select<TrafficRecordEntity>().Where(x => x.UserId == "no-order").FirstAsync()).UploadBytes);
+    }
+
+    [Fact]
+    public async Task Reset_restores_only_traffic_disabled_unexpired_users_and_updates_node()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node");
+        var db = harness.DatabaseService.FSql;
+        var now = DateTimeOffset.UtcNow;
+        await db.Insert(new[]
+        {
+            new UserEntity { UserId = "traffic", Enabled = false, DisableReason = "traffic", ExpiresAt = now.AddDays(1), NodeIds = ["node"] },
+            new UserEntity { UserId = "manual", Enabled = false, NodeIds = ["node"] },
+            new UserEntity { UserId = "expired", Enabled = false, DisableReason = "traffic", ExpiresAt = now.AddDays(-1), NodeIds = ["node"] }
+        }).ExecuteAffrowsAsync();
+        var revision = (await harness.GetNodeAsync("node")).DesiredRevision;
+        foreach (var id in new[] { "traffic", "manual", "expired" })
+            await harness.MutationService.ResetUserTrafficAsync(id, CancellationToken.None);
+        Assert.True((await harness.GetUserAsync("traffic")).Enabled);
+        Assert.False((await harness.GetUserAsync("manual")).Enabled);
+        Assert.False((await harness.GetUserAsync("expired")).Enabled);
+        Assert.Equal(revision + 1, (await harness.GetNodeAsync("node")).DesiredRevision);
+    }
+
+    [Fact]
+    public async Task Monthly_reset_restores_accounting_disabled_user_but_skips_one_time_plan()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node");
+        var db = harness.DatabaseService.FSql;
+        var start = DateTimeOffset.UtcNow.AddMonths(-2);
+        await db.Insert(new[]
+        {
+            new UserEntity { UserId = "recurring", Cycle = "year", Enabled = true, TransferEnableBytes = 10,
+                SubscriptionStartedAtUnixMilliseconds = start.ToUnixTimeMilliseconds(), NodeIds = ["node"] },
+            new UserEntity { UserId = "once", Cycle = "one_time", Enabled = false, DisableReason = "traffic",
+                SubscriptionStartedAtUnixMilliseconds = start.ToUnixTimeMilliseconds(), NodeIds = ["node"] }
+        }).ExecuteAffrowsAsync();
+        await db.Insert(new[]
+        {
+            new TrafficRecordEntity { UserId = "recurring", UploadBytes = 10 },
+            new TrafficRecordEntity { UserId = "once", UploadBytes = 10 }
+        }).ExecuteAffrowsAsync();
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+        Assert.False((await harness.GetUserAsync("recurring")).Enabled);
+        await harness.MutationService.ResetScheduledUserTrafficAsync("recurring", start.AddMonths(2).AddSeconds(1), CancellationToken.None);
+        await harness.MutationService.ResetScheduledUserTrafficAsync("once", start.AddMonths(2).AddSeconds(1), CancellationToken.None);
+        Assert.True((await harness.GetUserAsync("recurring")).Enabled);
+        Assert.False((await harness.GetUserAsync("once")).Enabled);
+        Assert.Equal(10, (await db.Select<TrafficRecordEntity>().Where(x => x.UserId == "once").FirstAsync()).UploadBytes);
+    }
+
+    [Fact]
+    public async Task Accounting_records_expiration_and_reset_does_not_restore_it()
+    {
+        using var harness = new PanelMutationHarness();
+        var db = harness.DatabaseService.FSql;
+        await db.Insert(new UserEntity
+        {
+            UserId = "expired", Enabled = true, ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+        }).ExecuteAffrowsAsync();
+        var accounting = new NetworkAccountingService(harness.DatabaseService, harness.MutationService, NullLogger<NetworkAccountingService>.Instance);
+        await accounting.ProcessTrafficAsync(CancellationToken.None);
+        Assert.Equal("expired", (await harness.GetUserAsync("expired")).DisableReason);
+        await harness.MutationService.ResetUserTrafficAsync("expired", CancellationToken.None);
+        Assert.False((await harness.GetUserAsync("expired")).Enabled);
+    }
+
+    [Fact]
+    public async Task Saving_a_disabled_user_prevents_automatic_reactivation()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.DatabaseService.FSql.Insert(new UserEntity
+        {
+            UserId = "user", Enabled = false, DisableReason = "traffic"
+        }).ExecuteAffrowsAsync();
+        await harness.MutationService.SaveUserAsync("user", CreateUserRequest(Array.Empty<string>()) with { Enabled = false }, CancellationToken.None);
+        await harness.MutationService.ResetUserTrafficAsync("user", CancellationToken.None);
+        Assert.False((await harness.GetUserAsync("user")).Enabled);
+    }
+
+    [Fact]
+    public async Task Failed_reactivation_rolls_back_traffic_reset()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node");
+        var db = harness.DatabaseService.FSql;
+        await db.Insert(new UserEntity { UserId = "user", Enabled = false, DisableReason = "traffic", NodeIds = ["node"] }).ExecuteAffrowsAsync();
+        await db.Insert(new TrafficRecordEntity { UserId = "user", UploadBytes = 10 }).ExecuteAffrowsAsync();
+        db.Ado.ExecuteNonQuery("CREATE TRIGGER fail_reset_revision BEFORE UPDATE ON np_nodes BEGIN SELECT RAISE(FAIL, 'test failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => harness.MutationService.ResetUserTrafficAsync("user", CancellationToken.None));
+        Assert.False((await harness.GetUserAsync("user")).Enabled);
+        Assert.Equal(10, (await db.Select<TrafficRecordEntity>().FirstAsync()).UploadBytes);
+    }
+
+    [Fact]
     public async Task Paged_admin_lists_return_stable_pages()
     {
         using var harness = new PanelMutationHarness();
@@ -451,6 +615,7 @@ public sealed class PanelMutationServiceTests
         await accounting.ProcessTrafficAsync(CancellationToken.None);
 
         Assert.False((await harness.GetUserAsync("user-a")).Enabled);
+        Assert.Equal("traffic", (await harness.GetUserAsync("user-a")).DisableReason);
         Assert.False((await harness.GetUserAsync("user-b")).Enabled);
         Assert.True((await harness.GetUserAsync("user-c")).Enabled);
         Assert.Equal(oldA + 1, (await harness.GetNodeAsync("node-a")).DesiredRevision);
@@ -1198,6 +1363,11 @@ public sealed class PanelMutationServiceTests
         Assert.Equal("month", user.Cycle);
         Assert.Equal(536870912000L, user.TransferEnableBytes);
         Assert.Equal(2, user.GroupId);
+        Assert.NotNull(user.SubscriptionStartedAtUnixMilliseconds);
+        Assert.NotNull(user.ExpiresAt);
+        var paidOrder = await harness.DatabaseService.FSql.Select<OrderEntity>()
+            .Where(item => item.OrderId == order.OrderId).FirstAsync();
+        Assert.Equal(paidOrder.PaidAt?.ToUnixTimeMilliseconds(), user.SubscriptionStartedAtUnixMilliseconds);
     }
 
     [Fact]

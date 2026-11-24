@@ -1477,6 +1477,8 @@ public sealed class UserFormInput
 
     public string ExpiresAt { get; set; } = string.Empty;
 
+    public string SubscriptionStartedAt { get; set; } = string.Empty;
+
     public string PurchaseUrl { get; set; } = string.Empty;
 
     public string PortalNotice { get; set; } = string.Empty;
@@ -1506,6 +1508,7 @@ public sealed class UserFormInput
                 PlanName = NodeFormValueCodec.TrimOrEmpty(PlanName),
                 Cycle = NodeFormValueCodec.TrimOrEmpty(SubscriptionCycle),
                 TransferEnableBytes = Math.Max(0, TransferEnableBytes),
+                StartedAt = ParseOptionalDateTimeOffset(SubscriptionStartedAt),
                 ExpiresAt = ParseOptionalDateTimeOffset(ExpiresAt),
                 PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(PurchaseUrl),
                 PortalNotice = NodeFormValueCodec.TrimOrEmpty(PortalNotice)
@@ -1538,6 +1541,7 @@ public sealed class UserFormInput
             PlanName = record.Subscription.PlanName,
             SubscriptionCycle = record.Subscription.Cycle,
             TransferEnableBytes = Math.Max(0L, record.Subscription.TransferEnableBytes),
+            SubscriptionStartedAt = record.Subscription.StartedAt?.ToLocalTime().ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture) ?? string.Empty,
             ExpiresAt = FormatOptionalDateTimeOffset(record.Subscription.ExpiresAt),
             PurchaseUrl = record.Subscription.PurchaseUrl,
             PortalNotice = record.Subscription.PortalNotice,

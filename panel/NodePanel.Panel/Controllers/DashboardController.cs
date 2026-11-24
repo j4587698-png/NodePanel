@@ -734,7 +734,7 @@ public sealed class DashboardController : Controller
                 }
             };
 
-            await _panelMutationService.SaveUserAsync(normalizedUserId, request, cancellationToken).ConfigureAwait(false);
+            await _panelMutationService.SaveUserAsync(normalizedUserId, request, cancellationToken, DateTimeOffset.UtcNow).ConfigureAwait(false);
         }
         var initialStatus = amount == 0m && !isResetTrafficOrder ? 1 : 0;
         var order = await _panelMutationService.CreateOrderAsync(

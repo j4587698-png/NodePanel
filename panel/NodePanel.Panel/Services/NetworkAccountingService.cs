@@ -152,22 +152,11 @@ public sealed class NetworkAccountingService : BackgroundService
 
                 var tRecord = tRecordsByUser.GetValueOrDefault(userEntity.UserId);
                 var totalUsed = tRecord is null ? 0 : tRecord.UploadBytes + tRecord.DownloadBytes;
-                bool shouldDisable = false;
-
-                // Check Data limits
-                if (userEntity.TransferEnableBytes > 0 && totalUsed >= userEntity.TransferEnableBytes)
+                var expired = userEntity.ExpiresAt.HasValue && DateTimeOffset.UtcNow >= userEntity.ExpiresAt.Value;
+                var exhausted = userEntity.TransferEnableBytes > 0 && totalUsed >= userEntity.TransferEnableBytes;
+                if (expired || exhausted)
                 {
-                    shouldDisable = true;
-                }
-
-                // Check Expiry
-                if (userEntity.ExpiresAt.HasValue && DateTimeOffset.UtcNow >= userEntity.ExpiresAt.Value)
-                {
-                    shouldDisable = true;
-                }
-
-                if (shouldDisable)
-                {
+                    userEntity.DisableReason = expired ? "expired" : "traffic";
                     usersToDisable.Add(userEntity);
                 }
             }
