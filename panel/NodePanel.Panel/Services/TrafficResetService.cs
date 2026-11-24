@@ -36,38 +36,13 @@ public sealed class TrafficResetService : BackgroundService
         }
     }
 
-    private async Task ProcessMonthlyResetsAsync(CancellationToken cancellationToken)
+    internal async Task ProcessMonthlyResetsAsync(CancellationToken cancellationToken)
     {
-        var users = await _db.FSql.Select<UserEntity>().ToListAsync(cancellationToken);
-        var tRecords = await _db.FSql.Select<TrafficRecordEntity>().ToListAsync(cancellationToken);
-        var tRecordsByUser = tRecords.ToDictionary(static record => record.UserId, StringComparer.Ordinal);
-        
-        foreach (var user in users)
+        var users = await _db.FSql.Select<UserEntity>().ToListAsync(user => user.UserId, cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        foreach (var userId in users)
         {
-            // Strict v2board logic: one-time plans (一次性) never reset traffic.
-            if (string.Equals(user.Cycle, "one_time", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var tRecord = tRecordsByUser.GetValueOrDefault(user.UserId);
-            bool shouldReset = false;
-
-            if (tRecord != null && tRecord.LastResetAt.HasValue)
-            {
-                var last = tRecord.LastResetAt.Value;
-                var now = DateTimeOffset.UtcNow;
-                if (now.Year > last.Year || (now.Year == last.Year && now.Month > last.Month))
-                {
-                    shouldReset = true;
-                }
-            }
-            
-            if (shouldReset)
-            {
-                _logger.LogInformation("Cron: Resetting traffic for user {UserId} for a new month cycle.", user.UserId);
-                await _panelMutationService.ResetUserTrafficAsync(user.UserId, cancellationToken);
-            }
+            await _panelMutationService.ResetScheduledUserTrafficAsync(userId, now, cancellationToken);
         }
     }
 }

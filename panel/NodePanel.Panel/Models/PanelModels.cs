@@ -103,6 +103,8 @@ public sealed record PanelUserSubscriptionProfile
 
     public long TransferEnableBytes { get; init; }
 
+    public DateTimeOffset? StartedAt { get; init; }
+
     public DateTimeOffset? ExpiresAt { get; init; }
 
     public string PurchaseUrl { get; init; } = string.Empty;

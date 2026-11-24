@@ -167,6 +167,11 @@
                 <small class="muted">填 0 表示不限制。</small>
             </label>
             <label>
+                <span>套餐生效时间</span>
+                <input asp-for="Form.SubscriptionStartedAt" type="datetime-local" step="0.001" />
+                <small class="muted">按此时间的 UTC 日期每月重置流量；显示和输入使用服务器本地时间。缺少生效时间的旧套餐需补录。</small>
+            </label>
+            <label>
                 <span>到期时间</span>
                 <input asp-for="Form.ExpiresAt" type="datetime-local" />
                 <small class="muted">仅调整当前用户的到期时间，不会改动套餐模板。</small>
