@@ -33,6 +33,12 @@ jobs:
         with:
           ref: ${{ inputs.release_tag || github.ref }}
 
+      - name: Resolve source revision
+        id: source
+        run: |
+          echo "short_sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -55,6 +61,7 @@ jobs:
             type=semver,pattern={{version}},value=${{ inputs.release_tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.release_tag }}
             type=sha,enable=${{ inputs.release_tag == '' }}
+            type=raw,value=sha-${{ steps.source.outputs.short_sha }},enable=${{ inputs.release_tag != '' }}
             type=raw,value=latest
 
       - name: Build and push
@@ -63,7 +70,9 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
