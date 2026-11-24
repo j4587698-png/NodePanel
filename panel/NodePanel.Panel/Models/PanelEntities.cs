@@ -39,6 +39,10 @@ public class UserEntity
 
     public bool Enabled { get; set; } = true;
 
+    public string DisableReason { get; set; } = string.Empty;
+
+    public long? SubscriptionStartedAtUnixMilliseconds { get; set; }
+
     public long BytesPerSecond { get; set; }
 
     public int DeviceLimit { get; set; }
@@ -49,7 +53,23 @@ public class UserEntity
 
     public long TransferEnableBytes { get; set; }
 
-    public DateTimeOffset? ExpiresAt { get; set; }
+    public long? ExpiresAtUnixMilliseconds { get; set; }
+
+    [Column(Name = "ExpiresAt")]
+    public DateTimeOffset? LegacyExpiresAt { get; set; }
+
+    [NotMapped]
+    public DateTimeOffset? ExpiresAt
+    {
+        get => ExpiresAtUnixMilliseconds.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ExpiresAtUnixMilliseconds.Value)
+            : LegacyExpiresAt;
+        set
+        {
+            ExpiresAtUnixMilliseconds = value?.ToUnixTimeMilliseconds();
+            LegacyExpiresAt = value;
+        }
+    }
 
     [Column(DbType = "varchar(1024)")]
     public string PurchaseUrl { get; set; } = string.Empty;
@@ -60,7 +80,23 @@ public class UserEntity
     [Column(DbType = "varchar(1024)")]
     public string NodeIdsJson { get; set; } = "[]";
 
-    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public long? CreatedAtUnixMilliseconds { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    [Column(Name = "CreatedAt")]
+    public DateTimeOffset? LegacyCreatedAt { get; set; }
+
+    [NotMapped]
+    public DateTimeOffset CreatedAt
+    {
+        get => CreatedAtUnixMilliseconds.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtUnixMilliseconds.Value)
+            : LegacyCreatedAt ?? default;
+        set
+        {
+            CreatedAtUnixMilliseconds = value.ToUnixTimeMilliseconds();
+            LegacyCreatedAt = value;
+        }
+    }
 
     [Column(DbType = "varchar(64)")]
     public string InviteUserId { get; set; } = string.Empty;
@@ -103,6 +139,9 @@ public class UserEntity
         {
             PlanName = NodeFormValueCodec.TrimOrEmpty(PlanName),
             Cycle = NodeFormValueCodec.TrimOrEmpty(Cycle),
+            StartedAt = SubscriptionStartedAtUnixMilliseconds.HasValue
+                ? DateTimeOffset.FromUnixTimeMilliseconds(SubscriptionStartedAtUnixMilliseconds.Value)
+                : null,
             TransferEnableBytes = TransferEnableBytes,
             ExpiresAt = ExpiresAt,
             PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(PurchaseUrl),
@@ -129,6 +168,7 @@ public class UserEntity
         NodeIds = record.NodeIds;
         PlanName = record.Subscription.PlanName;
         Cycle = record.Subscription.Cycle;
+        SubscriptionStartedAtUnixMilliseconds = record.Subscription.StartedAt?.ToUnixTimeMilliseconds();
         TransferEnableBytes = record.Subscription.TransferEnableBytes;
         ExpiresAt = record.Subscription.ExpiresAt;
         PurchaseUrl = record.Subscription.PurchaseUrl;
@@ -443,7 +483,23 @@ public class OrderEntity
         set { CreatedAtUnixMilliseconds = value.ToUnixTimeMilliseconds(); LegacyCreatedAt = value; }
     }
 
-    public DateTimeOffset? PaidAt { get; set; }
+    public long? PaidAtUnixMilliseconds { get; set; }
+
+    [Column(Name = "PaidAt")]
+    public DateTimeOffset? LegacyPaidAt { get; set; }
+
+    [NotMapped]
+    public DateTimeOffset? PaidAt
+    {
+        get => PaidAtUnixMilliseconds.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(PaidAtUnixMilliseconds.Value)
+            : LegacyPaidAt;
+        set
+        {
+            PaidAtUnixMilliseconds = value?.ToUnixTimeMilliseconds();
+            LegacyPaidAt = value;
+        }
+    }
 
     public PanelOrderRecord ToRecord() => new PanelOrderRecord
     {

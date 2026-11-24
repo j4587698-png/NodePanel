@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging.Abstractions;
 using NodePanel.ControlPlane.Configuration;
 using NodePanel.Core.Runtime;
 using NodePanel.Panel.Models;
@@ -12,19 +13,22 @@ public sealed class PanelMutationService
     private readonly NodeConnectionRegistry _nodeConnectionRegistry;
     private readonly PanelHttpsRuntime _panelHttpsRuntime;
     private readonly PanelQueryService _panelQueryService;
+    private readonly ILogger<PanelMutationService> _logger;
 
     public PanelMutationService(
         DatabaseService db,
         ControlPlanePushService controlPlanePushService,
         NodeConnectionRegistry nodeConnectionRegistry,
         PanelHttpsRuntime panelHttpsRuntime,
-        PanelQueryService panelQueryService)
+        PanelQueryService panelQueryService,
+        ILogger<PanelMutationService>? logger = null)
     {
         _db = db;
         _controlPlanePushService = controlPlanePushService;
         _nodeConnectionRegistry = nodeConnectionRegistry;
         _panelHttpsRuntime = panelHttpsRuntime;
         _panelQueryService = panelQueryService;
+        _logger = logger ?? NullLogger<PanelMutationService>.Instance;
     }
 
     public async Task SaveServerGroupAsync(int groupId, string name, CancellationToken cancellationToken)
@@ -158,7 +162,7 @@ public sealed class PanelMutationService
         return true;
     }
 
-    public async Task<PanelUserRecord> SaveUserAsync(string userId, UpsertUserRequest request, CancellationToken cancellationToken)
+    public async Task<PanelUserRecord> SaveUserAsync(string userId, UpsertUserRequest request, CancellationToken cancellationToken, DateTimeOffset? subscriptionStartedAt = null)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
         await _db.TrafficWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -179,6 +183,7 @@ public sealed class PanelMutationService
             entity.CommissionBalance = request.CommissionBalance;
             entity.CommissionRate = Math.Clamp(request.CommissionRate, 0, 100);
             entity.GroupId = request.GroupId;
+            entity.DisableReason = string.Empty;
             entity.Enabled = request.Enabled;
             entity.BytesPerSecond = request.BytesPerSecond;
             entity.DeviceLimit = Math.Max(0, request.DeviceLimit);
@@ -189,6 +194,9 @@ public sealed class PanelMutationService
                 : request.Subscription.Cycle;
             entity.TransferEnableBytes = request.Subscription.TransferEnableBytes;
             entity.ExpiresAt = request.Subscription.ExpiresAt;
+            var start = subscriptionStartedAt ?? request.Subscription.StartedAt;
+            if (start.HasValue)
+                entity.SubscriptionStartedAtUnixMilliseconds = start.Value.ToUnixTimeMilliseconds();
             entity.PurchaseUrl = NodeFormValueCodec.TrimOrEmpty(request.Subscription.PurchaseUrl);
             entity.PortalNotice = request.Subscription.PortalNotice ?? string.Empty;
 
@@ -232,12 +240,17 @@ public sealed class PanelMutationService
             ? allNodeIds.ToArray()
             : users.SelectMany(user => user.NodeIds).Distinct(StringComparer.Ordinal).ToArray();
 
-        foreach (var userIds in users.Select(user => user.UserId).Chunk(500))
+        foreach (var group in users.GroupBy(user => user.DisableReason, StringComparer.Ordinal))
         {
-            await _db.FSql.Update<UserEntity>().WithTransaction(transaction)
-                .Set(user => user.Enabled, false)
-                .Where(user => user.Enabled && userIds.Contains(user.UserId))
-                .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var userIds in group.Select(user => user.UserId).Chunk(500))
+            {
+                var reason = group.Key;
+                await _db.FSql.Update<UserEntity>().WithTransaction(transaction)
+                    .Set(user => user.Enabled, false)
+                    .Set(user => user.DisableReason, reason)
+                    .Where(user => user.Enabled && userIds.Contains(user.UserId))
+                    .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         foreach (var nodeIds in affectedNodes.Chunk(500))
@@ -325,7 +338,13 @@ public sealed class PanelMutationService
         throw new InvalidOperationException("邀请码生成失败，请稍后重试。");
     }
 
-    public async Task ResetUserTrafficAsync(string userId, CancellationToken cancellationToken)
+    public Task ResetUserTrafficAsync(string userId, CancellationToken cancellationToken)
+        => ResetUserTrafficAsync(userId, DateTimeOffset.UtcNow, false, cancellationToken);
+
+    internal Task ResetScheduledUserTrafficAsync(string userId, DateTimeOffset now, CancellationToken cancellationToken)
+        => ResetUserTrafficAsync(userId, now, true, cancellationToken);
+
+    private async Task ResetUserTrafficAsync(string userId, DateTimeOffset now, bool scheduled, CancellationToken cancellationToken)
     {
         if (!_db.IsConfigured) throw new InvalidOperationException("Not configured");
         await _db.TrafficWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -333,16 +352,63 @@ public sealed class PanelMutationService
         {
             _db.FSql.CodeFirst.SyncStructure<TrafficRecordEntity>();
             _db.FSql.CodeFirst.SyncStructure<ScopedTrafficRecordEntity>();
+            _db.FSql.CodeFirst.SyncStructure<UserEntity>();
+            _db.FSql.CodeFirst.SyncStructure<NodeEntity>();
+            if (scheduled) _db.FSql.CodeFirst.SyncStructure<OrderEntity>();
             using var connection = await _db.FSql.Ado.MasterPool.GetAsync(cancellationToken).ConfigureAwait(false);
             await using var transaction = await connection.Value.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            var lastResetAt = DateTimeOffset.UtcNow;
+            now = now.ToUniversalTime();
+            var user = await _db.FSql.Select<UserEntity>().WithTransaction(transaction)
+                .Where(x => x.UserId == userId).FirstAsync(cancellationToken).ConfigureAwait(false);
             var entity = await _db.FSql.Select<TrafficRecordEntity>().WithTransaction(transaction).Where(x => x.UserId == userId).FirstAsync(cancellationToken)
                          ?? new TrafficRecordEntity { UserId = userId };
-        
+
+            if (scheduled)
+            {
+                if (user is null || !IsRecurringCycle(user.Cycle)) return;
+                if (!user.SubscriptionStartedAtUnixMilliseconds.HasValue)
+                {
+                    var orders = await _db.FSql.Select<OrderEntity>().WithTransaction(transaction)
+                        .Where(order => order.UserId == userId && order.Status == 1)
+                        .ToListAsync(cancellationToken).ConfigureAwait(false);
+                    var start = orders.Where(order => order.PaidAt.HasValue &&
+                            !string.Equals(order.Cycle, "reset_price", StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(order => order.PaidAt)
+                        .Select(order => order.PaidAt)
+                        .FirstOrDefault();
+                    if (!start.HasValue && user.CreatedAt != default) start = user.CreatedAt;
+                    if (!start.HasValue)
+                    {
+                        _logger.LogWarning("Cannot reset traffic for user {UserId}: subscription start time is unknown. An administrator must set it.", userId);
+                        return;
+                    }
+                    user.SubscriptionStartedAtUnixMilliseconds = start.Value.ToUnixTimeMilliseconds();
+                    await _db.FSql.Update<UserEntity>().WithTransaction(transaction)
+                        .Set(x => x.SubscriptionStartedAtUnixMilliseconds, user.SubscriptionStartedAtUnixMilliseconds)
+                        .Where(x => x.UserId == userId).ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                var startedAt = DateTimeOffset.FromUnixTimeMilliseconds(user.SubscriptionStartedAtUnixMilliseconds.Value);
+                var months = (now.Year - startedAt.Year) * 12 + now.Month - startedAt.Month;
+                if (months <= 0)
+                {
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                var boundary = startedAt.AddMonths(months);
+                if (boundary > now) boundary = startedAt.AddMonths(--months);
+                if (months <= 0 || (entity.LastResetAt.HasValue && entity.LastResetAt.Value >= boundary))
+                {
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+            }
+
             entity.UploadBytes = 0;
             entity.DownloadBytes = 0;
-            entity.LastResetAt = lastResetAt;
-        
+            entity.LastResetAt = now;
+
             await _db.FSql.InsertOrUpdate<TrafficRecordEntity>().WithTransaction(transaction).SetSource(entity).ExecuteAffrowsAsync(cancellationToken);
 
             var scopedEntities = await _db.FSql.Select<ScopedTrafficRecordEntity>()
@@ -354,7 +420,7 @@ public sealed class PanelMutationService
             {
                 scopedEntity.UploadBytes = 0;
                 scopedEntity.DownloadBytes = 0;
-                scopedEntity.LastResetAt = lastResetAt;
+                scopedEntity.LastResetAt = now;
             }
 
             if (scopedEntities.Count > 0)
@@ -366,13 +432,44 @@ public sealed class PanelMutationService
                     .ExecuteAffrowsAsync(cancellationToken)
                     .ConfigureAwait(false);
             }
+            IReadOnlyList<string> affectedNodes = Array.Empty<string>();
+            if (user is not null && !user.Enabled && user.DisableReason == "traffic" &&
+                (!user.ExpiresAt.HasValue || user.ExpiresAt.Value > now))
+            {
+                await _db.FSql.Update<UserEntity>().WithTransaction(transaction)
+                    .Set(x => x.Enabled, true)
+                    .Set(x => x.DisableReason, string.Empty)
+                    .Where(x => x.UserId == userId && !x.Enabled && x.DisableReason == "traffic")
+                    .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+                var allNodes = await _db.FSql.Select<NodeEntity>().WithTransaction(transaction)
+                    .ToListAsync(x => x.NodeId, cancellationToken).ConfigureAwait(false);
+                affectedNodes = ResolveAffectedNodeIds(allNodes, user.NodeIds, user.NodeIds);
+                foreach (var nodeIds in affectedNodes.Chunk(500))
+                {
+                    await _db.FSql.Update<NodeEntity>().WithTransaction(transaction)
+                        .Set(node => node.DesiredRevision + 1)
+                        .Where(node => nodeIds.Contains(node.NodeId) && node.DesiredRevision > 0)
+                        .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+                    await _db.FSql.Update<NodeEntity>().WithTransaction(transaction)
+                        .Set(node => node.DesiredRevision, 1)
+                        .Where(node => nodeIds.Contains(node.NodeId) && node.DesiredRevision <= 0)
+                        .ExecuteAffrowsAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            if (affectedNodes.Count > 0) _controlPlanePushService.EnqueueSnapshots(affectedNodes);
         }
         finally
         {
             _db.TrafficWriteLock.Release();
         }
     }
+
+    private static bool IsRecurringCycle(string? cycle)
+        => cycle is not null && (cycle.Equals("month", StringComparison.OrdinalIgnoreCase) ||
+            cycle.Equals("quarter", StringComparison.OrdinalIgnoreCase) ||
+            cycle.Equals("half_year", StringComparison.OrdinalIgnoreCase) ||
+            cycle.Equals("year", StringComparison.OrdinalIgnoreCase));
 
     public async Task SavePlanAsync(string planId, UpsertPlanRequest request, CancellationToken cancellationToken)
     {
@@ -472,7 +569,7 @@ public sealed class PanelMutationService
                     PortalNotice = user.PortalNotice
                 }
             };
-            await SaveUserAsync(user.UserId, request, cancellationToken).ConfigureAwait(false);
+            await SaveUserAsync(user.UserId, request, cancellationToken, order.PaidAt).ConfigureAwait(false);
 
             if (!string.IsNullOrWhiteSpace(user.InviteUserId) && order.TotalAmount > 0)
             {
