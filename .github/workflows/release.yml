@@ -17,6 +17,7 @@ concurrency:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   resolve-release:
@@ -30,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -105,13 +106,13 @@ jobs:
 
     steps:
       - name: Checkout Release Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ needs.resolve-release.outputs.tag }}
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '11.0.x'
 
@@ -126,7 +127,7 @@ jobs:
             --rid "${{ matrix.rid }}"
 
       - name: Upload Linux Packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-packages-${{ matrix.rid }}
           path: artifacts/linux/*.tar.gz
@@ -141,20 +142,20 @@ jobs:
 
     steps:
       - name: Checkout Release Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ needs.resolve-release.outputs.tag }}
 
       - name: Download Linux Packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: linux-packages-*
           path: artifacts/linux
           merge-multiple: true
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve-release.outputs.tag }}
           generate_release_notes: true
@@ -167,6 +168,13 @@ jobs:
             scripts/linux/nodepanel-panel.sh
             scripts/linux/nodepanel-service.sh
             scripts/linux/lib/nodepanel-common.sh
+
+  publish-docker:
+    needs: resolve-release
+    if: needs.resolve-release.outputs.should_publish == 'true'
+    uses: ./.github/workflows/docker.yml
+    with:
+      release_tag: ${{ needs.resolve-release.outputs.tag }}
 
   skip-release:
     needs: resolve-release

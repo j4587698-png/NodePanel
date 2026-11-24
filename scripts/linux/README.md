@@ -71,7 +71,7 @@ Release steps:
 
 1. Update `NodePanelVersionPrefix`
 2. Commit and push `main`
-3. GitHub Actions creates `vX.Y.Z`, builds Linux packages and publishes the release
+3. GitHub Actions creates `vX.Y.Z`, builds Linux packages and the panel container image, and publishes the release
 
 The release workflow builds each Linux RID on its matching runner so the Native AOT service package is produced per architecture.
 
