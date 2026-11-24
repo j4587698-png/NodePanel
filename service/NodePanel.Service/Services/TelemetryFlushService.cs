@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NodePanel.ControlPlane.Configuration;
@@ -24,6 +25,7 @@ public sealed class TelemetryFlushService : BackgroundService
     private readonly ILogger<TelemetryFlushService> _logger;
     private readonly IRuntime _runtime;
     private bool _warnedMissingCapability;
+    private readonly UserActivityTracker _userActivityTracker = new();
 
     public TelemetryFlushService(
         AppliedRuntimeSnapshotStore appliedRuntimeSnapshotStore,
@@ -69,6 +71,8 @@ public sealed class TelemetryFlushService : BackgroundService
         var appliedSnapshot = _appliedRuntimeSnapshotStore.GetSnapshot();
         var runtimeStatus = _runtime.GetStatus();
         var trafficSnapshot = _runtime.GetTrafficSnapshot();
+        var (userActivity, ratesAvailable) = _userActivityTracker.Capture(
+            _runtime.GetSessionSnapshot(), trafficSnapshot, Stopwatch.GetTimestamp());
         var traffic = _telemetryDeltaTracker.CreateDelta(trafficSnapshot);
         await _telemetryOutbox.AppendAsync(traffic, cancellationToken).ConfigureAwait(false);
         _telemetryDeltaTracker.Commit(trafficSnapshot);
@@ -98,7 +102,10 @@ public sealed class TelemetryFlushService : BackgroundService
             Certificate = _certificateStateStore.GetSnapshot().ToPayload(),
             ProxyInbounds = proxyInboundStatuses,
             OutboundStrategies = outboundStrategies,
-            Host = _hostResourceTelemetryProvider.Capture()
+            Host = _hostResourceTelemetryProvider.Capture(),
+            UserActivity = userActivity,
+            UserActivityRatesAvailable = ratesAvailable,
+            UserActivityIntervalSeconds = _runtimeConfigStore.GetSnapshot().Config.Telemetry.FlushIntervalSeconds
         };
 
         if (!_telemetryDeliveryState.IsReady)

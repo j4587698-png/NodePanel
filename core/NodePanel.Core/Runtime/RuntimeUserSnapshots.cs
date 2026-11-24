@@ -30,4 +30,6 @@ public sealed record UserSessionSnapshot
     public IReadOnlyList<string> RemoteIps { get; init; } = Array.Empty<string>();
 
     public int ActiveRemoteIpCount => RemoteIps.Count;
+
+    public int SessionsWithoutRemoteIp { get; init; }
 }

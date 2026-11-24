@@ -29,6 +29,37 @@ namespace NodePanel.Service.Tests;
 public sealed class PanelMutationServiceTests
 {
     [Fact]
+    public async Task User_activity_query_uses_node_telemetry_for_the_current_page()
+    {
+        using var harness = new PanelMutationHarness();
+        await harness.CreateNodeAsync("node");
+        await harness.MutationService.SaveUserAsync("user", CreateUserRequest(["node"]), CancellationToken.None);
+        var now = DateTimeOffset.UtcNow;
+        harness.NodeConnectionRegistry.RecordTelemetry("node", new TelemetryBatchPayload
+        {
+            NodeId = "node", AppliedRevision = 1, Traffic = [],
+            Status = new NodeStatusPayload
+            {
+                Timestamp = now, ActiveSessions = 1, KnownUsers = 1, Inbounds = [],
+                Certificate = new CertificateStatusPayload { Mode = "", Available = false },
+                UserActivityIntervalSeconds = 15, UserActivityRatesAvailable = true,
+                UserActivity = [new UserActivityPayload
+                {
+                    UserId = "user", RemoteIps = ["192.0.2.1"],
+                    UploadBytesPerSecond = 100, DownloadBytesPerSecond = 200
+                }]
+            }
+        });
+        var query = new PanelQueryService(harness.DatabaseService, harness.NodeConnectionRegistry, new PanelCertificateProgressTracker());
+        var activity = Assert.Single(await query.GetUsersActivityAsync(1, 50));
+        Assert.True(activity.HasData);
+        Assert.False(activity.IsPartial);
+        Assert.Equal(1, activity.OnlineIpCount);
+        Assert.Equal(100, activity.UploadBytesPerSecond);
+        Assert.Equal(200, activity.DownloadBytesPerSecond);
+    }
+
+    [Fact]
     public async Task Paged_admin_lists_return_stable_pages()
     {
         using var harness = new PanelMutationHarness();

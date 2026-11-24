@@ -19,7 +19,9 @@ public sealed class NodeConnectionRegistry
             var runtime = (current?.Runtime ?? new NodeRuntimeSnapshot()) with
             {
                 Connected = true,
-                LastSeenAt = DateTimeOffset.UtcNow
+                LastSeenAt = DateTimeOffset.UtcNow,
+                LastStatus = current?.Runtime.LastStatus is { } status ? status with { UserActivity = null } : null,
+                LastTelemetryReceivedAt = null
             };
 
             _entries[nodeId] = new ConnectionEntry(session, runtime);
@@ -44,7 +46,9 @@ public sealed class NodeConnectionRegistry
                 Session = null,
                 Runtime = current.Runtime with
                 {
-                    Connected = false
+                    Connected = false,
+                    LastStatus = current.Runtime.LastStatus is { } status ? status with { UserActivity = null } : null,
+                    LastTelemetryReceivedAt = null
                 }
             };
         }
@@ -146,7 +150,10 @@ public sealed class NodeConnectionRegistry
                 Connected = true,
                 AppliedRevision = Math.Max(runtime.AppliedRevision, payload.AppliedRevision),
                 LastSeenAt = payload.Status.Timestamp,
-                LastStatus = payload.Status
+                LastStatus = payload.Status,
+                LastTelemetryReceivedAt = runtime.LastStatus?.Timestamp == payload.Status.Timestamp
+                    ? runtime.LastTelemetryReceivedAt
+                    : DateTimeOffset.UtcNow
             });
     }
 

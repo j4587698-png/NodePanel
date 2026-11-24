@@ -25,6 +25,7 @@
         <div>
             <p class="eyebrow">Users</p>
             <h3>所有用户</h3>
+            <p class="muted">在线 IP 按节点当前会话去重；速度为各节点采样周期内的原始上下行平均值，不计流量倍率。“部分数据”表示部分节点或来源 IP 不可用。</p>
         </div>
         <span class="metric">@Model.TotalCount</span>
     </div>
@@ -36,6 +37,8 @@
                     <th>状态</th>
                     <th>限速</th>
                     <th>设备限制</th>
+                    <th>在线 IP</th>
+                    <th>当前速度</th>
                     <th>套餐</th>
                     <th>流量用量</th>
                     <th>节点范围</th>
@@ -69,6 +72,8 @@
                     </td>
                     <td>@PlanPresentation.FormatRate(user.BytesPerSecond)</td>
                     <td>@(user.DeviceLimit > 0 ? user.DeviceLimit.ToString() : "不限")</td>
+                    <td data-activity-user="@user.UserId" data-activity-field="ips">—</td>
+                    <td data-activity-user="@user.UserId" data-activity-field="speed">—</td>
                     <td>
                         <div>@(string.IsNullOrWhiteSpace(user.Subscription.PlanName) ? "-" : user.Subscription.PlanName)</div>
                         @if (!string.IsNullOrWhiteSpace(cycleText))
@@ -110,3 +115,55 @@
         </nav>
     }
 </section>
+
+@section Scripts {
+    <script>
+        (() => {
+            const requestUrl = '@Url.Action("UserActivity", "Dashboard", new { page = Model.Page })';
+            const cells = [...document.querySelectorAll('[data-activity-user]')];
+            const formatRate = value => {
+                if (value === null || value === undefined) return '—';
+                const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+                let unit = 0;
+                while (value >= 1024 && unit < units.length - 1) {
+                    value /= 1024;
+                    unit++;
+                }
+                return `${value.toFixed(unit === 0 ? 0 : 2)} ${units[unit]}`;
+            };
+            let refreshing = false;
+            const refresh = async () => {
+                if (refreshing || document.visibilityState === 'hidden') return;
+                refreshing = true;
+                try {
+                    const response = await fetch(requestUrl, { credentials: 'same-origin', cache: 'no-store' });
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                        return;
+                    }
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const data = await response.json();
+                    const byUser = new Map(data.map(item => [item.userId, item]));
+                    for (const cell of cells) {
+                        const activity = byUser.get(cell.dataset.activityUser);
+                        if (!activity || !activity.hasData) {
+                            cell.textContent = '暂无数据';
+                        } else {
+                            const suffix = activity.isPartial ? '（部分数据）' : '';
+                            cell.textContent = cell.dataset.activityField === 'ips'
+                                ? `${activity.onlineIpCount}${suffix}`
+                                : `↑ ${formatRate(activity.uploadBytesPerSecond)} / ↓ ${formatRate(activity.downloadBytesPerSecond)}${suffix}`;
+                        }
+                    }
+                } catch (error) {
+                    for (const cell of cells) cell.textContent = '获取失败';
+                    console.error('User activity refresh failed.', error);
+                } finally {
+                    refreshing = false;
+                }
+            };
+            refresh();
+            window.setInterval(refresh, 5000);
+        })();
+    </script>
+}

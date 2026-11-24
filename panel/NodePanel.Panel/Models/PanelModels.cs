@@ -288,6 +288,8 @@ public sealed record NodeRuntimeSnapshot
 
     public NodeStatusPayload? LastStatus { get; init; }
 
+    public DateTimeOffset? LastTelemetryReceivedAt { get; init; }
+
     public NodeHostResourcePayload? Host => LastStatus?.Host;
 }
 
