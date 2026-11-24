@@ -1,11 +1,41 @@
 using NodePanel.ControlPlane.Protocol;
 using NodePanel.Core.Runtime;
 using NodePanel.Service.Runtime;
+using System.Diagnostics;
 
 namespace NodePanel.Service.Tests;
 
 public sealed class TelemetryDeltaTrackerTests
 {
+    [Fact]
+    public void User_activity_samples_raw_traffic_and_combines_session_ips()
+    {
+        var tracker = new UserActivityTracker();
+        var sessions = new[]
+        {
+            new UserSessionSnapshot { UserId = "user", ActiveSessions = 2, RemoteIps = ["192.0.2.1"], SessionsWithoutRemoteIp = 1 },
+            new UserSessionSnapshot { UserId = "user", ActiveSessions = 1, RemoteIps = ["192.0.2.1", "192.0.2.2"] }
+        };
+        var traffic = new[]
+        {
+            new UserTrafficSnapshot { UserId = "user", RuntimeKey = "a", UploadBytes = 100, DownloadBytes = 200 },
+            new UserTrafficSnapshot { UserId = "user", RuntimeKey = "b", UploadBytes = 50, DownloadBytes = 100 }
+        };
+        var first = tracker.Capture(sessions, traffic, 0);
+        Assert.False(first.RatesAvailable);
+        Assert.Equal(2, Assert.Single(first.Users).RemoteIps.Count);
+        Assert.True(first.Users[0].HasUnknownRemoteIp);
+
+        var nextTraffic = new[] { traffic[0] with { UploadBytes = 200, DownloadBytes = 400 },
+            traffic[1] with { UploadBytes = 100, DownloadBytes = 150 } };
+        var next = tracker.Capture(sessions, nextTraffic, Stopwatch.Frequency * 10);
+        Assert.True(next.RatesAvailable);
+        Assert.Equal(15, Assert.Single(next.Users).UploadBytesPerSecond);
+        Assert.Equal(25, next.Users[0].DownloadBytesPerSecond);
+        var idle = tracker.Capture([], nextTraffic, Stopwatch.Frequency * 20);
+        Assert.Empty(idle.Users);
+    }
+
     [Fact]
     public void CreateDelta_tracks_same_user_across_multiple_runtime_keys_independently()
     {

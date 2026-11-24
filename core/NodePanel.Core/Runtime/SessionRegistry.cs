@@ -88,7 +88,8 @@ public sealed class SessionRegistry : IRuntimeSessionRegistry
                 var remoteIps = pair.Value.SessionsByIp.Keys
                     .OrderBy(static value => value, StringComparer.Ordinal)
                     .ToArray();
-                items.Add(CreateSnapshot(pair.Key, pair.Value.TotalSessions, remoteIps));
+                items.Add(CreateSnapshot(pair.Key, pair.Value.TotalSessions, remoteIps,
+                    pair.Value.TotalSessions - pair.Value.SessionsByIp.Values.Sum()));
             }
 
             items.Sort(static (left, right) => string.Compare(left.RuntimeKey, right.RuntimeKey, StringComparison.Ordinal));
@@ -144,7 +145,8 @@ public sealed class SessionRegistry : IRuntimeSessionRegistry
     private static UserSessionSnapshot CreateSnapshot(
         string runtimeKey,
         int activeSessions,
-        IReadOnlyList<string> remoteIps)
+        IReadOnlyList<string> remoteIps,
+        int sessionsWithoutRemoteIp)
     {
         var normalizedRuntimeKey = runtimeKey.Trim();
         return RuntimeUserKeys.TryParse(normalizedRuntimeKey, out var protocol, out var inboundTag, out var userId)
@@ -155,14 +157,16 @@ public sealed class SessionRegistry : IRuntimeSessionRegistry
                 InboundTag = inboundTag,
                 UserId = userId,
                 ActiveSessions = activeSessions,
-                RemoteIps = remoteIps
+                RemoteIps = remoteIps,
+                SessionsWithoutRemoteIp = sessionsWithoutRemoteIp
             }
             : new UserSessionSnapshot
             {
                 RuntimeKey = normalizedRuntimeKey,
                 UserId = normalizedRuntimeKey,
                 ActiveSessions = activeSessions,
-                RemoteIps = remoteIps
+                RemoteIps = remoteIps,
+                SessionsWithoutRemoteIp = sessionsWithoutRemoteIp
             };
     }
 

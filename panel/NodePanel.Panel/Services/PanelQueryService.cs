@@ -243,6 +243,21 @@ public sealed class PanelQueryService
             StringComparer.Ordinal), await countTask.ConfigureAwait(false));
     }
 
+    public async Task<IReadOnlyList<UserActivitySummary>> GetUsersActivityAsync(int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        if (!_db.IsConfigured) throw new InvalidOperationException("Database is not configured.");
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 500);
+        var usersTask = _db.FSql.Select<UserEntity>().OrderBy(user => user.UserId)
+            .Page(page, pageSize).ToListAsync(cancellationToken);
+        var nodesTask = _db.FSql.Select<NodeEntity>().ToListAsync(node => node.NodeId, cancellationToken);
+        await Task.WhenAll(usersTask, nodesTask).ConfigureAwait(false);
+        return UserActivityAggregator.Aggregate(
+            (await usersTask.ConfigureAwait(false)).Select(user => user.ToRecord()).ToArray(),
+            await nodesTask.ConfigureAwait(false),
+            _nodeConnectionRegistry.GetAllRuntime(), DateTimeOffset.UtcNow);
+    }
+
     public async Task<(IReadOnlyList<PanelOrderRecord> Orders, IReadOnlyList<PanelUserRecord> Users, IReadOnlyList<PanelPlanRecord> Plans, IReadOnlyDictionary<string, string> Settings, long TotalCount)>
         GetOrdersPageDataAsync(int page, int pageSize, CancellationToken cancellationToken = default)
     {

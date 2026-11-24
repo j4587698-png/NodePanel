@@ -97,6 +97,7 @@ public sealed class SessionRegistryTests
         Assert.Equal("plain-user", plainSnapshot.RuntimeKey);
         Assert.Equal(1, plainSnapshot.ActiveSessions);
         Assert.Equal(0, plainSnapshot.ActiveRemoteIpCount);
+        Assert.Equal(1, plainSnapshot.SessionsWithoutRemoteIp);
         Assert.Empty(plainSnapshot.RemoteIps);
 
         var scopedSnapshot = Assert.Single(snapshots, static snapshot => snapshot.UserId == "shared-user");
@@ -105,6 +106,7 @@ public sealed class SessionRegistryTests
         Assert.Equal("in-a", scopedSnapshot.InboundTag);
         Assert.Equal(3, scopedSnapshot.ActiveSessions);
         Assert.Equal(2, scopedSnapshot.ActiveRemoteIpCount);
+        Assert.Equal(0, scopedSnapshot.SessionsWithoutRemoteIp);
         Assert.Equal(["203.0.113.10", "203.0.113.11"], scopedSnapshot.RemoteIps);
 
         plainLease!.Dispose();

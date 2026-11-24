@@ -144,6 +144,25 @@ public sealed record NodeStatusPayload
     public IReadOnlyList<NodeStrategyOutboundStatusPayload> OutboundStrategies { get; init; } = Array.Empty<NodeStrategyOutboundStatusPayload>();
 
     public NodeHostResourcePayload? Host { get; init; }
+
+    public IReadOnlyList<UserActivityPayload>? UserActivity { get; init; }
+
+    public bool UserActivityRatesAvailable { get; init; }
+
+    public int? UserActivityIntervalSeconds { get; init; }
+}
+
+public sealed record UserActivityPayload
+{
+    public string UserId { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> RemoteIps { get; init; } = Array.Empty<string>();
+
+    public bool HasUnknownRemoteIp { get; init; }
+
+    public long UploadBytesPerSecond { get; init; }
+
+    public long DownloadBytesPerSecond { get; init; }
 }
 
 public sealed record CertificateStatusPayload

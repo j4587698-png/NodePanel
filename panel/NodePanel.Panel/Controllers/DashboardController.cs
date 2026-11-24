@@ -114,6 +114,13 @@ public sealed class DashboardController : Controller
             });
     }
 
+    [HttpGet("users/activity")]
+    public async Task<IActionResult> UserActivity(int page, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return Json(await _panelQueryService.GetUsersActivityAsync(page, ListPageSize, cancellationToken).ConfigureAwait(false));
+    }
+
     [HttpGet("nodes")]
     public async Task<IActionResult> Nodes(CancellationToken cancellationToken)
     {
